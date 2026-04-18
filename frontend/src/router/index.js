@@ -10,23 +10,23 @@ const routes = [
       if (role === 'ls') return '/ls/attendance/create';
       if (role === 'ls_supervisor') return '/supervisor/approvals';
       if (role === 'vendor') return '/vendor/reports';
+      if (role === 'ls_hr') return '/ls-hr/approvals';
+      if (role === 'ssu') return '/ssu/approvals';
       return '/login';
     },
   },
   { path: '/login', component: () => import('../views/LoginView.vue'), meta: { public: true } },
 
-  // ── LS routes ──
   {
     path: '/ls',
     component: () => import('../views/layouts/AppLayout.vue'),
     meta: { requiresAuth: true, role: 'ls' },
     children: [
       { path: 'attendance/create', component: () => import('../views/ls/CreateAttendance.vue') },
-      { path: 'attendance/list',   component: () => import('../views/ls/AttendanceList.vue') },
+      { path: 'attendance/list', component: () => import('../views/ls/AttendanceList.vue') },
     ],
   },
 
-  // ── Supervisor routes ──
   {
     path: '/supervisor',
     component: () => import('../views/layouts/AppLayout.vue'),
@@ -36,14 +36,31 @@ const routes = [
     ],
   },
 
-  // ── Vendor routes ──
   {
     path: '/vendor',
     component: () => import('../views/layouts/AppLayout.vue'),
     meta: { requiresAuth: true, role: 'vendor' },
     children: [
-      { path: 'reports',                              component: () => import('../views/vendor/ReportList.vue') },
-      { path: 'reports/:userId/:month/:year/detail',  component: () => import('../views/vendor/ReportDetail.vue') },
+      { path: 'reports', component: () => import('../views/vendor/ReportList.vue') },
+      { path: 'reports/:month/:year/detail', component: () => import('../views/vendor/ReportDetail.vue') },
+    ],
+  },
+
+  {
+    path: '/ls-hr',
+    component: () => import('../views/layouts/AppLayout.vue'),
+    meta: { requiresAuth: true, role: 'ls_hr' },
+    children: [
+      { path: 'approvals', component: () => import('../views/SubmissionQueue.vue'), meta: { queue: 'hr' } },
+    ],
+  },
+
+  {
+    path: '/ssu',
+    component: () => import('../views/layouts/AppLayout.vue'),
+    meta: { requiresAuth: true, role: 'ssu' },
+    children: [
+      { path: 'approvals', component: () => import('../views/SubmissionQueue.vue'), meta: { queue: 'ssu' } },
     ],
   },
 

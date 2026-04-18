@@ -226,6 +226,8 @@ tbody tr:last-child td { border-bottom: none; }
 .badge-rejected::before { background: #ef4444; }
 .badge-submitted { background: #dbeafe; color: #1e40af; }
 .badge-submitted::before { background: #3b82f6; }
+.badge-invoice-process { background: #e0e7ff; color: #3730a3; }
+.badge-invoice-process::before { background: #4f46e5; }
 .badge-draft { background: var(--bc-gray-100); color: var(--bc-gray-600); }
 .badge-draft::before { background: var(--bc-gray-400); }
 

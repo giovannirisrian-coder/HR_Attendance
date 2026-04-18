@@ -47,7 +47,7 @@ router.post('/', authenticate, authorize('ls_supervisor', 'vendor'), async (req,
 });
 
 // List vendors
-router.get('/vendors', authenticate, async (req, res) => {
+router.get('/vendors', authenticate, authorize('ssu', 'ls_hr', 'vendor', 'ls_supervisor'), async (req, res) => {
   try {
     const [rows] = await db.query('SELECT * FROM vendors WHERE is_active = 1 ORDER BY name');
     res.json({ success: true, data: rows });

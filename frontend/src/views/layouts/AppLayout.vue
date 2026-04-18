@@ -52,6 +52,20 @@
             <span v-if="!sidebarCollapsed">Report List</span>
           </router-link>
         </template>
+
+        <template v-if="user?.role === 'ls_hr'">
+          <router-link to="/ls-hr/approvals" class="nav-item" active-class="active">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4m5 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span v-if="!sidebarCollapsed">Approval List</span>
+          </router-link>
+        </template>
+
+        <template v-if="user?.role === 'ssu'">
+          <router-link to="/ssu/approvals" class="nav-item" active-class="active">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span v-if="!sidebarCollapsed">Approval List</span>
+          </router-link>
+        </template>
       </nav>
 
       <!-- Logout -->
@@ -109,7 +123,13 @@ const userInitials = computed(() => {
 });
 
 const roleLabel = computed(() => {
-  const map = { ls: 'LS Employee', ls_supervisor: 'LS Supervisor', vendor: 'Vendor' };
+  const map = {
+    ls: 'LS Employee',
+    ls_supervisor: 'LS Supervisor',
+    vendor: 'Vendor',
+    ls_hr: 'LS HR',
+    ssu: 'SSU',
+  };
   return map[user?.role] || user?.role;
 });
 
@@ -118,8 +138,10 @@ const pageTitle = computed(() => {
   if (path.includes('attendance/create')) return 'Create Attendance';
   if (path.includes('attendance/list'))   return 'Attendance List';
   if (path.includes('approvals'))         return 'Approval List';
-  if (path.includes('reports') && path.includes('detail')) return 'Report Detail';
-  if (path.includes('reports'))           return 'Report List';
+  if (path.includes('/vendor/reports') && path.includes('detail')) return 'Report Detail';
+  if (path.includes('/vendor/reports')) return 'Report List';
+  if (path.includes('/ls-hr/approvals')) return 'LS HR Approvals';
+  if (path.includes('/ssu/approvals')) return 'SSU Approvals';
   return 'Dashboard';
 });
 
