@@ -221,6 +221,7 @@ const downloadVendorMonthlyPdf = async (req, res) => {
       `attachment; filename="timesheet-v${vendorId}-${year}-${String(month).padStart(2, '0')}.pdf"`
     );
     doc.pipe(res);
+    doc.end();
   } catch (err) {
     console.error('downloadVendorMonthlyPdf:', err);
     if (!res.headersSent) res.status(500).json({ success: false, message: 'Failed to generate PDF.' });

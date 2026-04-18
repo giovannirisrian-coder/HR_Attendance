@@ -52,6 +52,7 @@ const downloadSubmissionPdf = async (req, res) => {
       `attachment; filename="timesheet-v${sub.vendor_id}-${sub.report_year}-${String(sub.report_month).padStart(2, '0')}.pdf"`
     );
     doc.pipe(res);
+    doc.end();
   } catch (err) {
     console.error('PDF error:', err);
     if (!res.headersSent) res.status(500).json({ success: false, message: 'Failed to generate PDF.' });
