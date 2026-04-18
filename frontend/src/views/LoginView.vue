@@ -77,14 +77,20 @@
         <div class="demo-accounts">
           <p class="demo-title">Demo Accounts (Password: <code>password</code>)</p>
           <div class="demo-grid">
-            <button class="demo-btn" @click="fillDemo('ls1@beraucoal.com')">
+            <button type="button" class="demo-btn" @click="fillDemo('ls1@beraucoal.com')">
               <span class="demo-role">LS</span> Ahmad Fauzi
             </button>
-            <button class="demo-btn" @click="fillDemo('supervisor1@beraucoal.com')">
+            <button type="button" class="demo-btn" @click="fillDemo('supervisor1@beraucoal.com')">
               <span class="demo-role">Supervisor</span> Budi Santoso
             </button>
-            <button class="demo-btn" @click="fillDemo('vendor1@beraucoal.com')">
+            <button type="button" class="demo-btn" @click="fillDemo('vendor1@beraucoal.com')">
               <span class="demo-role">Vendor</span> Admin MKU
+            </button>
+            <button type="button" class="demo-btn" @click="fillDemo('lshr@beraucoal.com')">
+              <span class="demo-role">LS HR</span> LS HR Officer
+            </button>
+            <button type="button" class="demo-btn" @click="fillDemo('ssu@beraucoal.com')">
+              <span class="demo-role">SSU</span> SSU Officer
             </button>
           </div>
         </div>
@@ -118,9 +124,11 @@ const handleLogin = async () => {
     if (data.success) {
       setAuth(data.token, data.user);
       const role = data.user.role;
-      if (role === 'ls')             router.push('/ls/attendance/create');
+      if (role === 'ls') router.push('/ls/attendance/create');
       else if (role === 'ls_supervisor') router.push('/supervisor/approvals');
-      else if (role === 'vendor')    router.push('/vendor/reports');
+      else if (role === 'vendor') router.push('/vendor/reports');
+      else if (role === 'ls_hr') router.push('/ls-hr/approvals');
+      else if (role === 'ssu') router.push('/ssu/approvals');
     }
   } catch (err) {
     errorMsg.value = err.response?.data?.message || 'Login failed. Please try again.';
@@ -202,7 +210,7 @@ const handleLogin = async () => {
 .demo-accounts { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--bc-gray-100); }
 .demo-title { font-size: 12px; color: var(--bc-gray-400); text-align: center; margin-bottom: 12px; }
 .demo-title code { background: var(--bc-gray-100); padding: 1px 6px; border-radius: 4px; font-family: monospace; }
-.demo-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.demo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; max-width: 520px; margin: 0 auto; }
 .demo-btn {
   display: flex; flex-direction: column; align-items: center; gap: 4px;
   padding: 10px 8px;

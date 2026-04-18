@@ -1,180 +1,236 @@
 const db = require('../config/database');
-const path = require('path');
+const { buildVendorMonthlyTimesheetPdf } = require('../services/pdfService');
 
-// Vendor: list monthly summaries for all LS under this vendor
-const getReportList = async (req, res) => {
+async function fetchVendorAttendanceRows(vendorId, month, year) {
+  const [rows] = await db.query(
+    `SELECT a.attendance_date, a.clock_in_time, a.clock_out_time, a.status,
+            u.name AS employee_name, u.employee_id
+     FROM attendance a
+     JOIN users u ON a.user_id = u.id
+     WHERE u.vendor_id = ? AND u.role = 'ls'
+       AND MONTH(a.attendance_date) = ? AND YEAR(a.attendance_date) = ?
+     ORDER BY u.name, a.attendance_date`,
+    [vendorId, month, year]
+  );
+  return rows;
+}
+
+/** Vendor: one row per month – aggregated LS attendance + submission workflow */
+const getVendorMonthlySummary = async (req, res) => {
   try {
     const vendorId = req.user.vendor_id;
-    const { search, year, page = 1, limit = 20 } = req.query;
+    if (!vendorId) return res.status(403).json({ success: false, message: 'Vendor access only.' });
 
-    if (!vendorId) {
-      return res.status(403).json({ success: false, message: 'Vendor access only.' });
-    }
+    const year = parseInt(req.query.year, 10) || new Date().getFullYear();
+    const now = new Date();
+    const maxMonth = year < now.getFullYear() ? 12 : now.getMonth() + 1;
 
-    let where = 'WHERE u.vendor_id = ? AND u.role = "ls"';
-    const params = [vendorId];
-
-    if (search) {
-      where += ' AND (u.name LIKE ? OR u.employee_id LIKE ?)';
-      params.push(`%${search}%`, `%${search}%`);
-    }
-
-    const targetYear = year || new Date().getFullYear();
-    const offset = (parseInt(page) - 1) * parseInt(limit);
-
-    // Get LS employees under this vendor with their monthly summaries
-    const [rows] = await db.query(
-      `SELECT
-         u.id AS user_id,
-         u.name AS employee_name,
-         u.employee_id,
-         m.report_month,
-         m.report_year,
-         m.id AS report_id,
-         m.invoice_value,
-         m.status AS report_status,
-         m.submitted_at,
-         (SELECT COUNT(*) FROM attendance a
-          WHERE a.user_id = u.id
-            AND YEAR(a.attendance_date) = ?
-            AND a.status = 'approved') AS approved_days,
-         (SELECT COUNT(*) FROM attendance a
-          WHERE a.user_id = u.id
-            AND YEAR(a.attendance_date) = ?) AS total_days
-       FROM users u
-       LEFT JOIN monthly_reports m
-         ON m.user_id = u.id AND m.report_year = ?
-       ${where}
-       ORDER BY u.name, m.report_month
-       LIMIT ? OFFSET ?`,
-      [targetYear, targetYear, targetYear, ...params, parseInt(limit), offset]
+    const [[vendor]] = await db.query('SELECT id, name, code FROM vendors WHERE id = ?', [vendorId]);
+    const [[{ ls_count }]] = await db.query(
+      `SELECT COUNT(*) AS ls_count FROM users WHERE vendor_id = ? AND role = 'ls' AND is_active = 1`,
+      [vendorId]
     );
 
-    const [[{ total }]] = await db.query(
-      `SELECT COUNT(*) AS total FROM users u ${where}`,
-      params
-    );
+    const data = [];
+    for (let m = 1; m <= maxMonth; m++) {
+      const [[agg]] = await db.query(
+        `SELECT
+           COUNT(a.id) AS attendance_rows,
+           SUM(CASE WHEN a.status = 'approved' THEN 1 ELSE 0 END) AS approved_rows
+         FROM attendance a
+         JOIN users u ON a.user_id = u.id
+         WHERE u.vendor_id = ? AND u.role = 'ls'
+           AND MONTH(a.attendance_date) = ? AND YEAR(a.attendance_date) = ?`,
+        [vendorId, m, year]
+      );
 
-    res.json({ success: true, data: rows, pagination: { total, page: parseInt(page), limit: parseInt(limit) }, year: targetYear });
+      const [subRows] = await db.query(
+        `SELECT id, workflow_status, invoice_value, submitted_at
+         FROM vendor_monthly_submissions
+         WHERE vendor_id = ? AND report_month = ? AND report_year = ?`,
+        [vendorId, m, year]
+      );
+      const submission = subRows[0] || null;
+
+      data.push({
+        report_month: m,
+        report_year: year,
+        ls_count: ls_count || 0,
+        attendance_rows: agg.attendance_rows || 0,
+        approved_rows: agg.approved_rows || 0,
+        submission_id: submission?.id || null,
+        workflow_status: submission?.workflow_status || null,
+        submitted_at: submission?.submitted_at || null,
+        invoice_value: submission?.invoice_value ?? null,
+      });
+    }
+
+    res.json({ success: true, vendor, year, data });
   } catch (err) {
-    console.error('Report list error:', err);
+    console.error('getVendorMonthlySummary:', err);
     res.status(500).json({ success: false, message: 'Server error.' });
   }
 };
 
-// Vendor: get detailed attendance for an LS for a specific month
-const getReportDetail = async (req, res) => {
+/** Vendor: consolidated month detail – all LS + optional submission */
+const getVendorMonthlyDetail = async (req, res) => {
   try {
     const vendorId = req.user.vendor_id;
-    const { userId, month, year } = req.params;
+    if (!vendorId) return res.status(403).json({ success: false, message: 'Vendor access only.' });
 
-    // Verify LS belongs to vendor
-    const [userCheck] = await db.query(
-      'SELECT id, name, employee_id FROM users WHERE id = ? AND vendor_id = ? AND role = "ls"',
-      [userId, vendorId]
-    );
-    if (userCheck.length === 0) {
-      return res.status(404).json({ success: false, message: 'Employee not found under your vendor.' });
+    const month = parseInt(req.params.month, 10);
+    const year = parseInt(req.params.year, 10);
+    if (month < 1 || month > 12 || !year) {
+      return res.status(400).json({ success: false, message: 'Invalid month or year.' });
     }
 
-    // Get attendance records
-    const [attendance] = await db.query(
-      `SELECT a.*, u.name AS employee_name, u.employee_id,
-              app.name AS approver_name
-       FROM attendance a
-       JOIN users u ON a.user_id = u.id
-       LEFT JOIN users app ON a.approved_by = app.id
-       WHERE a.user_id = ?
-         AND MONTH(a.attendance_date) = ?
-         AND YEAR(a.attendance_date) = ?
-       ORDER BY a.attendance_date`,
-      [userId, month, year]
+    const [[vendor]] = await db.query('SELECT id, name, code FROM vendors WHERE id = ?', [vendorId]);
+    const [employees] = await db.query(
+      `SELECT id, name, employee_id FROM users WHERE vendor_id = ? AND role = 'ls' AND is_active = 1 ORDER BY name`,
+      [vendorId]
     );
 
-    // Get or initialize the monthly report record
-    const [report] = await db.query(
-      `SELECT * FROM monthly_reports
-       WHERE vendor_id = ? AND user_id = ? AND report_month = ? AND report_year = ?`,
-      [vendorId, userId, month, year]
+    const employeesOut = [];
+    for (const emp of employees) {
+      const [att] = await db.query(
+        `SELECT a.* FROM attendance a
+         WHERE a.user_id = ? AND MONTH(a.attendance_date) = ? AND YEAR(a.attendance_date) = ?
+         ORDER BY a.attendance_date`,
+        [emp.id, month, year]
+      );
+      employeesOut.push({ ...emp, attendance: att });
+    }
+
+    const [subRows] = await db.query(
+      `SELECT * FROM vendor_monthly_submissions
+       WHERE vendor_id = ? AND report_month = ? AND report_year = ?`,
+      [vendorId, month, year]
     );
+    const submission = subRows[0] || null;
 
     res.json({
       success: true,
-      employee: userCheck[0],
-      attendance,
-      report: report[0] || null,
-      month: parseInt(month),
-      year: parseInt(year),
+      vendor,
+      month,
+      year,
+      submission,
+      employees: employeesOut,
     });
   } catch (err) {
-    console.error('Report detail error:', err);
+    console.error('getVendorMonthlyDetail:', err);
     res.status(500).json({ success: false, message: 'Server error.' });
   }
 };
 
-// Vendor: submit monthly report (invoice + documents)
-const submitReport = async (req, res) => {
+const VENDOR_EDITABLE = ['draft', 'hr_rejected'];
+
+/** Vendor: submit monthly package → LS HR queue */
+const submitVendorMonthly = async (req, res) => {
   try {
     const vendorId = req.user.vendor_id;
     const submittedBy = req.user.id;
-    const { userId, month, year } = req.params;
-    const { invoice_value } = req.body;
-
-    // Verify LS belongs to vendor
-    const [userCheck] = await db.query(
-      'SELECT id FROM users WHERE id = ? AND vendor_id = ? AND role = "ls"',
-      [userId, vendorId]
-    );
-    if (userCheck.length === 0) {
-      return res.status(404).json({ success: false, message: 'Employee not found under your vendor.' });
+    const month = parseInt(req.params.month, 10);
+    const year = parseInt(req.params.year, 10);
+    if (month < 1 || month > 12 || !year) {
+      return res.status(400).json({ success: false, message: 'Invalid month or year.' });
     }
 
-    // Build file paths from uploaded files
+    const { invoice_value } = req.body;
     const files = req.files || {};
-    const bastFile        = files.bast_file        ? files.bast_file[0].filename        : null;
-    const invoiceFile     = files.invoice_file     ? files.invoice_file[0].filename     : null;
-    const recapSalaryFile = files.recap_salary_file ? files.recap_salary_file[0].filename : null;
-    const taxFile         = files.tax_file         ? files.tax_file[0].filename         : null;
+    const bastFile = files.bast_file?.[0]?.filename || null;
+    const invoiceFile = files.invoice_file?.[0]?.filename || null;
+    const recapSalaryFile = files.recap_salary_file?.[0]?.filename || null;
+    const taxFile = files.tax_file?.[0]?.filename || null;
 
-    // Upsert the monthly_reports record
     const [existing] = await db.query(
-      'SELECT id FROM monthly_reports WHERE vendor_id=? AND user_id=? AND report_month=? AND report_year=?',
-      [vendorId, userId, month, year]
+      'SELECT * FROM vendor_monthly_submissions WHERE vendor_id = ? AND report_month = ? AND report_year = ?',
+      [vendorId, month, year]
     );
+
+    if (existing.length) {
+      const st = existing[0].workflow_status;
+      if (!VENDOR_EDITABLE.includes(st)) {
+        return res.status(409).json({
+          success: false,
+          message: 'This period is locked for editing. Wait for LS HR / SSU workflow or contact support.',
+        });
+      }
+    }
 
     if (existing.length === 0) {
       await db.query(
-        `INSERT INTO monthly_reports
-           (vendor_id, user_id, report_month, report_year, invoice_value,
-            bast_file, invoice_file, recap_salary_file, tax_file,
-            submitted_by, submitted_at, status)
-         VALUES (?,?,?,?,?,?,?,?,?,?,NOW(),'submitted')`,
-        [vendorId, userId, month, year, invoice_value || null,
-         bastFile, invoiceFile, recapSalaryFile, taxFile, submittedBy]
+        `INSERT INTO vendor_monthly_submissions
+          (vendor_id, report_month, report_year, invoice_value,
+           bast_file, invoice_file, recap_salary_file, tax_file,
+           submitted_by, submitted_at, workflow_status)
+         VALUES (?,?,?,?,?,?,?,?,?,NOW(),'pending_ls_hr')`,
+        [
+          vendorId, month, year, invoice_value || null,
+          bastFile, invoiceFile, recapSalaryFile, taxFile, submittedBy,
+        ]
       );
     } else {
+      const ex = existing[0];
       const updates = [];
-      const uParams = [];
-
-      if (invoice_value !== undefined) { updates.push('invoice_value=?'); uParams.push(invoice_value); }
-      if (bastFile)        { updates.push('bast_file=?');         uParams.push(bastFile); }
-      if (invoiceFile)     { updates.push('invoice_file=?');      uParams.push(invoiceFile); }
-      if (recapSalaryFile) { updates.push('recap_salary_file=?'); uParams.push(recapSalaryFile); }
-      if (taxFile)         { updates.push('tax_file=?');          uParams.push(taxFile); }
-      updates.push('submitted_by=?', 'submitted_at=NOW()', 'status="submitted"');
-      uParams.push(submittedBy, existing[0].id);
-
+      const params = [];
+      if (invoice_value !== undefined) {
+        updates.push('invoice_value=?');
+        params.push(invoice_value || null);
+      }
+      if (bastFile) { updates.push('bast_file=?'); params.push(bastFile); }
+      if (invoiceFile) { updates.push('invoice_file=?'); params.push(invoiceFile); }
+      if (recapSalaryFile) { updates.push('recap_salary_file=?'); params.push(recapSalaryFile); }
+      if (taxFile) { updates.push('tax_file=?'); params.push(taxFile); }
+      updates.push("workflow_status='pending_ls_hr'");
+      updates.push('submitted_by=?');
+      updates.push('submitted_at=NOW()');
+      updates.push('hr_rejection_note=NULL');
+      updates.push('ssu_rejection_note=NULL');
+      params.push(submittedBy, ex.id);
       await db.query(
-        `UPDATE monthly_reports SET ${updates.join(',')} WHERE id=?`,
-        uParams
+        `UPDATE vendor_monthly_submissions SET ${updates.join(', ')} WHERE id=?`,
+        params
       );
     }
-
-    res.json({ success: true, message: 'Monthly report submitted successfully.' });
+    res.json({ success: true, message: 'Submitted to LS HR for review.' });
   } catch (err) {
-    console.error('Submit report error:', err);
+    console.error('submitVendorMonthly:', err);
     res.status(500).json({ success: false, message: 'Server error.' });
   }
 };
 
-module.exports = { getReportList, getReportDetail, submitReport };
+/** Vendor: PDF without requiring a submission row */
+const downloadVendorMonthlyPdf = async (req, res) => {
+  try {
+    const vendorId = req.user.vendor_id;
+    if (!vendorId) return res.status(403).json({ success: false, message: 'Vendor access only.' });
+    const month = parseInt(req.params.month, 10);
+    const year = parseInt(req.params.year, 10);
+    const [[v]] = await db.query('SELECT name, code FROM vendors WHERE id = ?', [vendorId]);
+    if (!v) return res.status(404).json({ success: false, message: 'Vendor not found.' });
+    const rows = await fetchVendorAttendanceRows(vendorId, month, year);
+    const doc = buildVendorMonthlyTimesheetPdf({
+      vendor: { name: v.name, code: v.code },
+      month,
+      year,
+      rows,
+    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="timesheet-v${vendorId}-${year}-${String(month).padStart(2, '0')}.pdf"`
+    );
+    doc.pipe(res);
+  } catch (err) {
+    console.error('downloadVendorMonthlyPdf:', err);
+    if (!res.headersSent) res.status(500).json({ success: false, message: 'Failed to generate PDF.' });
+  }
+};
+
+module.exports = {
+  getVendorMonthlySummary,
+  getVendorMonthlyDetail,
+  submitVendorMonthly,
+  downloadVendorMonthlyPdf,
+  fetchVendorAttendanceRows,
+};
