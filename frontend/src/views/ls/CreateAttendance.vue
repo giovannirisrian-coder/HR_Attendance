@@ -53,7 +53,7 @@
                   Capturing location…
                 </template>
                 <template v-else-if="geoStatus === 'success'">
-                  📍 {{ form.latitude?.toFixed(6) }}, {{ form.longitude?.toFixed(6) }}
+                  📍 {{ fmtCoord(form.latitude, 6) }}, {{ fmtCoord(form.longitude, 6) }}
                   <small v-if="form.address">{{ form.address }}</small>
                 </template>
                 <template v-else-if="geoStatus === 'error'">
@@ -92,8 +92,8 @@
                 <div class="summary-value" :class="todayRecord?.clock_in_time ? 'text-green' : 'text-muted'">
                   {{ todayRecord?.clock_in_time || '—' }}
                 </div>
-                <div v-if="todayRecord?.clock_in_lat" class="summary-sub">
-                  📍 {{ todayRecord.clock_in_lat.toFixed(5) }}, {{ todayRecord.clock_in_lng.toFixed(5) }}
+                <div v-if="todayRecord?.clock_in_lat != null && todayRecord?.clock_in_lat !== ''" class="summary-sub">
+                  📍 {{ fmtCoord(todayRecord.clock_in_lat, 5) }}, {{ fmtCoord(todayRecord.clock_in_lng, 5) }}
                 </div>
               </div>
               <div class="summary-divider"></div>
@@ -102,8 +102,8 @@
                 <div class="summary-value" :class="todayRecord?.clock_out_time ? 'text-red' : 'text-muted'">
                   {{ todayRecord?.clock_out_time || '—' }}
                 </div>
-                <div v-if="todayRecord?.clock_out_lat" class="summary-sub">
-                  📍 {{ todayRecord.clock_out_lat.toFixed(5) }}, {{ todayRecord.clock_out_lng.toFixed(5) }}
+                <div v-if="todayRecord?.clock_out_lat != null && todayRecord?.clock_out_lat !== ''" class="summary-sub">
+                  📍 {{ fmtCoord(todayRecord.clock_out_lat, 5) }}, {{ fmtCoord(todayRecord.clock_out_lng, 5) }}
                 </div>
               </div>
             </div>
@@ -155,6 +155,12 @@ const form = reactive({
   longitude: null,
   address: '',
 });
+
+/** MySQL DECIMAL / JSON often arrives as strings; `.toFixed` only exists on numbers. */
+const fmtCoord = (val, digits = 5) => {
+  const n = Number(val);
+  return Number.isFinite(n) ? n.toFixed(digits) : '—';
+};
 
 const captureLocation = () => {
   if (!navigator.geolocation) { geoStatus.value = 'error'; return; }
