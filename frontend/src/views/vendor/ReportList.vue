@@ -6,7 +6,12 @@
         <p class="page-subtitle">Monthly attendance aggregated for all LS employees under your vendor</p>
       </div>
       <div class="flex items-center gap-2">
-        <label class="form-label" style="margin:0;white-space:nowrap;">Year:</label>
+        <span class="calendar-label" title="Year Filter" aria-label="Year filter">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="4" width="18" height="18" rx="2"></rect>
+            <path d="M16 2v4M8 2v4M3 10h18"></path>
+          </svg>
+        </span>
         <select v-model="selectedYear" @change="fetchData" class="form-control" style="max-width:110px;">
           <option v-for="y in yearOptions" :key="y" :value="y">{{ y }}</option>
         </select>
@@ -75,6 +80,7 @@ const workflowLabel = (s) => {
     hr_rejected: 'Rejected (LS HR)',
     pending_ssu: 'With SSU',
     invoice_on_process: 'Invoice On Process',
+    paid: 'Paid',
   };
   return map[s] || s;
 };
@@ -84,6 +90,7 @@ const workflowBadge = (s) => {
   if (s === 'hr_rejected') return 'badge-rejected';
   if (s === 'pending_ssu') return 'badge-submitted';
   if (s === 'invoice_on_process') return 'badge-invoice-process';
+  if (s === 'paid') return 'badge-approved';
   return 'badge-draft';
 };
 
@@ -107,3 +114,17 @@ const goDetail = (month) => {
 
 onMounted(fetchData);
 </script>
+
+<style scoped>
+.calendar-label {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--bc-gray-200);
+  border-radius: var(--radius);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--bc-green-700);
+  background: var(--bc-green-50);
+}
+</style>

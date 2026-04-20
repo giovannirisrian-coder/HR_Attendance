@@ -15,6 +15,7 @@ const {
   hrReject,
   ssuApprove,
   ssuReject,
+  ssuMarkPaid,
 } = require('../controllers/submissionWorkflowController');
 const { authenticate, authorize } = require('../middleware/auth');
 const upload = require('../middleware/upload');
@@ -39,6 +40,7 @@ router.get('/ssu/submissions/:id/pdf', authenticate, authorize('ssu'), downloadS
 router.get('/ssu/submissions/:id/attachments', authenticate, authorize('ssu'), downloadSubmissionAttachments);
 router.post('/ssu/submissions/:id/approve', authenticate, authorize('ssu'), ssuApprove);
 router.post('/ssu/submissions/:id/reject', authenticate, authorize('ssu'), ssuReject);
+router.post('/ssu/submissions/:id/mark-paid', authenticate, authorize('ssu'), ssuMarkPaid);
 
 // ── Vendor (paths before generic :id if any) ────────────────────────────────
 router.get('/vendor/summary', authenticate, authorize('vendor'), getVendorMonthlySummary);

@@ -40,7 +40,7 @@
         <div class="filter-bar">
           <div class="search-wrap">
             <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-            <input v-model="filters.search" @input="debouncedFetch" class="form-control" placeholder="Search date…" style="max-width:220px;" />
+            <input v-model="filters.search" @input="debouncedFetch" class="form-control" placeholder="Search date or NIK…" style="max-width:240px;" />
           </div>
           <input v-model="filters.start_date" @change="fetchData" type="date" class="form-control" style="max-width:160px;" placeholder="Start date" />
           <input v-model="filters.end_date"   @change="fetchData" type="date" class="form-control" style="max-width:160px;" placeholder="End date" />
@@ -55,16 +55,19 @@
           <thead>
             <tr>
               <th>Date</th>
+              <th>NIK</th>
               <th>Clock In</th>
               <th>Clock Out</th>
               <th>Duration</th>
+              <th>OT</th>
               <th>Location (In)</th>
               <th>Status</th>
+              <th style="width:120px;">Actions</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="records.length === 0">
-              <td colspan="6">
+              <td colspan="9">
                 <div class="empty-state">
                   <div class="empty-state-icon">📅</div>
                   <h3>No attendance records found</h3>
@@ -77,6 +80,7 @@
                 <div class="font-bold">{{ formatDate(r.attendance_date) }}</div>
                 <div class="text-sm text-muted">{{ getDayName(r.attendance_date) }}</div>
               </td>
+              <td><span class="text-sm font-mono">{{ r.nik || '—' }}</span></td>
               <td>
                 <div class="time-cell clock-in">{{ r.clock_in_time || '—' }}</div>
               </td>
@@ -90,6 +94,13 @@
                 <span v-else class="text-muted">—</span>
               </td>
               <td>
+                <template v-if="r.ot_start_time && r.ot_end_time">
+                  <div class="text-sm font-bold" style="color:#b45309;">{{ fmtHm(r.ot_start_time) }}–{{ fmtHm(r.ot_end_time) }}</div>
+                  <div class="text-xs text-muted">{{ calcDuration(fmtHm(r.ot_start_time), fmtHm(r.ot_end_time)) }}</div>
+                </template>
+                <span v-else class="text-muted">—</span>
+              </td>
+              <td>
                 <div v-if="r.clock_in_lat" class="location-cell">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
                   {{ Number(r.clock_in_lat).toFixed(5) }}, {{ Number(r.clock_in_lng).toFixed(5) }}
@@ -97,6 +108,9 @@
                 <span v-else class="text-muted">—</span>
               </td>
               <td><span class="badge" :class="`badge-${r.status}`">{{ r.status }}</span></td>
+              <td>
+                <router-link :to="`/ls/attendance/${r.id}`" class="btn btn-outline btn-sm">Detail</router-link>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -132,12 +146,16 @@ const stats = computed(() => ({
 }));
 
 let debounceTimer;
-const debouncedFetch = () => { clearTimeout(debounceTimer); debounceTimer = setTimeout(fetchData, 400); };
+const debouncedFetch = () => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => { pagination.page = 1; fetchData(); }, 400);
+};
 
 const fetchData = async () => {
   loading.value = true;
   try {
     const params = { page: pagination.page, limit: pagination.limit };
+    if (filters.search.trim()) params.search = filters.search.trim();
     if (filters.start_date) params.start_date = filters.start_date;
     if (filters.end_date)   params.end_date   = filters.end_date;
     const { data } = await api.get('/attendance/my', { params });
@@ -154,6 +172,7 @@ const clearFilters = () => {
 
 const formatDate = (d) => new Date(d).toLocaleDateString('en-ID', { day: '2-digit', month: 'short', year: 'numeric' });
 const getDayName = (d) => new Date(d).toLocaleDateString('en-ID', { weekday: 'long' });
+const fmtHm = (t) => (t ? String(t).slice(0, 5) : '');
 const calcDuration = (inT, outT) => {
   const [ih, im] = inT.split(':').map(Number);
   const [oh, om] = outT.split(':').map(Number);

@@ -118,7 +118,7 @@ const listHrSubmissions = async (req, res) => {
     if (status === 'request_approval') {
       where += " AND s.workflow_status = 'pending_ls_hr'";
     } else if (status === 'approved') {
-      where += " AND s.workflow_status IN ('pending_ssu','invoice_on_process')";
+      where += " AND s.workflow_status IN ('pending_ssu','invoice_on_process','paid')";
     } else if (status === 'rejected') {
       where += " AND s.workflow_status = 'hr_rejected'";
     }
@@ -166,6 +166,8 @@ const listSsuSubmissions = async (req, res) => {
       where += " AND s.workflow_status = 'pending_ssu'";
     } else if (status === 'invoice_on_process') {
       where += " AND s.workflow_status = 'invoice_on_process'";
+    } else if (status === 'paid') {
+      where += " AND s.workflow_status = 'paid'";
     } else if (status === 'rejected') {
       where += " AND s.workflow_status = 'pending_ls_hr' AND s.ssu_rejection_note IS NOT NULL";
     }
@@ -300,6 +302,29 @@ const ssuReject = async (req, res) => {
   }
 };
 
+const ssuMarkPaid = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const [rows] = await db.query('SELECT * FROM vendor_monthly_submissions WHERE id = ?', [id]);
+    if (!rows.length) return res.status(404).json({ success: false, message: 'Not found.' });
+    const s = rows[0];
+    if (s.workflow_status !== 'invoice_on_process') {
+      return res.status(400).json({ success: false, message: 'Only Invoice On Process items can be marked as Paid.' });
+    }
+    await db.query(
+      `UPDATE vendor_monthly_submissions
+       SET workflow_status = 'paid',
+           ssu_reviewed_by = ?, ssu_reviewed_at = NOW()
+       WHERE id = ?`,
+      [req.user.id, id]
+    );
+    res.json({ success: true, message: 'Status updated to Paid.' });
+  } catch (err) {
+    console.error('ssuMarkPaid:', err);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
 module.exports = {
   downloadSubmissionPdf,
   downloadSubmissionAttachments,
@@ -309,6 +334,7 @@ module.exports = {
   hrReject,
   ssuApprove,
   ssuReject,
+  ssuMarkPaid,
   fetchVendorAttendanceRows,
   getSubmissionById,
 };

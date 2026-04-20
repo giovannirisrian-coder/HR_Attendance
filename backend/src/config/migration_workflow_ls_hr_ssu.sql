@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS vendor_monthly_submissions (
     'pending_ls_hr',
     'hr_rejected',
     'pending_ssu',
-    'invoice_on_process'
+    'invoice_on_process',
+    'paid'
   ) NOT NULL DEFAULT 'draft',
   hr_reviewed_by      INT          NULL,
   hr_reviewed_at      TIMESTAMP    NULL,

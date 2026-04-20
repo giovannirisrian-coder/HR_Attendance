@@ -191,6 +191,7 @@ const workflowLabel = (s) => {
     hr_rejected: 'Rejected (LS HR)',
     pending_ssu: 'With SSU',
     invoice_on_process: 'Invoice On Process',
+    paid: 'Paid',
   };
   return map[s] || s || '—';
 };
@@ -200,6 +201,7 @@ const workflowBadge = (s) => {
   if (s === 'hr_rejected') return 'badge-rejected';
   if (s === 'pending_ssu') return 'badge-submitted';
   if (s === 'invoice_on_process') return 'badge-invoice-process';
+  if (s === 'paid') return 'badge-approved';
   return 'badge-draft';
 };
 

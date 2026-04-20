@@ -78,6 +78,15 @@
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
                     </button>
                   </template>
+                  <button
+                    v-if="canMarkPaid(r)"
+                    type="button"
+                    class="btn-icon-action success"
+                    title="Mark as Paid"
+                    @click="doMarkPaid(r.id)"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/><path d="M9 12l-2-2"/></svg>
+                  </button>
                 </div>
               </td>
             </tr>
@@ -150,6 +159,7 @@ const statusOptions = computed(() => {
   return [
     { value: 'request_approval', label: 'Request Approval' },
     { value: 'invoice_on_process', label: 'Invoice On Process' },
+    { value: 'paid', label: 'Paid' },
     { value: 'rejected', label: 'Rejected (returned)' },
   ];
 });
@@ -173,11 +183,12 @@ const statusLabel = (r) => {
   if (isHr.value) {
     if (r.workflow_status === 'pending_ls_hr') return 'Request Approval';
     if (r.workflow_status === 'hr_rejected') return 'Rejected';
-    if (['pending_ssu', 'invoice_on_process'].includes(r.workflow_status)) return 'Approved';
+    if (['pending_ssu', 'invoice_on_process', 'paid'].includes(r.workflow_status)) return 'Approved';
     return r.workflow_status;
   }
   if (r.workflow_status === 'pending_ssu') return 'Request Approval';
   if (r.workflow_status === 'invoice_on_process') return 'Invoice On Process';
+  if (r.workflow_status === 'paid') return 'Paid';
   if (r.workflow_status === 'pending_ls_hr' && r.ssu_rejection_note) return 'Rejected';
   return r.workflow_status || '—';
 };
@@ -187,6 +198,7 @@ const statusBadgeClass = (r) => {
   if (lbl === 'Request Approval') return 'badge-pending';
   if (lbl === 'Rejected') return 'badge-rejected';
   if (lbl === 'Invoice On Process') return 'badge-invoice-process';
+  if (lbl === 'Paid') return 'badge-approved';
   if (lbl === 'Approved') return 'badge-approved';
   return 'badge-draft';
 };
@@ -197,6 +209,8 @@ const canApproveReject = (r) => {
   if (isHr.value) return r.workflow_status === 'pending_ls_hr';
   return r.workflow_status === 'pending_ssu';
 };
+
+const canMarkPaid = (r) => !isHr.value && r.workflow_status === 'invoice_on_process';
 
 const fetchData = async () => {
   loading.value = true;
@@ -250,6 +264,12 @@ const dlZip = async (id) => {
 const doApprove = async (id) => {
   if (!confirm('Approve this submission?')) return;
   await api.post(`${basePath.value}/submissions/${id}/approve`);
+  await fetchData();
+};
+
+const doMarkPaid = async (id) => {
+  if (!confirm('Mark this submission as Paid?')) return;
+  await api.post(`${basePath.value}/submissions/${id}/mark-paid`);
   await fetchData();
 };
 

@@ -7,7 +7,7 @@
       </div>
     </div>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;max-width:960px;">
+    <div class="create-attendance-grid">
       <!-- Form card -->
       <div class="card">
         <div class="card-header">
@@ -36,12 +36,31 @@
 
             <div class="form-group">
               <label class="form-label">Date</label>
-              <input v-model="form.attendance_date" type="date" class="form-control" required />
+              <input
+                v-model="form.attendance_date"
+                type="date"
+                class="form-control"
+                required
+                readonly
+                :min="form.attendance_date"
+                :max="form.attendance_date"
+              />
+              <p class="text-sm text-muted" style="margin-top:6px;">
+                Only today’s date is allowed. Backdating is disabled (validated on the server in the server’s local timezone).
+              </p>
             </div>
 
             <div class="form-group">
               <label class="form-label">Time</label>
               <input v-model="form.time" type="time" class="form-control" required />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">NIK</label>
+              <div class="form-control" style="background:var(--bc-gray-50);color:var(--bc-gray-700);font-family:ui-monospace,monospace;">
+                {{ todayRecord?.nik || '—' }}
+              </div>
+              <p class="text-sm text-muted" style="margin-top:6px;">Diambil dari master karyawan (employees). Hubungi HR jika kosong atau salah.</p>
             </div>
 
             <!-- Geolocation -->
@@ -72,59 +91,159 @@
               {{ loading ? 'Submitting…' : 'Submit Attendance' }}
             </button>
           </form>
+
+          <div class="ot-divider" />
+
+          <form @submit.prevent="submitOvertime">
+            <h3 class="ot-section-title">Overtime</h3>
+            <div class="form-group">
+              <label class="form-label">Type</label>
+              <div class="ot-type-pill">Range Time</div>
+            </div>
+            <p class="text-sm text-muted" style="margin-bottom:12px;">Uses the same date as in the attendance form above.</p>
+            <div class="form-group">
+              <label class="form-label">Start time</label>
+              <input v-model="otForm.ot_start_time" type="time" class="form-control" :disabled="!canEditOvertime" required />
+            </div>
+            <div class="form-group">
+              <label class="form-label">End time</label>
+              <input v-model="otForm.ot_end_time" type="time" class="form-control" :disabled="!canEditOvertime" required />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Summary <span class="text-muted text-sm">(optional)</span></label>
+              <textarea
+                v-model="otForm.ot_summary"
+                class="form-control"
+                rows="2"
+                maxlength="2000"
+                placeholder="Brief description if needed…"
+                :disabled="!canEditOvertime"
+              />
+            </div>
+            <div v-if="otSuccessMsg" class="alert alert-success"><span>✅</span> {{ otSuccessMsg }}</div>
+            <div v-if="otErrorMsg" class="alert alert-error"><span>⚠️</span> {{ otErrorMsg }}</div>
+            <button type="submit" class="btn btn-outline w-full" :disabled="otLoading || !canEditOvertime">
+              <span v-if="otLoading" class="spinner" style="width:16px;height:16px;border-width:2px;"></span>
+              {{ otLoading ? 'Saving…' : 'Save overtime' }}
+            </button>
+            <p v-if="!canEditOvertime && todayRecord" class="text-sm text-muted" style="margin-top:10px;">
+              Overtime can be saved after clock-in, while the record is pending supervisor approval.
+            </p>
+            <p v-else-if="!todayRecord" class="text-sm text-muted" style="margin-top:10px;">
+              Clock in for the selected date before saving overtime.
+            </p>
+          </form>
         </div>
       </div>
 
-      <!-- Today's summary -->
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">Today's Summary</span>
-          <span class="text-muted text-sm">{{ todayDate }}</span>
-        </div>
-        <div class="card-body">
-          <div v-if="loadingRecord" class="loading-overlay" style="padding:24px;">
-            <span class="spinner"></span> Loading…
+      <!-- Today's summary + Overtime summary (beside each other when OT exists) -->
+      <div class="summary-aside" style="width:100%; max-width:none; margin-bottom:32px;">
+        <div
+          class="summary-pair"
+          :class="{ 'summary-pair--split': hasOtSummary }"
+          style="display: flex; gap: 24px; flex-wrap: wrap; width: 100%; align-items: stretch;"
+        >
+          <div
+            class="card"
+            style="
+              flex: 1 1 320px;
+              min-width: 320px;
+              max-width: 540px;
+              box-sizing: border-box;
+              overflow: visible;
+              min-height: 370px;
+            "
+          >
+            <div class="card-header" style="display: flex; justify-content: space-between; align-items: flex-end;">
+              <span class="card-title" style="font-size: 1.17em;">Today's Summary</span>
+              <span class="text-muted text-sm" style="white-space:nowrap; margin-left: 12px;">{{ summaryDateLabel }}</span>
+            </div>
+            <div class="card-body" style="overflow-x: auto;">
+              <div v-if="loadingRecord" class="loading-overlay" style="padding:24px;">
+                <span class="spinner"></span> Loading…
+              </div>
+              <template v-else>
+                <div class="summary-row" style="display: flex; flex-direction: row; gap: 16px;">
+                  <div class="summary-item" style="flex: 1 1 0; min-width: 0;">
+                    <div class="summary-label">Clock In</div>
+                    <div class="summary-value" :class="todayRecord?.clock_in_time ? 'text-green' : 'text-muted'">
+                      {{ todayRecord?.clock_in_time || '—' }}
+                    </div>
+                    <div v-if="todayRecord?.clock_in_lat != null && todayRecord?.clock_in_lat !== ''" class="summary-sub">
+                      📍 {{ fmtCoord(todayRecord.clock_in_lat, 5) }}, {{ fmtCoord(todayRecord.clock_in_lng, 5) }}
+                    </div>
+                  </div>
+                  <div class="summary-divider" style="width:2px; background:#efefef; margin:0 8px;"></div>
+                  <div class="summary-item" style="flex: 1 1 0; min-width: 0;">
+                    <div class="summary-label">Clock Out</div>
+                    <div class="summary-value" :class="todayRecord?.clock_out_time ? 'text-red' : 'text-muted'">
+                      {{ todayRecord?.clock_out_time || '—' }}
+                    </div>
+                    <div v-if="todayRecord?.clock_out_lat != null && todayRecord?.clock_out_lat !== ''" class="summary-sub">
+                      📍 {{ fmtCoord(todayRecord.clock_out_lat, 5) }}, {{ fmtCoord(todayRecord.clock_out_lng, 5) }}
+                    </div>
+                  </div>
+                </div>
+
+                <div v-if="todayRecord" class="mt-4" style="margin-top: 20px;">
+                  <div class="detail-row" style="display:flex; justify-content:space-between; margin-bottom:8px;">
+                    <span class="detail-label" style="flex-shrink:0;">NIK</span>
+                    <span class="detail-value" style="word-break:break-all; max-width:70%;">{{ todayRecord.nik || '—' }}</span>
+                  </div>
+                  <div class="detail-row" style="display:flex; justify-content:space-between; margin-bottom:8px;">
+                    <span class="detail-label" style="flex-shrink:0;">Status</span>
+                    <span class="badge" :class="`badge-${todayRecord.status}`">{{ todayRecord.status }}</span>
+                  </div>
+                  <div v-if="todayRecord.clock_in_time && todayRecord.clock_out_time" class="detail-row" style="display:flex; justify-content:space-between;">
+                    <span class="detail-label" style="flex-shrink:0;">Duration</span>
+                    <span class="detail-value font-bold">{{ calcDuration(todayRecord.clock_in_time, todayRecord.clock_out_time) }}</span>
+                  </div>
+                </div>
+
+                <div v-else class="empty-state" style="padding:32px 0;">
+                  <div class="empty-state-icon">📋</div>
+                  <h3>No attendance for this date</h3>
+                  <p>Clock in to start tracking</p>
+                </div>
+              </template>
+            </div>
           </div>
-          <template v-else>
-            <div class="summary-row">
-              <div class="summary-item">
-                <div class="summary-label">Clock In</div>
-                <div class="summary-value" :class="todayRecord?.clock_in_time ? 'text-green' : 'text-muted'">
-                  {{ todayRecord?.clock_in_time || '—' }}
-                </div>
-                <div v-if="todayRecord?.clock_in_lat != null && todayRecord?.clock_in_lat !== ''" class="summary-sub">
-                  📍 {{ fmtCoord(todayRecord.clock_in_lat, 5) }}, {{ fmtCoord(todayRecord.clock_in_lng, 5) }}
-                </div>
-              </div>
-              <div class="summary-divider"></div>
-              <div class="summary-item">
-                <div class="summary-label">Clock Out</div>
-                <div class="summary-value" :class="todayRecord?.clock_out_time ? 'text-red' : 'text-muted'">
-                  {{ todayRecord?.clock_out_time || '—' }}
-                </div>
-                <div v-if="todayRecord?.clock_out_lat != null && todayRecord?.clock_out_lat !== ''" class="summary-sub">
-                  📍 {{ fmtCoord(todayRecord.clock_out_lat, 5) }}, {{ fmtCoord(todayRecord.clock_out_lng, 5) }}
-                </div>
-              </div>
-            </div>
 
-            <div v-if="todayRecord" class="mt-4">
-              <div class="detail-row">
-                <span class="detail-label">Status</span>
-                <span class="badge" :class="`badge-${todayRecord.status}`">{{ todayRecord.status }}</span>
+          <div
+            v-if="hasOtSummary"
+            class="card"
+            style="
+              flex: 1 1 320px;
+              min-width: 320px;
+              max-width: 420px;
+              box-sizing: border-box;
+              overflow: visible;
+            "
+          >
+            <div class="card-header" style="display: flex; justify-content: space-between; align-items: flex-end;">
+              <span class="card-title" style="font-size: 1.17em;">Overtime Summary</span>
+              <span class="badge" :class="`badge-${todayRecord?.status || 'draft'}`">{{ todayRecord?.status }}</span>
+            </div>
+            <div class="card-body" style="overflow-x: auto;">
+              <div class="summary-row single">
+                <div class="summary-item">
+                  <div class="summary-label">Range (start – end)</div>
+                  <div class="summary-value summary-value--sm ot-range">
+                    {{ fmtTimeHm(todayRecord.ot_start_time) }} – {{ fmtTimeHm(todayRecord.ot_end_time) }}
+                  </div>
+                  <div class="summary-sub">Type: Range Time</div>
+                </div>
               </div>
-              <div v-if="todayRecord.clock_in_time && todayRecord.clock_out_time" class="detail-row">
-                <span class="detail-label">Duration</span>
-                <span class="detail-value font-bold">{{ calcDuration(todayRecord.clock_in_time, todayRecord.clock_out_time) }}</span>
+              <div v-if="todayRecord.ot_start_time && todayRecord.ot_end_time" class="detail-row mt-4" style="display:flex; justify-content:space-between;">
+                <span class="detail-label" style="flex-shrink:0;">Duration</span>
+                <span class="detail-value font-bold">{{ calcDuration(fmtTimeHm(todayRecord.ot_start_time), fmtTimeHm(todayRecord.ot_end_time)) }}</span>
+              </div>
+              <div v-if="todayRecord.ot_summary" class="ot-summary-text" style="margin-top:18px;">
+                <div class="summary-label" style="margin-bottom:6px;">Summary</div>
+                <p style="white-space: pre-line;">{{ todayRecord.ot_summary }}</p>
               </div>
             </div>
-
-            <div v-else class="empty-state" style="padding:32px 0;">
-              <div class="empty-state-icon">📋</div>
-              <h3>No attendance today</h3>
-              <p>Clock in to start tracking</p>
-            </div>
-          </template>
+          </div>
         </div>
       </div>
     </div>
@@ -132,29 +251,70 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import api from '../../utils/api';
 
 const loading = ref(false);
 const loadingRecord = ref(false);
 const successMsg = ref('');
 const errorMsg = ref('');
+const otLoading = ref(false);
+const otSuccessMsg = ref('');
+const otErrorMsg = ref('');
 const geoStatus = ref('idle'); // idle | loading | success | error
 const todayRecord = ref(null);
 
-const today = new Date();
-const todayDate = today.toLocaleDateString('en-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-const todayStr  = today.toISOString().split('T')[0];
-const nowTime   = `${String(today.getHours()).padStart(2,'0')}:${String(today.getMinutes()).padStart(2,'0')}`;
+/** YYYY-MM-DD in the browser’s local timezone (aligns with typical “today” UX). */
+const calendarTodayLocal = () => {
+  const n = new Date();
+  const y = n.getFullYear();
+  const m = String(n.getMonth() + 1).padStart(2, '0');
+  const d = String(n.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+const now = new Date();
+const nowTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
 const form = reactive({
   type: '',
-  attendance_date: todayStr,
+  attendance_date: calendarTodayLocal(),
   time: nowTime,
   latitude: null,
   longitude: null,
   address: '',
 });
+
+const otForm = reactive({
+  ot_start_time: '',
+  ot_end_time: '',
+  ot_summary: '',
+});
+
+const summaryDateLabel = computed(() => {
+  try {
+    return new Date(`${form.attendance_date}T12:00:00`).toLocaleDateString('en-ID', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    });
+  } catch {
+    return form.attendance_date;
+  }
+});
+
+const hasOtSummary = computed(() => {
+  const r = todayRecord.value;
+  return !!(r?.ot_start_time && r?.ot_end_time);
+});
+
+const canEditOvertime = computed(() => {
+  const r = todayRecord.value;
+  return !!(r?.clock_in_time && r?.status === 'pending');
+});
+
+const fmtTimeHm = (t) => {
+  if (t === undefined || t === null || t === '') return '—';
+  return String(t).slice(0, 5);
+};
 
 /** MySQL DECIMAL / JSON often arrives as strings; `.toFixed` only exists on numbers. */
 const fmtCoord = (val, digits = 5) => {
@@ -182,20 +342,77 @@ const captureLocation = () => {
   );
 };
 
+const syncOtFormFromRecord = () => {
+  const r = todayRecord.value;
+  if (!r) {
+    otForm.ot_start_time = '';
+    otForm.ot_end_time = '';
+    otForm.ot_summary = '';
+    return;
+  }
+  otForm.ot_start_time = r.ot_start_time ? fmtTimeHm(r.ot_start_time) : '';
+  otForm.ot_end_time = r.ot_end_time ? fmtTimeHm(r.ot_end_time) : '';
+  otForm.ot_summary = r.ot_summary || '';
+};
+
 const loadTodayRecord = async () => {
   loadingRecord.value = true;
   try {
-    const { data } = await api.get('/attendance/my', { params: { start_date: todayStr, end_date: todayStr } });
+    const d = calendarTodayLocal();
+    form.attendance_date = d;
+    const { data } = await api.get('/attendance/my', { params: { start_date: d, end_date: d } });
     todayRecord.value = data.data?.[0] || null;
+    syncOtFormFromRecord();
   } catch { /* silent */ } finally { loadingRecord.value = false; }
 };
 
+const submitOvertime = async () => {
+  otSuccessMsg.value = '';
+  otErrorMsg.value = '';
+  if (!canEditOvertime.value) return;
+  const today = calendarTodayLocal();
+  if (form.attendance_date !== today) {
+    otErrorMsg.value = 'Overtime can only be saved for today. Backdating is not allowed.';
+    form.attendance_date = today;
+    return;
+  }
+  if (!otForm.ot_start_time || !otForm.ot_end_time) {
+    otErrorMsg.value = 'Start and end time are required.';
+    return;
+  }
+  otLoading.value = true;
+  try {
+    const { data } = await api.post('/attendance/overtime', {
+      attendance_date: today,
+      ot_start_time: otForm.ot_start_time,
+      ot_end_time: otForm.ot_end_time,
+      ot_summary: otForm.ot_summary || null,
+    });
+    if (data.success) {
+      otSuccessMsg.value = data.message || 'Saved.';
+      todayRecord.value = data.data;
+      syncOtFormFromRecord();
+    }
+  } catch (err) {
+    otErrorMsg.value = err.response?.data?.message || 'Save failed.';
+  } finally {
+    otLoading.value = false;
+  }
+};
+
 const submitAttendance = async () => {
+  const today = calendarTodayLocal();
+  if (form.attendance_date !== today) {
+    errorMsg.value = 'Attendance can only be submitted for today. Backdating is not allowed.';
+    form.attendance_date = today;
+    return;
+  }
   loading.value = true;
   successMsg.value = '';
   errorMsg.value = '';
   try {
-    const { data } = await api.post('/attendance', form);
+    const payload = { ...form };
+    const { data } = await api.post('/attendance', payload);
     if (data.success) {
       successMsg.value = data.message;
       await loadTodayRecord();
@@ -214,7 +431,24 @@ const calcDuration = (inTime, outTime) => {
   return `${Math.floor(mins/60)}h ${mins%60}m`;
 };
 
-onMounted(() => { loadTodayRecord(); captureLocation(); });
+let dateTick;
+const syncDateToToday = () => {
+  const t = calendarTodayLocal();
+  if (form.attendance_date !== t) {
+    form.attendance_date = t;
+    loadTodayRecord();
+  }
+};
+
+onMounted(() => {
+  loadTodayRecord();
+  captureLocation();
+  dateTick = window.setInterval(syncDateToToday, 60_000);
+});
+
+onBeforeUnmount(() => {
+  if (dateTick) window.clearInterval(dateTick);
+});
 </script>
 
 <style scoped>
@@ -250,7 +484,59 @@ onMounted(() => { loadTodayRecord(); captureLocation(); });
 .detail-value { font-size: 13.5px; color: var(--bc-gray-700); }
 .mt-4 { margin-top: 16px; }
 
-@media (max-width: 768px) {
-  div[style*="grid-template-columns"] { grid-template-columns: 1fr !important; }
+.create-attendance-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  max-width: 1120px;
+  align-items: start;
+}
+.summary-aside { min-width: 0; }
+.summary-pair {
+  display: grid;
+  gap: 16px;
+}
+.summary-pair--split {
+  grid-template-columns: 1fr 1fr;
+}
+.summary-row.single .summary-item { padding: 12px 0; }
+.summary-value--sm { font-size: 20px !important; }
+.ot-range { color: #b45309; }
+.ot-summary-text {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--bc-gray-100);
+  font-size: 13px;
+  color: var(--bc-gray-700);
+  line-height: 1.45;
+}
+.ot-summary-text p { margin: 0; white-space: pre-wrap; }
+.ot-divider {
+  margin: 20px 0;
+  border: 0;
+  border-top: 1px solid var(--bc-gray-200);
+}
+.ot-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--bc-green-700);
+  margin: 0 0 14px;
+}
+.ot-type-pill {
+  display: inline-block;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--bc-gray-50);
+  border: 1px solid var(--bc-gray-200);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--bc-gray-700);
+}
+
+@media (max-width: 900px) {
+  .create-attendance-grid { grid-template-columns: 1fr; }
+  .summary-pair--split { grid-template-columns: 1fr; }
 }
 </style>

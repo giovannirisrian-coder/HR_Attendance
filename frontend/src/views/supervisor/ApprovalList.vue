@@ -34,6 +34,12 @@
     <div class="card">
       <div class="card-header">
         <span class="card-title">Pending Reviews</span>
+        <div class="bulk-toolbar">
+          <span class="selected-info">{{ selectedIds.size }} selected</span>
+          <button class="btn btn-primary btn-sm" :disabled="selectedIds.size === 0 || bulkProcessing" @click="openBulkModal">
+            Approval
+          </button>
+        </div>
       </div>
       <div class="card-body" style="padding-bottom:0;">
         <!-- Filters -->
@@ -59,11 +65,16 @@
         <table v-else>
           <thead>
             <tr>
+              <th style="width:42px;">
+                <input type="checkbox" :checked="allSelectableChecked" :indeterminate.prop="isPartiallyChecked" @change="toggleSelectAll" />
+              </th>
               <th>Employee</th>
+              <th>NIK</th>
               <th>Date</th>
               <th>Clock In</th>
               <th>Clock Out</th>
               <th>Duration</th>
+              <th>OT range</th>
               <th>Location</th>
               <th>Status</th>
               <th>Actions</th>
@@ -71,7 +82,7 @@
           </thead>
           <tbody>
             <tr v-if="records.length === 0">
-              <td colspan="8">
+              <td colspan="11">
                 <div class="empty-state">
                   <div class="empty-state-icon">✅</div>
                   <h3>No records found</h3>
@@ -81,9 +92,18 @@
             </tr>
             <tr v-for="r in records" :key="r.id">
               <td>
+                <input
+                  type="checkbox"
+                  :disabled="r.status !== 'pending'"
+                  :checked="selectedIds.has(r.id)"
+                  @change="toggleRow(r.id, $event.target.checked)"
+                />
+              </td>
+              <td>
                 <div class="font-bold">{{ r.employee_name }}</div>
                 <div class="text-sm text-muted">{{ r.employee_id }}</div>
               </td>
+              <td><span class="text-sm font-mono">{{ r.nik || '—' }}</span></td>
               <td>
                 <div class="font-bold">{{ formatDate(r.attendance_date) }}</div>
                 <div class="text-sm text-muted">{{ getDayName(r.attendance_date) }}</div>
@@ -97,6 +117,12 @@
                 <span v-else class="text-muted">—</span>
               </td>
               <td>
+                <span v-if="r.ot_start_time && r.ot_end_time" class="text-sm font-bold" style="color:#b45309;">
+                  {{ fmtHm(r.ot_start_time) }}–{{ fmtHm(r.ot_end_time) }}
+                </span>
+                <span v-else class="text-muted">—</span>
+              </td>
+              <td>
                 <div v-if="r.clock_in_lat" class="location-cell">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
                   {{ Number(r.clock_in_lat).toFixed(4) }}, {{ Number(r.clock_in_lng).toFixed(4) }}
@@ -105,22 +131,10 @@
               </td>
               <td><span class="badge" :class="`badge-${r.status}`">{{ r.status }}</span></td>
               <td>
-                <div class="action-btns">
-                  <button class="btn btn-outline btn-sm" @click="openDetail(r)" title="View Detail">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                    Detail
-                  </button>
-                  <template v-if="r.status === 'pending'">
-                    <button class="btn btn-primary btn-sm" @click="doApprove(r.id)" :disabled="actionLoading === r.id">
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>
-                      Approve
-                    </button>
-                    <button class="btn btn-danger btn-sm" @click="openReject(r)" :disabled="actionLoading === r.id">
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
-                      Reject
-                    </button>
-                  </template>
-                </div>
+                <button class="btn btn-outline btn-sm" @click="openDetail(r)" title="View Detail">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                  Detail
+                </button>
               </td>
             </tr>
           </tbody>
@@ -150,6 +164,7 @@
               <div class="dl">
                 <div class="dl-row"><span>Name</span><strong>{{ detailModal.record.employee_name }}</strong></div>
                 <div class="dl-row"><span>ID</span><strong>{{ detailModal.record.employee_id }}</strong></div>
+                <div class="dl-row"><span>NIK</span><strong>{{ detailModal.record.nik || '—' }}</strong></div>
               </div>
             </div>
             <div class="detail-section">
@@ -159,6 +174,17 @@
                 <div class="dl-row"><span>Clock In</span><strong class="text-green">{{ detailModal.record.clock_in_time || '—' }}</strong></div>
                 <div class="dl-row"><span>Clock Out</span><strong class="text-red">{{ detailModal.record.clock_out_time || '—' }}</strong></div>
                 <div class="dl-row"><span>Status</span><span class="badge" :class="`badge-${detailModal.record.status}`">{{ detailModal.record.status }}</span></div>
+              </div>
+            </div>
+            <div class="detail-section" v-if="detailModal.record.ot_start_time && detailModal.record.ot_end_time">
+              <h4>Overtime (Range Time)</h4>
+              <div class="dl">
+                <div class="dl-row"><span>Range</span><strong>{{ fmtHm(detailModal.record.ot_start_time) }} – {{ fmtHm(detailModal.record.ot_end_time) }}</strong></div>
+                <div class="dl-row"><span>Duration</span><strong>{{ otDuration(detailModal.record) }}</strong></div>
+                <div v-if="detailModal.record.ot_summary" class="dl-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
+                  <span>Summary</span>
+                  <p class="ot-sum">{{ detailModal.record.ot_summary }}</p>
+                </div>
               </div>
             </div>
             <div class="detail-section" v-if="detailModal.record.clock_in_lat">
@@ -187,34 +213,52 @@
           </div>
         </div>
         <div class="modal-footer">
-          <template v-if="detailModal.record?.status === 'pending'">
-            <button class="btn btn-danger" @click="openReject(detailModal.record); detailModal.show = false">Reject</button>
-            <button class="btn btn-primary" @click="doApprove(detailModal.record.id); detailModal.show = false">Approve</button>
-          </template>
           <button class="btn btn-outline" @click="detailModal.show = false">Close</button>
         </div>
       </div>
     </div>
 
-    <!-- ── Reject Modal ── -->
-    <div v-if="rejectModal.show" class="modal-backdrop" @click.self="rejectModal.show = false">
+    <!-- ── Bulk Approval Modal ── -->
+    <div v-if="bulkModal.show" class="modal-backdrop" @click.self="bulkModal.show = false">
       <div class="modal" style="max-width:440px;">
         <div class="modal-header">
-          <span class="modal-title">Reject Attendance</span>
-          <button class="modal-close" @click="rejectModal.show = false">✕</button>
+          <span class="modal-title">Bulk Approval Action</span>
+          <button class="modal-close" @click="bulkModal.show = false">✕</button>
         </div>
         <div class="modal-body">
           <p style="margin-bottom:14px;color:var(--bc-gray-600);">
-            You are about to reject the attendance record for <strong>{{ rejectModal.record?.employee_name }}</strong> on <strong>{{ rejectModal.record ? formatDate(rejectModal.record.attendance_date) : '' }}</strong>.
+            You are about to process <strong>{{ selectedIds.size }}</strong> selected record(s).
           </p>
           <div class="form-group">
-            <label class="form-label">Rejection Reason <span style="color:var(--bc-rejected)">*</span></label>
-            <textarea v-model="rejectModal.note" class="form-control" rows="3" placeholder="Provide a reason for rejection…"></textarea>
+            <label class="form-label">Action <span style="color:var(--bc-rejected)">*</span></label>
+            <select v-model="bulkModal.action" class="form-control">
+              <option value="approve">Approve</option>
+              <option value="reject">Reject</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">
+              Rejection Reason
+              <span v-if="bulkModal.action === 'reject'" style="color:var(--bc-rejected)">*</span>
+            </label>
+            <textarea
+              v-model="bulkModal.note"
+              class="form-control"
+              rows="3"
+              :placeholder="bulkModal.action === 'reject' ? 'Provide a reason for rejection…' : 'Optional note'"
+            ></textarea>
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-outline" @click="rejectModal.show = false">Cancel</button>
-          <button class="btn btn-danger" @click="doReject" :disabled="!rejectModal.note.trim()">Confirm Reject</button>
+          <button class="btn btn-outline" @click="bulkModal.show = false">Cancel</button>
+          <button
+            class="btn"
+            :class="bulkModal.action === 'approve' ? 'btn-primary' : 'btn-danger'"
+            @click="submitBulkApproval"
+            :disabled="bulkProcessing || (bulkModal.action === 'reject' && !bulkModal.note.trim())"
+          >
+            {{ bulkModal.action === 'approve' ? 'Confirm Approve' : 'Confirm Reject' }}
+          </button>
         </div>
       </div>
     </div>
@@ -226,13 +270,21 @@ import { ref, reactive, computed, onMounted } from 'vue';
 import api from '../../utils/api';
 
 const loading = ref(false);
-const actionLoading = ref(null);
+const bulkProcessing = ref(false);
 const records = ref([]);
 const pagination = reactive({ total: 0, page: 1, limit: 15 });
 const filters = reactive({ search: '', status: '', start_date: '', end_date: '' });
 
 const detailModal = reactive({ show: false, record: null });
-const rejectModal = reactive({ show: false, record: null, note: '' });
+const bulkModal = reactive({ show: false, action: 'approve', note: '' });
+const selectedIds = ref(new Set());
+
+const pendingIdsOnPage = computed(() => records.value.filter((r) => r.status === 'pending').map((r) => r.id));
+const allSelectableChecked = computed(() => pendingIdsOnPage.value.length > 0 && pendingIdsOnPage.value.every((id) => selectedIds.value.has(id)));
+const isPartiallyChecked = computed(() => {
+  const selectedOnPage = pendingIdsOnPage.value.filter((id) => selectedIds.value.has(id)).length;
+  return selectedOnPage > 0 && selectedOnPage < pendingIdsOnPage.value.length;
+});
 
 const statusCounts = computed(() => ({
   pending:  records.value.filter(r => r.status === 'pending').length,
@@ -254,41 +306,82 @@ const fetchData = async () => {
     const { data } = await api.get('/attendance/team', { params });
     records.value = data.data;
     Object.assign(pagination, data.pagination);
+    const selectableSet = new Set(records.value.filter((r) => r.status === 'pending').map((r) => r.id));
+    selectedIds.value = new Set([...selectedIds.value].filter((id) => selectableSet.has(id)));
   } catch { /* silent */ } finally { loading.value = false; }
 };
 
 const changePage = (p) => { pagination.page = p; fetchData(); };
 const clearFilters = () => {
   Object.assign(filters, { search:'', status:'', start_date:'', end_date:'' });
-  pagination.page = 1; fetchData();
+  pagination.page = 1;
+  selectedIds.value = new Set();
+  fetchData();
 };
 
 const openDetail = (r) => { detailModal.record = r; detailModal.show = true; };
-const openReject = (r) => { rejectModal.record = r; rejectModal.note = ''; rejectModal.show = true; };
 
-const doApprove = async (id) => {
-  actionLoading.value = id;
-  try {
-    await api.put(`/attendance/${id}/approval`, { action: 'approve' });
-    await fetchData();
-  } finally { actionLoading.value = null; }
+const toggleSelectAll = (event) => {
+  const checked = event.target.checked;
+  if (checked) {
+    const next = new Set(selectedIds.value);
+    pendingIdsOnPage.value.forEach((id) => next.add(id));
+    selectedIds.value = next;
+    return;
+  }
+  const next = new Set(selectedIds.value);
+  pendingIdsOnPage.value.forEach((id) => next.delete(id));
+  selectedIds.value = next;
 };
 
-const doReject = async () => {
-  if (!rejectModal.note.trim()) return;
-  actionLoading.value = rejectModal.record.id;
+const toggleRow = (id, checked) => {
+  const next = new Set(selectedIds.value);
+  if (checked) next.add(id);
+  else next.delete(id);
+  selectedIds.value = next;
+};
+
+const openBulkModal = () => {
+  bulkModal.action = 'approve';
+  bulkModal.note = '';
+  bulkModal.show = true;
+};
+
+const submitBulkApproval = async () => {
+  if (bulkModal.action === 'reject' && !bulkModal.note.trim()) return;
+  bulkProcessing.value = true;
   try {
-    await api.put(`/attendance/${rejectModal.record.id}/approval`, {
-      action: 'reject',
-      rejection_note: rejectModal.note,
-    });
-    rejectModal.show = false;
+    const payload = {
+      attendance_ids: Array.from(selectedIds.value),
+      action: bulkModal.action,
+      rejection_note: bulkModal.action === 'reject' ? bulkModal.note.trim() : null,
+    };
+    const { data } = await api.put('/attendance/approval/bulk', payload);
+    if (data?.data?.skipped_count > 0) {
+      window.alert(`${data.data.skipped_count} record tidak diproses karena bukan status pending.`);
+    }
+    bulkModal.show = false;
+    selectedIds.value = new Set();
     await fetchData();
-  } finally { actionLoading.value = null; }
+  } catch (err) {
+    window.alert(err?.response?.data?.message || 'Bulk approval gagal diproses.');
+  } finally {
+    bulkProcessing.value = false;
+  }
 };
 
 const formatDate  = (d) => new Date(d).toLocaleDateString('en-ID', { day:'2-digit', month:'short', year:'numeric' });
 const getDayName  = (d) => new Date(d).toLocaleDateString('en-ID', { weekday:'long' });
+const fmtHm = (t) => (t ? String(t).slice(0, 5) : '');
+const otDuration = (rec) => {
+  if (!rec.ot_start_time || !rec.ot_end_time) return '—';
+  const a = fmtHm(rec.ot_start_time);
+  const b = fmtHm(rec.ot_end_time);
+  const [ih, im] = a.split(':').map(Number);
+  const [oh, om] = b.split(':').map(Number);
+  const mins = (oh * 60 + om) - (ih * 60 + im);
+  return mins < 0 ? '—' : `${Math.floor(mins / 60)}h ${mins % 60}m`;
+};
 const calcDuration = (inT, outT) => {
   const [ih,im] = inT.split(':').map(Number);
   const [oh,om] = outT.split(':').map(Number);
@@ -300,7 +393,15 @@ onMounted(fetchData);
 </script>
 
 <style scoped>
-.action-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.bulk-toolbar { display: flex; align-items: center; gap: 8px; }
+.selected-info {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--bc-gray-600);
+  background: var(--bc-gray-100);
+  padding: 4px 8px;
+  border-radius: 999px;
+}
 .time-cell { font-size: 14px; font-weight: 700; }
 .clock-in  { color: var(--bc-green-600); }
 .clock-out { color: var(--bc-rejected); }
@@ -316,4 +417,5 @@ onMounted(fetchData);
 .map-link { display: flex; align-items: center; gap: 6px; font-size: 13px; }
 .map-link a { color: var(--bc-green-600); font-weight: 600; }
 .rejection-note { font-size: 13.5px; color: var(--bc-gray-700); background: #fee2e2; padding: 12px; border-radius: var(--radius); }
+.ot-sum { margin: 0; font-size: 13px; white-space: pre-wrap; color: var(--bc-gray-700); }
 </style>

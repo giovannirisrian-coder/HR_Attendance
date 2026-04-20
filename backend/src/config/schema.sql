@@ -45,11 +45,25 @@ CREATE TABLE IF NOT EXISTS users (
 ) ENGINE=InnoDB;
 
 -- ──────────────────────────────────────────────
+-- 2b. EMPLOYEES (master NIK; satu user dapat punya satu profil karyawan)
+-- ──────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS employees (
+  id              INT AUTO_INCREMENT PRIMARY KEY,
+  user_id         INT          NOT NULL UNIQUE,
+  nik             VARCHAR(16)  NOT NULL,
+  created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_emp_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- ──────────────────────────────────────────────
 -- 3. ATTENDANCE
 -- ──────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS attendance (
   id              INT AUTO_INCREMENT PRIMARY KEY,
   user_id         INT          NOT NULL,
+  employee_id     INT          NOT NULL,
+  nik             VARCHAR(16)  NULL,
   attendance_date DATE         NOT NULL,
   clock_in_time   TIME         NULL,
   clock_in_lat    DECIMAL(10,8) NULL,
@@ -59,6 +73,9 @@ CREATE TABLE IF NOT EXISTS attendance (
   clock_out_lat   DECIMAL(10,8) NULL,
   clock_out_lng   DECIMAL(11,8) NULL,
   clock_out_address TEXT        NULL,
+  ot_start_time   TIME         NULL,
+  ot_end_time     TIME         NULL,
+  ot_summary      TEXT         NULL,
   status          ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
   approved_by     INT          NULL,
   approved_at     TIMESTAMP    NULL,
@@ -66,12 +83,35 @@ CREATE TABLE IF NOT EXISTS attendance (
   created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uq_user_date (user_id, attendance_date),
-  CONSTRAINT fk_att_user     FOREIGN KEY (user_id)    REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_att_user     FOREIGN KEY (user_id)     REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_att_employee FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE RESTRICT,
   CONSTRAINT fk_att_approver FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 -- ──────────────────────────────────────────────
--- 4. VENDOR MONTHLY SUBMISSIONS (Vendor → LS HR → SSU)
+-- 4. LEAVE REQUESTS (Cuti | Izin | Sakit) — LS → LS Supervisor
+-- ──────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS leave_requests (
+  id              INT AUTO_INCREMENT PRIMARY KEY,
+  user_id         INT          NOT NULL,
+  request_type    ENUM('cuti','izin','sakit') NOT NULL,
+  start_date      DATE         NOT NULL,
+  end_date        DATE         NOT NULL,
+  reason          TEXT         NULL,
+  status          ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+  approved_by     INT          NULL,
+  approved_at     TIMESTAMP    NULL,
+  rejection_note  TEXT         NULL,
+  created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_lr_user_type (user_id, request_type),
+  KEY idx_lr_status (status),
+  CONSTRAINT fk_lr_user     FOREIGN KEY (user_id)     REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_lr_approver FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- ──────────────────────────────────────────────
+-- 5. VENDOR MONTHLY SUBMISSIONS (Vendor → LS HR → SSU)
 -- ──────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS vendor_monthly_submissions (
   id                  INT AUTO_INCREMENT PRIMARY KEY,
@@ -90,7 +130,8 @@ CREATE TABLE IF NOT EXISTS vendor_monthly_submissions (
     'pending_ls_hr',
     'hr_rejected',
     'pending_ssu',
-    'invoice_on_process'
+    'invoice_on_process',
+    'paid'
   ) NOT NULL DEFAULT 'draft',
   hr_reviewed_by      INT          NULL,
   hr_reviewed_at      TIMESTAMP    NULL,
@@ -108,7 +149,7 @@ CREATE TABLE IF NOT EXISTS vendor_monthly_submissions (
 ) ENGINE=InnoDB;
 
 -- ──────────────────────────────────────────────
--- 5. SEED DATA (password for all demo users: "password")
+-- 6. SEED DATA (password for all demo users: "password")
 -- bcrypt hash below matches Laravel's default "password" example
 -- ──────────────────────────────────────────────
 INSERT IGNORE INTO vendors (name, code, address, phone, email) VALUES
@@ -128,3 +169,16 @@ INSERT IGNORE INTO users (name, employee_id, email, password, role, vendor_id, s
 
 UPDATE users SET supervisor_id = (SELECT id FROM (SELECT id FROM users WHERE employee_id='SPV001') t) WHERE employee_id IN ('LS001','LS002');
 UPDATE users SET supervisor_id = (SELECT id FROM (SELECT id FROM users WHERE employee_id='SPV002') t) WHERE employee_id = 'LS003';
+
+-- Master karyawan (NIK) untuk user LS — wajib sebelum absensi
+INSERT INTO employees (user_id, nik)
+SELECT u.id,
+  CASE u.employee_id
+    WHEN 'LS001' THEN '3173010101010001'
+    WHEN 'LS002' THEN '3173020202020002'
+    WHEN 'LS003' THEN '3173030303030003'
+    ELSE '0000000000000001'
+  END
+FROM users u
+WHERE u.role = 'ls'
+  AND NOT EXISTS (SELECT 1 FROM employees e WHERE e.user_id = u.id);

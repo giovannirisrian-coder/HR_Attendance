@@ -24,6 +24,8 @@ const routes = [
     children: [
       { path: 'attendance/create', component: () => import('../views/ls/CreateAttendance.vue') },
       { path: 'attendance/list', component: () => import('../views/ls/AttendanceList.vue') },
+      { path: 'attendance/:id', component: () => import('../views/ls/AttendanceDetail.vue') },
+      { path: 'leave', component: () => import('../views/LeaveHubView.vue') },
     ],
   },
 
@@ -33,6 +35,8 @@ const routes = [
     meta: { requiresAuth: true, role: 'ls_supervisor' },
     children: [
       { path: 'approvals', component: () => import('../views/supervisor/ApprovalList.vue') },
+      { path: 'monthly-recap', component: () => import('../views/supervisor/MonthlyAttendanceRecap.vue') },
+      { path: 'leave', component: () => import('../views/LeaveHubView.vue') },
     ],
   },
 
