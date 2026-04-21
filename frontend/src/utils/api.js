@@ -1,7 +1,15 @@
 import axios from 'axios';
 
+function resolveApiBaseUrl() {
+  const raw = import.meta.env.VITE_API_BASE_URL;
+  if (raw == null || String(raw).trim() === '') {
+    return '/api';
+  }
+  return String(raw).trim().replace(/\/+$/, '') || '/api';
+}
+
 const api = axios.create({
-  baseURL: 'http://localhost:3000/api',
+  baseURL: resolveApiBaseUrl(),
   timeout: 15000,
 });
 
