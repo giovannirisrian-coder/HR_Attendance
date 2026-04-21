@@ -4,13 +4,31 @@ const { buildVendorMonthlyTimesheetPdf } = require('../services/pdfService');
 async function fetchVendorAttendanceRows(vendorId, month, year) {
   const [rows] = await db.query(
     `SELECT a.attendance_date, a.clock_in_time, a.clock_out_time, a.status,
-            u.name AS employee_name, u.employee_id
+            u.name AS employee_name, u.employee_id,
+            COALESCE(lr.leave_cuti, 0) AS leave_cuti,
+            COALESCE(lr.leave_sakit, 0) AS leave_sakit,
+            COALESCE(lr.leave_izin, 0) AS leave_izin
      FROM attendance a
      JOIN users u ON a.user_id = u.id
+     LEFT JOIN (
+       SELECT
+         user_id,
+         SUM(CASE WHEN request_type = 'cuti' THEN 1 ELSE 0 END) AS leave_cuti,
+         SUM(CASE WHEN request_type = 'sakit' THEN 1 ELSE 0 END) AS leave_sakit,
+         SUM(CASE WHEN request_type = 'izin' THEN 1 ELSE 0 END) AS leave_izin
+       FROM leave_requests
+       WHERE status = 'approved'
+         AND (
+           (YEAR(start_date) = ? AND MONTH(start_date) = ?)
+           OR
+           (YEAR(end_date) = ? AND MONTH(end_date) = ?)
+         )
+       GROUP BY user_id
+     ) lr ON lr.user_id = u.id
      WHERE u.vendor_id = ? AND u.role = 'ls'
        AND MONTH(a.attendance_date) = ? AND YEAR(a.attendance_date) = ?
      ORDER BY u.name, a.attendance_date`,
-    [vendorId, month, year]
+    [year, month, year, month, vendorId, month, year]
   );
   return rows;
 }

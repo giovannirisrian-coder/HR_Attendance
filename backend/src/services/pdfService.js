@@ -71,6 +71,10 @@ function aggregateByEmployee(rows) {
         pending: 0,
         rejected: 0,
         totalMins: 0,
+        total_present_days: 0,
+        leave_cuti: Number(r.leave_cuti) || 0,
+        leave_izin: Number(r.leave_izin) || 0,
+        leave_sakit: Number(r.leave_sakit) || 0,
       });
     }
     const g = map.get(key);
@@ -79,6 +83,7 @@ function aggregateByEmployee(rows) {
     if (st === 'approved') g.approved++;
     else if (st === 'pending') g.pending++;
     else if (st === 'rejected') g.rejected++;
+    if (r.clock_in_time != null) g.total_present_days++;
     const mins = rowWorkingMins(r.clock_in_time, r.clock_out_time);
     if (mins != null && st === 'approved') g.totalMins += mins;
   }
@@ -90,6 +95,93 @@ function aggregateByEmployee(rows) {
     });
   }
   return Array.from(map.values());
+}
+
+/** @returns {number} next Y below table */
+function drawAttendanceSummaryTable(doc, yStart, groups) {
+  const x0 = PAGE.margin;
+  const w = usableW();
+  let y = yStart;
+  const maxY = PAGE.h - PAGE.bottomReserve;
+  const rowH = 18;
+  const colW = {
+    name: Math.max(220, w - (70 * 4)),
+    total: 70,
+    cuti: 70,
+    sakit: 70,
+    izin: 70,
+  };
+  const tableW = colW.name + colW.total + colW.cuti + colW.sakit + colW.izin;
+
+  const drawHeader = (headerY) => {
+    doc.save();
+    doc.rect(x0, headerY, tableW, rowH).fill(C.headerBg);
+    doc.restore();
+    doc.rect(x0, headerY, tableW, rowH).strokeColor(C.border).lineWidth(0.55).stroke();
+
+    let x = x0 + 6;
+    const ty = headerY + 5;
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(C.brandMid);
+    doc.text('Name', x, ty, { width: colW.name - 8 });
+    x += colW.name;
+    doc.text('Masuk', x, ty, { width: colW.total - 8, align: 'center' });
+    x += colW.total;
+    doc.text('Cuti', x, ty, { width: colW.cuti - 8, align: 'center' });
+    x += colW.cuti;
+    doc.text('Sakit', x, ty, { width: colW.sakit - 8, align: 'center' });
+    x += colW.sakit;
+    doc.text('Izin', x, ty, { width: colW.izin - 8, align: 'center' });
+  };
+
+  doc.font('Helvetica-Bold').fontSize(10).fillColor(C.ink);
+  doc.text('Attendance summary by LS', x0, y);
+  y += 14;
+
+  if (y + rowH > maxY) {
+    doc.addPage();
+    doc.x = PAGE.margin;
+    doc.y = PAGE.margin;
+    y = doc.y;
+  }
+  drawHeader(y);
+  y += rowH;
+
+  groups.forEach((g, idx) => {
+    if (y + rowH > maxY) {
+      doc.addPage();
+      doc.x = PAGE.margin;
+      doc.y = PAGE.margin;
+      y = doc.y;
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.brandMid);
+      doc.text('Attendance summary by LS (continued)', x0, y);
+      y += 14;
+      drawHeader(y);
+      y += rowH;
+    }
+
+    if (idx % 2 === 1) {
+      doc.save();
+      doc.rect(x0, y, tableW, rowH).fill(C.rowAlt);
+      doc.restore();
+    }
+    doc.rect(x0, y, tableW, rowH).strokeColor(C.border).lineWidth(0.35).stroke();
+
+    let x = x0 + 6;
+    const ty = y + 5;
+    doc.font('Helvetica').fontSize(8).fillColor(C.ink);
+    doc.text(g.employee_name || '—', x, ty, { width: colW.name - 8 });
+    x += colW.name;
+    doc.text(String(g.total_present_days || 0), x, ty, { width: colW.total - 8, align: 'center' });
+    x += colW.total;
+    doc.text(String(g.leave_cuti || 0), x, ty, { width: colW.cuti - 8, align: 'center' });
+    x += colW.cuti;
+    doc.text(String(g.leave_sakit || 0), x, ty, { width: colW.sakit - 8, align: 'center' });
+    x += colW.sakit;
+    doc.text(String(g.leave_izin || 0), x, ty, { width: colW.izin - 8, align: 'center' });
+    y += rowH;
+  });
+
+  return y + 10;
 }
 
 /** @returns {number} next Y below header */
@@ -344,6 +436,7 @@ function buildVendorMonthlyTimesheetPdf(opts) {
 
   const groups = aggregateByEmployee(rows);
   doc.y = drawSummaryPanel(doc, doc.y, groups, rows);
+  doc.y = drawAttendanceSummaryTable(doc, doc.y, groups);
   doc.moveDown(0.25);
 
   const x0 = PAGE.margin;

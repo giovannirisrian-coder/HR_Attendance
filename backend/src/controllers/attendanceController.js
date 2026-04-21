@@ -473,7 +473,7 @@ const getMonthlyAttendanceRecap = async (req, res) => {
        WHERE u.supervisor_id = ? AND u.role = 'ls'
        GROUP BY u.id, u.employee_id, u.name, e.nik
        ORDER BY u.name ASC`,
-      [year, month, year, month, supervisorId]
+      [year, month, year, month, year, month, supervisorId]
     );
 
     res.json({
