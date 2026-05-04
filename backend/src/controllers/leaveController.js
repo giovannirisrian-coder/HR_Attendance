@@ -136,7 +136,7 @@ const getMyLeaves = async (req, res) => {
 const getTeamLeaves = async (req, res) => {
   try {
     const supervisorId = req.user.id;
-    const { request_type, search, status, page = 1, limit = 20 } = req.query;
+    const { request_type, search, status, page = 1, limit = 20, start_date, end_date } = req.query;
 
     if (request_type && !VALID_TYPES.includes(request_type)) {
       return res.status(400).json({ success: false, message: 'Invalid request_type.' });
@@ -151,22 +151,46 @@ const getTeamLeaves = async (req, res) => {
 
     if (search && String(search).trim()) {
       const t = `%${String(search).trim()}%`;
-      where += ' AND (u.name LIKE ? OR u.employee_id LIKE ? OR lr.reason LIKE ?)';
-      params.push(t, t, t);
+      where +=
+        ' AND (u.name LIKE ? OR u.employee_id LIKE ? OR lr.reason LIKE ? OR COALESCE(e.nik, "") LIKE ?)';
+      params.push(t, t, t, t);
     }
     if (status) {
       where += ' AND lr.status = ?';
       params.push(status);
     }
 
+    const ns = normalizeCalendarYmdFromBody(start_date);
+    const ne = normalizeCalendarYmdFromBody(end_date);
+    const fs = start_date && String(start_date).trim() && ns.ok ? ns.ymd : null;
+    const fe = end_date && String(end_date).trim() && ne.ok ? ne.ymd : null;
+    if (fs && fe) {
+      if (compareYmd(fs, fe) > 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'start_date must be on or before end_date.',
+        });
+      }
+      where += ' AND lr.start_date <= ? AND lr.end_date >= ?';
+      params.push(fe, fs);
+    } else if (fs) {
+      where += ' AND lr.end_date >= ?';
+      params.push(fs);
+    } else if (fe) {
+      where += ' AND lr.start_date <= ?';
+      params.push(fe);
+    }
+
     const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
 
     const [rows] = await db.query(
       `SELECT lr.*, u.name AS employee_name, u.employee_id,
-              sup.name AS supervisor_name
+              sup.name AS supervisor_name,
+              e.nik AS nik
        FROM leave_requests lr
        JOIN users u ON lr.user_id = u.id
        LEFT JOIN users sup ON u.supervisor_id = sup.id
+       LEFT JOIN employees e ON e.user_id = u.id
        ${where}
        ORDER BY lr.start_date DESC, lr.id DESC
        LIMIT ? OFFSET ?`,
@@ -177,6 +201,7 @@ const getTeamLeaves = async (req, res) => {
       `SELECT COUNT(*) AS total
        FROM leave_requests lr
        JOIN users u ON lr.user_id = u.id
+       LEFT JOIN employees e ON e.user_id = u.id
        ${where}`,
       params
     );
