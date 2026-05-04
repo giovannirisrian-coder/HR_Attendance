@@ -238,8 +238,28 @@ const getMyAttendance = async (req, res) => {
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
+    const leaveDayTypeExpr = `CASE
+      WHEN EXISTS (
+        SELECT 1 FROM leave_requests lr
+        WHERE lr.user_id = a.user_id AND lr.status = 'approved' AND lr.request_type = 'cuti'
+          AND a.attendance_date BETWEEN lr.start_date AND lr.end_date
+      ) THEN 'cuti'
+      WHEN EXISTS (
+        SELECT 1 FROM leave_requests lr
+        WHERE lr.user_id = a.user_id AND lr.status = 'approved' AND lr.request_type = 'izin'
+          AND a.attendance_date BETWEEN lr.start_date AND lr.end_date
+      ) THEN 'izin'
+      WHEN EXISTS (
+        SELECT 1 FROM leave_requests lr
+        WHERE lr.user_id = a.user_id AND lr.status = 'approved' AND lr.request_type = 'sakit'
+          AND a.attendance_date BETWEEN lr.start_date AND lr.end_date
+      ) THEN 'sakit'
+      ELSE NULL
+    END`;
+
     const [rows] = await db.query(
-      `SELECT a.*, u.name AS employee_name, u.employee_id
+      `SELECT a.*, u.name AS employee_name, u.employee_id,
+              (${leaveDayTypeExpr}) AS leave_day_type
        FROM attendance a
        JOIN users u ON a.user_id = u.id
        LEFT JOIN employees e ON e.id = a.employee_id
@@ -258,7 +278,53 @@ const getMyAttendance = async (req, res) => {
       params
     );
 
-    res.json({ success: true, data: rows, pagination: { total, page: parseInt(page), limit: parseInt(limit) } });
+    const [[summaryRow]] = await db.query(
+      `SELECT
+         COALESCE(SUM(
+           CASE
+             WHEN a.ot_start_time IS NOT NULL AND a.ot_end_time IS NOT NULL
+             THEN TIME_TO_SEC(TIMEDIFF(a.ot_end_time, a.ot_start_time)) / 3600
+             ELSE 0
+           END
+         ), 0) AS overtime_hours,
+         COUNT(DISTINCT CASE
+           WHEN EXISTS (
+             SELECT 1 FROM leave_requests lr
+             WHERE lr.user_id = a.user_id AND lr.status = 'approved' AND lr.request_type = 'cuti'
+               AND a.attendance_date BETWEEN lr.start_date AND lr.end_date
+           ) THEN a.attendance_date END) AS cuti_days,
+         COUNT(DISTINCT CASE
+           WHEN EXISTS (
+             SELECT 1 FROM leave_requests lr
+             WHERE lr.user_id = a.user_id AND lr.status = 'approved' AND lr.request_type = 'izin'
+               AND a.attendance_date BETWEEN lr.start_date AND lr.end_date
+           ) THEN a.attendance_date END) AS izin_days,
+         COUNT(DISTINCT CASE
+           WHEN EXISTS (
+             SELECT 1 FROM leave_requests lr
+             WHERE lr.user_id = a.user_id AND lr.status = 'approved' AND lr.request_type = 'sakit'
+               AND a.attendance_date BETWEEN lr.start_date AND lr.end_date
+           ) THEN a.attendance_date END) AS sakit_days
+       FROM attendance a
+       JOIN users u ON a.user_id = u.id
+       LEFT JOIN employees e ON e.id = a.employee_id
+       ${where}`,
+      params
+    );
+
+    const summary = {
+      overtime_hours: Number(summaryRow?.overtime_hours) || 0,
+      cuti_days: Number(summaryRow?.cuti_days) || 0,
+      izin_days: Number(summaryRow?.izin_days) || 0,
+      sakit_days: Number(summaryRow?.sakit_days) || 0,
+    };
+
+    res.json({
+      success: true,
+      data: rows,
+      pagination: { total, page: parseInt(page), limit: parseInt(limit) },
+      summary,
+    });
   } catch (err) {
     console.error('Get attendance error:', err);
     res.status(500).json({ success: false, message: 'Server error.' });
