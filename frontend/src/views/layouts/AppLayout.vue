@@ -69,9 +69,26 @@
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4M16 2v4M3 10h18M5 6h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2z"/><path d="M8 14h3M8 18h8M15 14h1"/></svg>
             <span v-if="!sidebarCollapsed">Monthly Attendance Recap</span>
           </router-link>
-          <router-link to="/supervisor/leave" class="nav-item" active-class="active" title="Leave approvals">
+          <router-link
+            to="/supervisor/leave"
+            class="nav-item nav-item--supervisor-leave"
+            active-class="active"
+            :title="sidebarCollapsed && supervisorLeavePendingTotal > 0 ? `${supervisorLeavePendingTotal} pending leave approval(s)` : 'Leave approvals'"
+          >
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 7V3m8 4V3M5 11h14M5 21h14M5 11a2 2 0 012-2h10a2 2 0 012 2v10a2 2 0 01-2 2H7a2 2 0 01-2-2V11z"/></svg>
-            <span v-if="!sidebarCollapsed">Leave</span>
+            <span v-if="!sidebarCollapsed" class="nav-item-label-with-chip">
+              <span class="nav-item-label-text">Leave</span>
+              <span
+                v-if="supervisorLeavePendingTotal > 0"
+                class="nav-pending-chip"
+                :aria-label="`${supervisorLeavePendingTotal} pending leave request(s)`"
+              >{{ supervisorLeavePendingChipText }}</span>
+            </span>
+            <span
+              v-else-if="supervisorLeavePendingTotal > 0"
+              class="nav-pending-chip nav-pending-chip--collapsed"
+              :aria-label="`${supervisorLeavePendingTotal} pending leave request(s)`"
+            >{{ supervisorLeavePendingChipText }}</span>
           </router-link>
         </template>
 
@@ -150,8 +167,16 @@ const user = getUser();
 /** Team-wide pending attendance count (all LS under this supervisor); same /attendance/team source as Approval List. */
 const supervisorPendingTotal = ref(0);
 
+/** Pending cuti / izin / sakit for supervised LS; same /leaves/team + status=pending as Leave dashboard. */
+const supervisorLeavePendingTotal = ref(0);
+
 const supervisorPendingChipText = computed(() => {
   const n = supervisorPendingTotal.value;
+  return n > 99 ? '99+' : String(n);
+});
+
+const supervisorLeavePendingChipText = computed(() => {
+  const n = supervisorLeavePendingTotal.value;
   return n > 99 ? '99+' : String(n);
 });
 
@@ -168,13 +193,32 @@ const fetchSupervisorPendingTotal = async () => {
   }
 };
 
+const fetchSupervisorLeavePendingTotal = async () => {
+  if (user?.role !== 'ls_supervisor') return;
+  try {
+    const { data } = await api.get('/leaves/team', {
+      params: { status: 'pending', page: 1, limit: 1 },
+    });
+    const total = data?.pagination?.total;
+    supervisorLeavePendingTotal.value = Number.isFinite(Number(total)) ? Number(total) : 0;
+  } catch {
+    /* keep previous value */
+  }
+};
+
+const refreshSupervisorNavBadges = () => {
+  if (user?.role !== 'ls_supervisor') return;
+  void fetchSupervisorPendingTotal();
+  void fetchSupervisorLeavePendingTotal();
+};
+
 const onVisibilityChange = () => {
-  if (document.visibilityState === 'visible') fetchSupervisorPendingTotal();
+  if (document.visibilityState === 'visible') refreshSupervisorNavBadges();
 };
 
 onMounted(() => {
   if (user?.role === 'ls_supervisor') {
-    fetchSupervisorPendingTotal();
+    refreshSupervisorNavBadges();
     window.addEventListener('visibilitychange', onVisibilityChange);
   }
 });
@@ -186,7 +230,7 @@ onUnmounted(() => {
 watch(
   () => route.path,
   () => {
-    if (user?.role === 'ls_supervisor') fetchSupervisorPendingTotal();
+    refreshSupervisorNavBadges();
   }
 );
 
@@ -344,7 +388,8 @@ const handleLogout = () => {
 .nav-item--sub .nav-icon { width: 16px; height: 16px; opacity: .9; }
 .nav-icon { width: 18px; height: 18px; flex-shrink: 0; }
 
-.nav-item--supervisor-approvals {
+.nav-item--supervisor-approvals,
+.nav-item--supervisor-leave {
   position: relative;
 }
 
