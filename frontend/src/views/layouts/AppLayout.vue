@@ -46,15 +46,17 @@
         <template v-if="user?.role === 'ls_supervisor'">
           <router-link to="/supervisor/approvals" class="nav-item" active-class="active">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"/></svg>
-            <span v-if="!sidebarCollapsed">Approval List</span>
+            <span v-if="!sidebarCollapsed" class="nav-item__label">Approval List</span>
+            <span v-if="!sidebarCollapsed && supervisorPendingAttendance > 0" class="nav-badge">{{ supervisorPendingAttendance > 99 ? '99+' : supervisorPendingAttendance }}</span>
+          </router-link>
+          <router-link to="/supervisor/leave" class="nav-item" active-class="active" title="Leave approvals">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 7V3m8 4V3M5 11h14M5 21h14M5 11a2 2 0 012-2h10a2 2 0 012 2v10a2 2 0 01-2 2H7a2 2 0 01-2-2V11z"/></svg>
+            <span v-if="!sidebarCollapsed" class="nav-item__label">Leave</span>
+            <span v-if="!sidebarCollapsed && supervisorPendingLeave > 0" class="nav-badge">{{ supervisorPendingLeave > 99 ? '99+' : supervisorPendingLeave }}</span>
           </router-link>
           <router-link to="/supervisor/monthly-recap" class="nav-item" active-class="active">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4M16 2v4M3 10h18M5 6h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2z"/><path d="M8 14h3M8 18h8M15 14h1"/></svg>
             <span v-if="!sidebarCollapsed">Monthly Attendance Recap</span>
-          </router-link>
-          <router-link to="/supervisor/leave" class="nav-item" active-class="active" title="Leave approvals">
-            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 7V3m8 4V3M5 11h14M5 21h14M5 11a2 2 0 012-2h10a2 2 0 012 2v10a2 2 0 01-2 2H7a2 2 0 01-2-2V11z"/></svg>
-            <span v-if="!sidebarCollapsed">Leave</span>
           </router-link>
         </template>
 
@@ -69,6 +71,10 @@
           <router-link to="/ls-hr/approvals" class="nav-item" active-class="active">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4m5 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
             <span v-if="!sidebarCollapsed">Approval List</span>
+          </router-link>
+          <router-link to="/ls-hr/glog-upload" class="nav-item" active-class="active" title="Upload log mesin (.csv / .txt)">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M8 8l4-4 4 4M4 20h16"/></svg>
+            <span v-if="!sidebarCollapsed">Upload Attendance Log</span>
           </router-link>
         </template>
 
@@ -120,14 +126,43 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted, watch, provide } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getUser, clearAuth } from '../../utils/auth';
+import api from '../../utils/api';
 
 const router = useRouter();
 const route  = useRoute();
 const sidebarCollapsed = ref(false);
 const user = getUser();
+
+const supervisorPendingAttendance = ref(0);
+const supervisorPendingLeave = ref(0);
+
+const loadSupervisorBadgeCounts = async () => {
+  if (user?.role !== 'ls_supervisor') return;
+  try {
+    const [attRes, leaveRes] = await Promise.all([
+      api.get('/attendance/team/month-stats'),
+      api.get('/leaves/team/month-stats'),
+    ]);
+    supervisorPendingAttendance.value = Number(attRes.data?.data?.pending) || 0;
+    supervisorPendingLeave.value = Number(leaveRes.data?.data?.pending) || 0;
+  } catch {
+    supervisorPendingAttendance.value = 0;
+    supervisorPendingLeave.value = 0;
+  }
+};
+
+onMounted(loadSupervisorBadgeCounts);
+watch(
+  () => route.path,
+  (p) => {
+    if (p.startsWith('/supervisor')) loadSupervisorBadgeCounts();
+  }
+);
+
+provide('refreshSupervisorBadges', loadSupervisorBadgeCounts);
 
 const userInitials = computed(() => {
   if (!user?.name) return 'U';
@@ -152,6 +187,7 @@ const pageTitle = computed(() => {
   if (path.match(/\/ls\/attendance\/\d+$/)) return 'Attendance Detail';
   if (path.includes('approvals'))         return 'Approval List';
   if (path.includes('/supervisor/monthly-recap')) return 'Monthly Attendance Recap';
+  if (path.includes('/glog-upload')) return 'Upload Glog';
   if (path.includes('/vendor/reports') && path.includes('detail')) return 'Report Detail';
   if (path.includes('/vendor/reports')) return 'Report List';
   if (path.includes('/ls-hr/approvals')) return 'LS HR Approvals';
@@ -279,6 +315,25 @@ const handleLogout = () => {
 }
 .nav-item:hover { background: rgba(255,255,255,.08); color: white; }
 .nav-item.active { background: var(--bc-green-600); color: white; font-weight: 700; box-shadow: 0 2px 8px rgba(34,153,74,.35); }
+.nav-item__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.nav-badge {
+  flex-shrink: 0;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #fbbf24;
+  color: #78350f;
+  font-size: 11px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.nav-item.active .nav-badge {
+  background: rgba(255,255,255,.25);
+  color: white;
+}
 .nav-item--sub { padding-left: 14px; font-size: 13px; }
 .nav-item--sub .nav-icon { width: 16px; height: 16px; opacity: .9; }
 .nav-icon { width: 18px; height: 18px; flex-shrink: 0; }

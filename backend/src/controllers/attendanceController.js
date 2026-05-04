@@ -258,14 +258,128 @@ const getMyAttendance = async (req, res) => {
   }
 };
 
+/** Resolve calendar month bounds (local server date if year/month omitted). */
+const resolveCalendarMonth = (req) => {
+  const now = new Date();
+  const qYear = parseInt(req.query.year, 10);
+  const qMonth = parseInt(req.query.month, 10);
+  const year = Number.isInteger(qYear) && qYear >= 2000 && qYear <= 2100 ? qYear : now.getFullYear();
+  const month = Number.isInteger(qMonth) && qMonth >= 1 && qMonth <= 12 ? qMonth : now.getMonth() + 1;
+  const startStr = `${year}-${String(month).padStart(2, '0')}-01`;
+  const lastD = new Date(year, month, 0).getDate();
+  const endStr = `${year}-${String(month).padStart(2, '0')}-${String(lastD).padStart(2, '0')}`;
+  return { year, month, startStr, endStr };
+};
+
+// LS Supervisor: counts for team attendance in a calendar month (default: current month)
+const getTeamAttendanceMonthStats = async (req, res) => {
+  try {
+    const supervisorId = req.user.id;
+    const { year, month } = resolveCalendarMonth(req);
+
+    const [[row]] = await db.query(
+      `SELECT
+         COUNT(*) AS total,
+         SUM(CASE WHEN a.status = 'pending' THEN 1 ELSE 0 END) AS pending,
+         SUM(CASE WHEN a.status = 'approved' THEN 1 ELSE 0 END) AS approved,
+         SUM(CASE WHEN a.status = 'rejected' THEN 1 ELSE 0 END) AS rejected
+       FROM attendance a
+       JOIN users u ON a.user_id = u.id
+       WHERE u.supervisor_id = ?
+         AND YEAR(a.attendance_date) = ?
+         AND MONTH(a.attendance_date) = ?`,
+      [supervisorId, year, month]
+    );
+
+    res.json({
+      success: true,
+      data: {
+        year,
+        month,
+        total: Number(row.total) || 0,
+        pending: Number(row.pending) || 0,
+        approved: Number(row.approved) || 0,
+        rejected: Number(row.rejected) || 0,
+      },
+    });
+  } catch (err) {
+    console.error('Team attendance month stats error:', err);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
+// LS Supervisor: per-LS counts for attendance in a calendar month (all supervised LS, including zero rows)
+const getTeamAttendanceEmployeesOverview = async (req, res) => {
+  try {
+    const supervisorId = req.user.id;
+    const { year, month } = resolveCalendarMonth(req);
+    const searchRaw = req.query.search;
+    const search = searchRaw && String(searchRaw).trim() ? String(searchRaw).trim() : '';
+
+    let userWhere = 'WHERE u.supervisor_id = ? AND u.role = ?';
+    const userParams = [supervisorId, 'ls'];
+    if (search) {
+      const t = `%${search}%`;
+      userWhere += ' AND (u.name LIKE ? OR u.employee_id LIKE ? OR e.nik LIKE ?)';
+      userParams.push(t, t, t);
+    }
+
+    const [rows] = await db.query(
+      `SELECT
+         u.id AS user_id,
+         u.name AS employee_name,
+         u.employee_id,
+         MAX(COALESCE(e.nik, a.nik)) AS nik,
+         COUNT(a.id) AS total,
+         SUM(CASE WHEN a.status = 'pending' THEN 1 ELSE 0 END) AS pending,
+         SUM(CASE WHEN a.status = 'approved' THEN 1 ELSE 0 END) AS approved,
+         SUM(CASE WHEN a.status = 'rejected' THEN 1 ELSE 0 END) AS rejected
+       FROM users u
+       LEFT JOIN employees e ON e.user_id = u.id
+       LEFT JOIN attendance a
+         ON a.user_id = u.id
+        AND YEAR(a.attendance_date) = ?
+        AND MONTH(a.attendance_date) = ?
+       ${userWhere}
+       GROUP BY u.id, u.name, u.employee_id
+       ORDER BY u.name ASC`,
+      [year, month, ...userParams]
+    );
+
+    res.json({
+      success: true,
+      data: rows.map((r) => ({
+        user_id: r.user_id,
+        employee_name: r.employee_name,
+        employee_id: r.employee_id,
+        nik: r.nik || null,
+        total: Number(r.total) || 0,
+        pending: Number(r.pending) || 0,
+        approved: Number(r.approved) || 0,
+        rejected: Number(r.rejected) || 0,
+      })),
+      meta: { year, month },
+    });
+  } catch (err) {
+    console.error('Team attendance employees overview error:', err);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
 // LS Supervisor: list attendance of assigned LS employees
 const getTeamAttendance = async (req, res) => {
   try {
     const supervisorId = req.user.id;
-    const { search, status, start_date, end_date, page = 1, limit = 20 } = req.query;
+    const { search, status, start_date, end_date, user_id, page = 1, limit = 20 } = req.query;
 
     let where = 'WHERE u.supervisor_id = ?';
     const params = [supervisorId];
+
+    const uid = parseInt(user_id, 10);
+    if (Number.isInteger(uid) && uid > 0) {
+      where += ' AND a.user_id = ?';
+      params.push(uid);
+    }
 
     if (search) {
       where += ' AND (u.name LIKE ? OR u.employee_id LIKE ? OR COALESCE(e.nik, a.nik) LIKE ?)';
@@ -476,11 +590,54 @@ const getMonthlyAttendanceRecap = async (req, res) => {
       [year, month, year, month, year, month, supervisorId]
     );
 
+    const firstDay = `${year}-${String(month).padStart(2, '0')}-01`;
+    const lastDayNum = new Date(year, month, 0).getDate();
+    const lastDay = `${year}-${String(month).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
+
+    const [leaveDetailRows] = await db.query(
+      `SELECT
+         lr.id,
+         lr.user_id,
+         lr.request_type,
+         lr.start_date,
+         lr.end_date,
+         lr.reason,
+         lr.status,
+         lr.rejection_note,
+         lr.approved_at,
+         lr.created_at
+       FROM leave_requests lr
+       JOIN users u ON lr.user_id = u.id
+       WHERE u.supervisor_id = ? AND u.role = 'ls'
+         AND lr.start_date <= ?
+         AND lr.end_date >= ?
+       ORDER BY lr.user_id ASC, lr.start_date ASC, lr.id ASC`,
+      [supervisorId, lastDay, firstDay]
+    );
+
+    const leavesByUserId = {};
+    for (const lr of leaveDetailRows) {
+      const uid = lr.user_id;
+      if (!leavesByUserId[uid]) leavesByUserId[uid] = [];
+      leavesByUserId[uid].push({
+        id: lr.id,
+        request_type: lr.request_type,
+        start_date: lr.start_date,
+        end_date: lr.end_date,
+        reason: lr.reason,
+        status: lr.status,
+        rejection_note: lr.rejection_note,
+        approved_at: lr.approved_at,
+        created_at: lr.created_at,
+      });
+    }
+
     res.json({
       success: true,
       data: rows.map((r) => ({
         ...r,
         nik: r.nik || null,
+        leave_requests: leavesByUserId[r.user_id] || [],
       })),
       meta: { month, year },
     });
@@ -554,6 +711,8 @@ module.exports = {
   saveMyOvertime,
   getMyAttendance,
   getTeamAttendance,
+  getTeamAttendanceMonthStats,
+  getTeamAttendanceEmployeesOverview,
   updateApproval,
   updateApprovalBulk,
   getMonthlyAttendanceRecap,

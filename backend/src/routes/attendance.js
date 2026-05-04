@@ -17,9 +17,9 @@ router.post('/overtime', authenticate, authorize('ls'), saveMyOvertime);
 router.post('/', authenticate, authorize('ls'), createAttendance);
 router.get('/my', authenticate, authorize('ls'), getMyAttendance);
 
-// Supervisor routes
-router.get('/team', authenticate, authorize('ls_supervisor'), getTeamAttendance);
+// Supervisor routes (month-stats & employees-overview are registered in index.js)
 router.get('/team/monthly-recap', authenticate, authorize('ls_supervisor'), getMonthlyAttendanceRecap);
+router.get('/team', authenticate, authorize('ls_supervisor'), getTeamAttendance);
 router.put('/:id/approval', authenticate, authorize('ls_supervisor'), updateApproval);
 router.put('/approval/bulk', authenticate, authorize('ls_supervisor'), updateApprovalBulk);
 
