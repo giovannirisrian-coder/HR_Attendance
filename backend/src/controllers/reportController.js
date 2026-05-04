@@ -1,36 +1,12 @@
 const db = require('../config/database');
 const { buildVendorMonthlyTimesheetPdf } = require('../services/pdfService');
+const {
+  fetchVendorMonthlyPdfData,
+  fetchVendorAttendanceRowsForMonthlyPdf,
+} = require('../services/vendorMonthlyPdfData');
 
 async function fetchVendorAttendanceRows(vendorId, month, year) {
-  const [rows] = await db.query(
-    `SELECT a.attendance_date, a.clock_in_time, a.clock_out_time, a.status,
-            u.name AS employee_name, u.employee_id,
-            COALESCE(lr.leave_cuti, 0) AS leave_cuti,
-            COALESCE(lr.leave_sakit, 0) AS leave_sakit,
-            COALESCE(lr.leave_izin, 0) AS leave_izin
-     FROM attendance a
-     JOIN users u ON a.user_id = u.id
-     LEFT JOIN (
-       SELECT
-         user_id,
-         SUM(CASE WHEN request_type = 'cuti' THEN 1 ELSE 0 END) AS leave_cuti,
-         SUM(CASE WHEN request_type = 'sakit' THEN 1 ELSE 0 END) AS leave_sakit,
-         SUM(CASE WHEN request_type = 'izin' THEN 1 ELSE 0 END) AS leave_izin
-       FROM leave_requests
-       WHERE status = 'approved'
-         AND (
-           (YEAR(start_date) = ? AND MONTH(start_date) = ?)
-           OR
-           (YEAR(end_date) = ? AND MONTH(end_date) = ?)
-         )
-       GROUP BY user_id
-     ) lr ON lr.user_id = u.id
-     WHERE u.vendor_id = ? AND u.role = 'ls'
-       AND MONTH(a.attendance_date) = ? AND YEAR(a.attendance_date) = ?
-     ORDER BY u.name, a.attendance_date`,
-    [year, month, year, month, vendorId, month, year]
-  );
-  return rows;
+  return fetchVendorAttendanceRowsForMonthlyPdf(vendorId, month, year);
 }
 
 /** Vendor: one row per month – aggregated LS attendance + submission workflow */
@@ -226,12 +202,13 @@ const downloadVendorMonthlyPdf = async (req, res) => {
     const year = parseInt(req.params.year, 10);
     const [[v]] = await db.query('SELECT name, code FROM vendors WHERE id = ?', [vendorId]);
     if (!v) return res.status(404).json({ success: false, message: 'Vendor not found.' });
-    const rows = await fetchVendorAttendanceRows(vendorId, month, year);
+    const { rows, leaveRows } = await fetchVendorMonthlyPdfData(vendorId, month, year);
     const doc = buildVendorMonthlyTimesheetPdf({
       vendor: { name: v.name, code: v.code },
       month,
       year,
       rows,
+      leaveRows,
     });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(

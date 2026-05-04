@@ -73,9 +73,51 @@ function formatDayShort(raw) {
   return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dt.getDay()];
 }
 
+function mergeLeaveOnlyGroups(groups, leaveRows) {
+  const keys = new Set(groups.map((g) => `${g.employee_id}|${g.employee_name}`));
+  for (const lr of leaveRows || []) {
+    const key = `${lr.employee_id}|${lr.employee_name}`;
+    if (!keys.has(key)) {
+      keys.add(key);
+      groups.push({
+        employee_id: lr.employee_id,
+        employee_name: lr.employee_name,
+        rows: [],
+        approved: 0,
+        pending: 0,
+        rejected: 0,
+        totalMins: 0,
+        total_present_days: 0,
+        leave_cuti: 0,
+        leave_izin: 0,
+        leave_sakit: 0,
+      });
+    }
+  }
+  groups.sort((a, b) => String(a.employee_name || '').localeCompare(String(b.employee_name || '')));
+}
+
+function applyMonthlyLeaveCountsFromRequests(groups, leaveRows) {
+  const approved = (leaveRows || []).filter((lr) => String(lr.status || '').toLowerCase() === 'approved');
+  for (const g of groups) {
+    const mine = approved.filter(
+      (lr) => lr.employee_id === g.employee_id && lr.employee_name === g.employee_name
+    );
+    g.leave_cuti = mine.filter((x) => x.request_type === 'cuti').length;
+    g.leave_izin = mine.filter((x) => x.request_type === 'izin').length;
+    g.leave_sakit = mine.filter((x) => x.request_type === 'sakit').length;
+  }
+}
+
+function leavesForEmployee(leaveRows, g) {
+  return (leaveRows || []).filter(
+    (lr) => lr.employee_id === g.employee_id && lr.employee_name === g.employee_name
+  );
+}
+
 function aggregateByEmployee(rows) {
   const map = new Map();
-  for (const r of rows) {
+  for (const r of rows || []) {
     const key = `${r.employee_id}|${r.employee_name}`;
     if (!map.has(key)) {
       map.set(key, {
@@ -307,7 +349,127 @@ function ensureSpace(doc, needed) {
 }
 
 function tableTotalWidth(colW) {
-  return colW.date + colW.day + colW.in + colW.out + colW.hours + colW.status;
+  return colW.date + colW.day + colW.in + colW.out + colW.hours + colW.overtime + colW.status;
+}
+
+/** Approved attendance only: show overtime duration from OT range. */
+function formatOvertimeCell(r) {
+  const st = String(r.status || '').toLowerCase();
+  if (st !== 'approved') return '—';
+  const mins = rowWorkingMins(r.ot_start_time, r.ot_end_time);
+  if (mins == null || mins <= 0) return '—';
+  return formatDurationMins(mins);
+}
+
+function absenceTypeLabel(type) {
+  const t = String(type || '').toLowerCase();
+  if (t === 'cuti') return 'Cuti';
+  if (t === 'izin') return 'Izin';
+  if (t === 'sakit') return 'Sakit';
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : '—';
+}
+
+function formatLeaveDateRange(start, end) {
+  const a = ymdFromRaw(start);
+  const b = ymdFromRaw(end);
+  if (!a || !b) return '—';
+  if (a === b) return a;
+  return `${a} – ${b}`;
+}
+
+/** @returns {number} next Y below absence block */
+function drawAbsenceSection(doc, x0, yStart, tw, leaveItems, groupLabel) {
+  const maxY = PAGE.h - PAGE.bottomReserve;
+  const rowH = 17;
+  /** Space between attendance table and absence section title */
+  const titleTopPadding = 12;
+  const colAbs = {
+    date: 132,
+    type: 76,
+    status: Math.max(70, tw - 132 - 76 - 12),
+  };
+
+  const drawAbsHeader = (hy) => {
+    doc.save();
+    doc.rect(x0, hy, tw, rowH).fill(C.headerBg);
+    doc.restore();
+    doc.rect(x0, hy, tw, rowH).strokeColor(C.border).lineWidth(0.55).stroke();
+    let x = x0 + 6;
+    const ty = hy + 5;
+    doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.brandMid);
+    doc.text('Date', x, ty, { width: colAbs.date - 4 });
+    x += colAbs.date;
+    doc.text('Type', x, ty, { width: colAbs.type - 4 });
+    x += colAbs.type;
+    doc.text('Status', x, ty, { width: colAbs.status - 6 });
+    return rowH;
+  };
+
+  const drawOneRow = (hy, lr, alt) => {
+    if (alt) {
+      doc.save();
+      doc.rect(x0, hy, tw, rowH).fill(C.rowAlt);
+      doc.restore();
+    }
+    doc.rect(x0, hy, tw, rowH).strokeColor(C.border).lineWidth(0.35).stroke();
+    let x = x0 + 6;
+    const ty = hy + 4;
+    doc.font('Helvetica').fontSize(8).fillColor(C.ink);
+    doc.text(formatLeaveDateRange(lr.start_date, lr.end_date), x, ty, { width: colAbs.date - 4 });
+    x += colAbs.date;
+    doc.text(absenceTypeLabel(lr.request_type), x, ty, { width: colAbs.type - 4 });
+    x += colAbs.type;
+    const st = String(lr.status || '');
+    const stLower = st.toLowerCase();
+    doc.font('Helvetica-Bold').fontSize(7.5);
+    if (stLower === 'approved') doc.fillColor(C.accent);
+    else if (stLower === 'pending') doc.fillColor('#b45309');
+    else if (stLower === 'rejected') doc.fillColor('#b91c1c');
+    else doc.fillColor(C.muted);
+    doc.text(st ? st.toUpperCase() : '—', x, ty, { width: colAbs.status - 6 });
+    return rowH;
+  };
+
+  let y = yStart + titleTopPadding;
+  if (y + 28 > maxY) {
+    doc.addPage();
+    doc.x = PAGE.margin;
+    doc.y = PAGE.margin;
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(C.brandMid);
+    doc.text(`${groupLabel} — absences (continued)`, PAGE.margin, PAGE.margin);
+    doc.y += 18;
+    y = doc.y + titleTopPadding;
+  }
+
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink);
+  doc.text('Absences — Cuti, Izin, Sakit', x0, y);
+  y += 14;
+
+  y += drawAbsHeader(y);
+
+  if (!leaveItems.length) {
+    doc.font('Helvetica').fontSize(8).fillColor(C.muted);
+    doc.text('No Cuti, Izin, or Sakit records overlap this reporting month.', x0 + 6, y + 4, {
+      width: tw - 12,
+    });
+    return y + rowH + 6;
+  }
+
+  leaveItems.forEach((lr, idx) => {
+    if (y + rowH > maxY) {
+      doc.addPage();
+      doc.x = PAGE.margin;
+      doc.y = PAGE.margin;
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.brandMid);
+      doc.text(`${groupLabel} — absences (continued)`, PAGE.margin, PAGE.margin);
+      doc.y += 18;
+      y = doc.y;
+      y += drawAbsHeader(y);
+    }
+    y += drawOneRow(y, lr, idx % 2 === 1);
+  });
+
+  return y + 8;
 }
 
 function drawTableHeader(doc, x0, y, colW) {
@@ -331,6 +493,8 @@ function drawTableHeader(doc, x0, y, colW) {
   x += colW.out;
   doc.text('Duration', x, ty, { width: colW.hours - 4 });
   x += colW.hours;
+  doc.text('Overtime', x, ty, { width: colW.overtime - 4 });
+  x += colW.overtime;
   doc.text('Status', x, ty, { width: colW.status - 8 });
   return h;
 }
@@ -367,6 +531,9 @@ function drawDataRow(doc, x0, y, colW, r, alt) {
   doc.font('Helvetica-Bold').fontSize(8).fillColor(C.muted);
   doc.text(dur, x, ty, { width: colW.hours - 4 });
   x += colW.hours;
+  doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.ink);
+  doc.text(formatOvertimeCell(r), x, ty, { width: colW.overtime - 4 });
+  x += colW.overtime;
   doc.font('Helvetica-Bold').fontSize(7);
   if (stLower === 'approved') doc.fillColor(C.accent);
   else if (stLower === 'pending') doc.fillColor('#b45309');
@@ -407,7 +574,7 @@ function finishPdf(doc) {
  * Build a consolidated monthly timesheet PDF for all LS under a vendor.
  */
 function buildVendorMonthlyTimesheetPdf(opts) {
-  const { vendor, month, year, rows } = opts;
+  const { vendor, month, year, rows, leaveRows } = opts;
   const m = Math.min(12, Math.max(1, parseInt(month, 10) || 1));
   const reportYear = parseInt(year, 10) || new Date().getFullYear();
 
@@ -422,22 +589,25 @@ function buildVendorMonthlyTimesheetPdf(opts) {
     },
   });
 
+  const uw = usableW();
   const colW = {
-    date: 78,
-    day: 36,
-    in: 68,
-    out: 68,
-    hours: 54,
-    status: Math.max(72, usableW() - 78 - 36 - 68 - 68 - 54),
+    date: 70,
+    day: 30,
+    in: 56,
+    out: 56,
+    hours: 44,
+    overtime: 48,
+    status: Math.max(56, uw - 70 - 30 - 56 - 56 - 44 - 48),
   };
 
   const headerBottom = drawBrandHeader(doc, vendor, m, reportYear);
   doc.x = PAGE.margin;
   doc.y = headerBottom;
 
-  if (!rows || rows.length === 0) {
+  const lr = leaveRows || [];
+  if ((!rows || rows.length === 0) && lr.length === 0) {
     doc.font('Helvetica').fontSize(10).fillColor(C.light);
-    doc.text('No attendance records for this vendor and period.', PAGE.margin, doc.y, {
+    doc.text('No attendance or leave records for this vendor and period.', PAGE.margin, doc.y, {
       width: usableW(),
       align: 'center',
     });
@@ -445,8 +615,10 @@ function buildVendorMonthlyTimesheetPdf(opts) {
     return doc;
   }
 
-  const groups = aggregateByEmployee(rows);
-  doc.y = drawSummaryPanel(doc, doc.y, groups, rows);
+  let groups = aggregateByEmployee(rows || []);
+  mergeLeaveOnlyGroups(groups, lr);
+  applyMonthlyLeaveCountsFromRequests(groups, lr);
+  doc.y = drawSummaryPanel(doc, doc.y, groups, rows || []);
   doc.y = drawAttendanceSummaryTable(doc, doc.y, groups);
   doc.moveDown(0.25);
 
@@ -454,7 +626,15 @@ function buildVendorMonthlyTimesheetPdf(opts) {
   const tw = usableW();
 
   for (const g of groups) {
-    const est = 30 + 20 + g.rows.length * 20 + 30;
+    const abs = leavesForEmployee(lr, g);
+    const est =
+      30 +
+      20 +
+      g.rows.length * 20 +
+      36 +
+      12 +
+      (abs.length ? abs.length * 18 : 22) +
+      30;
     ensureSpace(doc, est);
 
     const bandY = doc.y;
@@ -483,6 +663,9 @@ function buildVendorMonthlyTimesheetPdf(opts) {
       }
       ry += drawDataRow(doc, x0, ry, colW, r, idx % 2 === 1);
     });
+
+    const groupLabel = `${g.employee_name} (${g.employee_id})`;
+    ry = drawAbsenceSection(doc, x0, ry, tw, abs, groupLabel);
 
     ry += drawEmployeeFooter(doc, x0, ry, tw, g);
     doc.y = ry + 14;
