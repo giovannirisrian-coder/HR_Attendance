@@ -331,14 +331,41 @@ const getMyAttendance = async (req, res) => {
   }
 };
 
+// LS Supervisor: LS users under this supervisor (master list for approvals UI)
+const getTeamLsMembers = async (req, res) => {
+  try {
+    const supervisorId = req.user.id;
+    const [rows] = await db.query(
+      `SELECT u.id, u.name, u.employee_id, e.nik AS nik
+       FROM users u
+       LEFT JOIN employees e ON e.user_id = u.id
+       WHERE u.supervisor_id = ? AND u.role = 'ls'
+       ORDER BY u.name ASC`,
+      [supervisorId]
+    );
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    console.error('Get team LS members error:', err);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
 // LS Supervisor: list attendance of assigned LS employees
 const getTeamAttendance = async (req, res) => {
   try {
     const supervisorId = req.user.id;
-    const { search, status, start_date, end_date, page = 1, limit = 20 } = req.query;
+    const { search, status, start_date, end_date, page = 1, limit = 20, user_id } = req.query;
 
     let where = 'WHERE u.supervisor_id = ?';
     const params = [supervisorId];
+
+    if (user_id !== undefined && user_id !== null && user_id !== '') {
+      const uid = parseInt(user_id, 10);
+      if (!Number.isNaN(uid)) {
+        where += ' AND a.user_id = ?';
+        params.push(uid);
+      }
+    }
 
     if (search) {
       where += ' AND (u.name LIKE ? OR u.employee_id LIKE ? OR COALESCE(e.nik, a.nik) LIKE ?)';
@@ -626,6 +653,7 @@ module.exports = {
   createAttendance,
   saveMyOvertime,
   getMyAttendance,
+  getTeamLsMembers,
   getTeamAttendance,
   updateApproval,
   updateApprovalBulk,

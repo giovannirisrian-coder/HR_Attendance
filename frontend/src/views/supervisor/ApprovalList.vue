@@ -31,121 +31,142 @@
       </div>
     </div>
 
-    <div class="card">
-      <div class="card-header">
-        <span class="card-title">Pending Reviews</span>
-        <div class="bulk-toolbar">
-          <span class="selected-info">{{ selectedIds.size }} selected</span>
-          <button class="btn btn-primary btn-sm" :disabled="selectedIds.size === 0 || bulkProcessing" @click="openBulkModal">
-            Approval
-          </button>
-        </div>
-      </div>
-      <div class="card-body" style="padding-bottom:0;">
-        <!-- Filters -->
-        <div class="filter-bar">
-          <div class="search-wrap">
-            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-            <input v-model="filters.search" @input="debouncedFetch" class="form-control" placeholder="Search employee…" style="max-width:220px;" />
+    <div class="card approval-master-detail-card">
+      <div class="approval-split">
+        <SupervisorApprovalLsSidebar
+          class="approval-split-master"
+          :members="filteredLsMembers"
+          :has-roster="lsMembers.length > 0"
+          :selected-id="selectedUserId"
+          :search="sidebarSearch"
+          @update:search="sidebarSearch = $event"
+          @update:selected-id="onSelectUser"
+        />
+
+        <div class="approval-split-detail">
+          <div class="detail-panel-header">
+            <div class="detail-panel-title-wrap">
+              <h2 class="detail-panel-title">Daily attendance</h2>
+              <p v-if="selectedLsLabel" class="detail-panel-sub">{{ selectedLsLabel }}</p>
+              <p v-else class="detail-panel-sub text-muted">Select an LS employee to load records.</p>
+            </div>
+            <div class="bulk-toolbar">
+              <span class="selected-info">{{ selectedIds.size }} selected</span>
+              <button class="btn btn-primary btn-sm" :disabled="selectedIds.size === 0 || bulkProcessing" @click="openBulkModal">
+                Approval
+              </button>
+            </div>
           </div>
-          <select v-model="filters.status" @change="fetchData" class="form-control" style="max-width:160px;">
-            <option value="">All Status</option>
-            <option value="pending">Pending</option>
-            <option value="approved">Approved</option>
-            <option value="rejected">Rejected</option>
-          </select>
-          <input v-model="filters.start_date" @change="fetchData" type="date" class="form-control" style="max-width:150px;" />
-          <input v-model="filters.end_date"   @change="fetchData" type="date" class="form-control" style="max-width:150px;" />
-          <button class="btn btn-outline btn-sm" @click="clearFilters">Reset</button>
-        </div>
-      </div>
 
-      <div class="table-wrapper" style="border:none;border-radius:0;border-top:1px solid var(--bc-gray-200);">
-        <div v-if="loading" class="loading-overlay"><span class="spinner"></span> Loading…</div>
-        <table v-else>
-          <thead>
-            <tr>
-              <th style="width:42px;">
-                <input type="checkbox" :checked="allSelectableChecked" :indeterminate.prop="isPartiallyChecked" @change="toggleSelectAll" />
-              </th>
-              <th>Employee</th>
-              <th>NIK</th>
-              <th>Date</th>
-              <th>Clock In</th>
-              <th>Clock Out</th>
-              <th>Duration</th>
-              <th>OT range</th>
-              <th>Location</th>
-              <th>Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-if="records.length === 0">
-              <td colspan="11">
-                <div class="empty-state">
-                  <div class="empty-state-icon">✅</div>
-                  <h3>No records found</h3>
-                  <p>All attendance records have been reviewed or no records match the filters.</p>
-                </div>
-              </td>
-            </tr>
-            <tr v-for="r in records" :key="r.id">
-              <td>
-                <input
-                  type="checkbox"
-                  :disabled="r.status !== 'pending'"
-                  :checked="selectedIds.has(r.id)"
-                  @change="toggleRow(r.id, $event.target.checked)"
-                />
-              </td>
-              <td>
-                <div class="font-bold">{{ r.employee_name }}</div>
-                <div class="text-sm text-muted">{{ r.employee_id }}</div>
-              </td>
-              <td><span class="text-sm font-mono">{{ r.nik || '—' }}</span></td>
-              <td>
-                <div class="font-bold">{{ formatDate(r.attendance_date) }}</div>
-                <div class="text-sm text-muted">{{ getDayName(r.attendance_date) }}</div>
-              </td>
-              <td><span class="time-cell clock-in">{{ r.clock_in_time || '—' }}</span></td>
-              <td><span class="time-cell clock-out">{{ r.clock_out_time || '—' }}</span></td>
-              <td>
-                <span v-if="r.clock_in_time && r.clock_out_time" class="font-bold">
-                  {{ calcDuration(r.clock_in_time, r.clock_out_time) }}
-                </span>
-                <span v-else class="text-muted">—</span>
-              </td>
-              <td>
-                <span v-if="r.ot_start_time && r.ot_end_time" class="text-sm font-bold" style="color:#b45309;">
-                  {{ fmtHm(r.ot_start_time) }}–{{ fmtHm(r.ot_end_time) }}
-                </span>
-                <span v-else class="text-muted">—</span>
-              </td>
-              <td>
-                <div v-if="r.clock_in_lat" class="location-cell">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
-                  {{ Number(r.clock_in_lat).toFixed(4) }}, {{ Number(r.clock_in_lng).toFixed(4) }}
-                </div>
-                <span v-else class="text-muted">—</span>
-              </td>
-              <td><span class="badge" :class="`badge-${r.status}`">{{ r.status }}</span></td>
-              <td>
-                <button class="btn btn-outline btn-sm" @click="openDetail(r)" title="View Detail">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                  Detail
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+          <div class="detail-panel-filters">
+            <select v-model="filters.status" @change="onFilterChange" class="form-control" style="max-width:160px;">
+              <option value="">All Status</option>
+              <option value="pending">Pending</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+            </select>
+            <input v-model="filters.start_date" @change="onFilterChange" type="date" class="form-control" style="max-width:150px;" />
+            <input v-model="filters.end_date" @change="onFilterChange" type="date" class="form-control" style="max-width:150px;" />
+            <button class="btn btn-outline btn-sm" @click="clearFilters">Reset</button>
+          </div>
 
-      <div v-if="pagination.total > 0" class="card-body" style="padding-top:12px;border-top:1px solid var(--bc-gray-100);">
-        <div class="pagination">
-          <span class="pagination-info">{{ ((pagination.page-1)*pagination.limit)+1 }}–{{ Math.min(pagination.page*pagination.limit, pagination.total) }} of {{ pagination.total }}</span>
-          <button class="btn btn-ghost btn-sm" :disabled="pagination.page<=1" @click="changePage(pagination.page-1)">‹ Prev</button>
-          <button class="btn btn-ghost btn-sm" :disabled="pagination.page*pagination.limit>=pagination.total" @click="changePage(pagination.page+1)">Next ›</button>
+          <div class="table-wrapper detail-table-wrap">
+            <div v-if="loading" class="loading-overlay"><span class="spinner"></span> Loading…</div>
+            <table v-else>
+              <thead>
+                <tr>
+                  <th style="width:42px;">
+                    <input type="checkbox" :checked="allSelectableChecked" :indeterminate.prop="isPartiallyChecked" @change="toggleSelectAll" />
+                  </th>
+                  <th>Employee</th>
+                  <th>NIK</th>
+                  <th>Date</th>
+                  <th>Clock In</th>
+                  <th>Clock Out</th>
+                  <th>Duration</th>
+                  <th>OT range</th>
+                  <th>Location</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-if="!selectedUserId">
+                  <td colspan="11">
+                    <div class="empty-state">
+                      <div class="empty-state-icon">👈</div>
+                      <h3>Select a team member</h3>
+                      <p>Choose an LS employee in the list on the left to review their attendance.</p>
+                    </div>
+                  </td>
+                </tr>
+                <tr v-else-if="records.length === 0">
+                  <td colspan="11">
+                    <div class="empty-state">
+                      <div class="empty-state-icon">✅</div>
+                      <h3>No records found</h3>
+                      <p>All attendance records have been reviewed or no records match the filters.</p>
+                    </div>
+                  </td>
+                </tr>
+                <tr v-for="r in records" :key="r.id">
+                  <td>
+                    <input
+                      type="checkbox"
+                      :disabled="r.status !== 'pending'"
+                      :checked="selectedIds.has(r.id)"
+                      @change="toggleRow(r.id, $event.target.checked)"
+                    />
+                  </td>
+                  <td>
+                    <div class="font-bold">{{ r.employee_name }}</div>
+                    <div class="text-sm text-muted">{{ r.employee_id }}</div>
+                  </td>
+                  <td><span class="text-sm font-mono">{{ r.nik || '—' }}</span></td>
+                  <td>
+                    <div class="font-bold">{{ formatDate(r.attendance_date) }}</div>
+                    <div class="text-sm text-muted">{{ getDayName(r.attendance_date) }}</div>
+                  </td>
+                  <td><span class="time-cell clock-in">{{ r.clock_in_time || '—' }}</span></td>
+                  <td><span class="time-cell clock-out">{{ r.clock_out_time || '—' }}</span></td>
+                  <td>
+                    <span v-if="r.clock_in_time && r.clock_out_time" class="font-bold">
+                      {{ calcDuration(r.clock_in_time, r.clock_out_time) }}
+                    </span>
+                    <span v-else class="text-muted">—</span>
+                  </td>
+                  <td>
+                    <span v-if="r.ot_start_time && r.ot_end_time" class="text-sm font-bold" style="color:#b45309;">
+                      {{ fmtHm(r.ot_start_time) }}–{{ fmtHm(r.ot_end_time) }}
+                    </span>
+                    <span v-else class="text-muted">—</span>
+                  </td>
+                  <td>
+                    <div v-if="r.clock_in_lat" class="location-cell">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                      {{ Number(r.clock_in_lat).toFixed(4) }}, {{ Number(r.clock_in_lng).toFixed(4) }}
+                    </div>
+                    <span v-else class="text-muted">—</span>
+                  </td>
+                  <td><span class="badge" :class="`badge-${r.status}`">{{ r.status }}</span></td>
+                  <td>
+                    <button class="btn btn-outline btn-sm" @click="openDetail(r)" title="View Detail">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      Detail
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div v-if="selectedUserId && pagination.total > 0" class="detail-pagination">
+            <div class="pagination">
+              <span class="pagination-info">{{ ((pagination.page-1)*pagination.limit)+1 }}–{{ Math.min(pagination.page*pagination.limit, pagination.total) }} of {{ pagination.total }}</span>
+              <button class="btn btn-ghost btn-sm" :disabled="pagination.page<=1" @click="changePage(pagination.page-1)">‹ Prev</button>
+              <button class="btn btn-ghost btn-sm" :disabled="pagination.page*pagination.limit>=pagination.total" @click="changePage(pagination.page+1)">Next ›</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -268,16 +289,48 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue';
 import api from '../../utils/api';
+import SupervisorApprovalLsSidebar from './SupervisorApprovalLsSidebar.vue';
 
 const loading = ref(false);
 const bulkProcessing = ref(false);
 const records = ref([]);
 const pagination = reactive({ total: 0, page: 1, limit: 15 });
-const filters = reactive({ search: '', status: '', start_date: '', end_date: '' });
+const filters = reactive({ status: '', start_date: '', end_date: '' });
+
+const lsMembers = ref([]);
+const sidebarSearch = ref('');
+const selectedUserId = ref(null);
 
 const detailModal = reactive({ show: false, record: null });
 const bulkModal = reactive({ show: false, action: 'approve', note: '' });
 const selectedIds = ref(new Set());
+
+const filteredLsMembers = computed(() => {
+  const q = sidebarSearch.value.trim().toLowerCase();
+  let list = lsMembers.value;
+  if (q) {
+    list = list.filter(
+      (m) =>
+        (m.name || '').toLowerCase().includes(q) ||
+        String(m.nik || '').toLowerCase().includes(q) ||
+        String(m.employee_id || '').toLowerCase().includes(q)
+    );
+  }
+  const sel = selectedUserId.value;
+  if (sel != null && !list.some((m) => m.id === sel)) {
+    const full = lsMembers.value.find((m) => m.id === sel);
+    if (full) list = [full, ...list];
+  }
+  return list;
+});
+
+const selectedLsLabel = computed(() => {
+  const id = selectedUserId.value;
+  if (id == null) return '';
+  const m = lsMembers.value.find((x) => x.id === id);
+  if (!m) return '';
+  return `${m.name} · ${m.nik || '—'}`;
+});
 
 const pendingIdsOnPage = computed(() => records.value.filter((r) => r.status === 'pending').map((r) => r.id));
 const allSelectableChecked = computed(() => pendingIdsOnPage.value.length > 0 && pendingIdsOnPage.value.every((id) => selectedIds.value.has(id)));
@@ -292,14 +345,38 @@ const statusCounts = computed(() => ({
   rejected: records.value.filter(r => r.status === 'rejected').length,
 }));
 
-let debounceTimer;
-const debouncedFetch = () => { clearTimeout(debounceTimer); debounceTimer = setTimeout(fetchData, 400); };
+const syncSelectionToMembers = () => {
+  const list = lsMembers.value;
+  if (!list.length) {
+    selectedUserId.value = null;
+    return;
+  }
+  if (selectedUserId.value == null || !list.some((m) => m.id === selectedUserId.value)) {
+    selectedUserId.value = list[0].id;
+  }
+};
+
+const fetchLsMembers = async () => {
+  try {
+    const { data } = await api.get('/attendance/team/members');
+    lsMembers.value = data.data || [];
+    syncSelectionToMembers();
+  } catch { /* silent */ }
+};
 
 const fetchData = async () => {
+  if (selectedUserId.value == null) {
+    records.value = [];
+    Object.assign(pagination, { total: 0, page: 1 });
+    return;
+  }
   loading.value = true;
   try {
-    const params = { page: pagination.page, limit: pagination.limit };
-    if (filters.search)     params.search     = filters.search;
+    const params = {
+      page: pagination.page,
+      limit: pagination.limit,
+      user_id: selectedUserId.value,
+    };
     if (filters.status)     params.status     = filters.status;
     if (filters.start_date) params.start_date = filters.start_date;
     if (filters.end_date)   params.end_date   = filters.end_date;
@@ -311,9 +388,21 @@ const fetchData = async () => {
   } catch { /* silent */ } finally { loading.value = false; }
 };
 
+const onSelectUser = (id) => {
+  if (selectedUserId.value === id) return;
+  selectedUserId.value = id;
+  pagination.page = 1;
+  fetchData();
+};
+
+const onFilterChange = () => {
+  pagination.page = 1;
+  fetchData();
+};
+
 const changePage = (p) => { pagination.page = p; fetchData(); };
 const clearFilters = () => {
-  Object.assign(filters, { search:'', status:'', start_date:'', end_date:'' });
+  Object.assign(filters, { status:'', start_date:'', end_date:'' });
   pagination.page = 1;
   selectedIds.value = new Set();
   fetchData();
@@ -389,11 +478,14 @@ const calcDuration = (inT, outT) => {
   return mins<0?'—':`${Math.floor(mins/60)}h ${mins%60}m`;
 };
 
-onMounted(fetchData);
+onMounted(async () => {
+  await fetchLsMembers();
+  await fetchData();
+});
 </script>
 
 <style scoped>
-.bulk-toolbar { display: flex; align-items: center; gap: 8px; }
+.bulk-toolbar { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .selected-info {
   font-size: 12px;
   font-weight: 600;
@@ -409,6 +501,89 @@ onMounted(fetchData);
 .text-red   { color: var(--bc-rejected); }
 .location-cell { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--bc-gray-500); }
 
+.approval-master-detail-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.approval-split {
+  display: flex;
+  align-items: stretch;
+  min-height: min(70vh, 640px);
+  max-height: min(78vh, 720px);
+}
+
+.approval-split-master {
+  flex: 3 1 0;
+  min-width: 200px;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.approval-split-detail {
+  flex: 7 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  min-height: 0;
+}
+
+.detail-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--bc-gray-100);
+}
+
+.detail-panel-title-wrap {
+  min-width: 0;
+}
+
+.detail-panel-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--bc-green-600);
+  letter-spacing: -0.02em;
+}
+
+.detail-panel-sub {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--bc-gray-600);
+}
+
+.detail-panel-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px 12px;
+  border-bottom: 1px solid var(--bc-gray-100);
+  background: #fafdfb;
+}
+
+.detail-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: none;
+  border-radius: 0;
+}
+
+.detail-pagination {
+  flex-shrink: 0;
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--bc-gray-100);
+  background: #fff;
+}
+
 .detail-grid { display: flex; flex-direction: column; gap: 20px; }
 .detail-section h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; color: var(--bc-green-600); margin-bottom: 10px; }
 .dl { display: flex; flex-direction: column; gap: 6px; }
@@ -418,4 +593,20 @@ onMounted(fetchData);
 .map-link a { color: var(--bc-green-600); font-weight: 600; }
 .rejection-note { font-size: 13.5px; color: var(--bc-gray-700); background: #fee2e2; padding: 12px; border-radius: var(--radius); }
 .ot-sum { margin: 0; font-size: 13px; white-space: pre-wrap; color: var(--bc-gray-700); }
+
+@media (max-width: 900px) {
+  .approval-split {
+    flex-direction: column;
+    max-height: none;
+  }
+  .approval-split-master {
+    max-width: none;
+    flex: 0 0 auto;
+    max-height: 240px;
+  }
+  .approval-split-detail {
+    flex: 1 1 auto;
+    min-height: 360px;
+  }
+}
 </style>
