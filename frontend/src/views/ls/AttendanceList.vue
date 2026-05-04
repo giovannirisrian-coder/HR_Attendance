@@ -133,6 +133,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue';
 import api from '../../utils/api';
+import { formatCalendarDateLocale } from '../../utils/calendarDate';
 
 const loading = ref(false);
 const records = ref([]);
@@ -170,8 +171,8 @@ const clearFilters = () => {
   pagination.page = 1; fetchData();
 };
 
-const formatDate = (d) => new Date(d).toLocaleDateString('en-ID', { day: '2-digit', month: 'short', year: 'numeric' });
-const getDayName = (d) => new Date(d).toLocaleDateString('en-ID', { weekday: 'long' });
+const formatDate = (d) => formatCalendarDateLocale(d, 'en-ID', { day: '2-digit', month: 'short', year: 'numeric' });
+const getDayName = (d) => formatCalendarDateLocale(d, 'en-ID', { weekday: 'long' });
 const fmtHm = (t) => (t ? String(t).slice(0, 5) : '');
 const calcDuration = (inT, outT) => {
   const [ih, im] = inT.split(':').map(Number);

@@ -237,6 +237,7 @@
 import { ref, reactive, computed, onMounted } from 'vue';
 import api from '../utils/api';
 import { getUser } from '../utils/auth';
+import { formatYmdLocal, formatCalendarDateLocale } from '../utils/calendarDate';
 
 const user = getUser();
 const isLs = computed(() => user?.role === 'ls');
@@ -274,24 +275,23 @@ const dayCount = computed(() => {
 });
 
 const countDays = (start, end) => {
-  const a = new Date(`${start}T12:00:00`).getTime();
-  const b = new Date(`${end}T12:00:00`).getTime();
+  const a = new Date(`${String(start).slice(0, 10)}T12:00:00`).getTime();
+  const b = new Date(`${String(end).slice(0, 10)}T12:00:00`).getTime();
   if (Number.isNaN(a) || Number.isNaN(b)) return '—';
   const d = Math.floor((b - a) / 86400000) + 1;
   return d < 1 ? '—' : d;
 };
 
-const fmtShort = (d) => new Date(d).toLocaleDateString('en-ID', { day: '2-digit', month: 'short', year: 'numeric' });
+const fmtShort = (d) => formatCalendarDateLocale(d, 'en-ID', { day: '2-digit', month: 'short', year: 'numeric' });
 const fmtRange = (s, e) => {
   if (s === e) return fmtShort(s);
   return `${fmtShort(s)} → ${fmtShort(e)}`;
 };
 
 const resetFormDates = () => {
-  const t = new Date();
-  const iso = t.toISOString().split('T')[0];
-  form.start_date = iso;
-  form.end_date = iso;
+  const ymd = formatYmdLocal();
+  form.start_date = ymd;
+  form.end_date = ymd;
   form.reason = '';
   form.request_type = 'cuti';
 };
@@ -344,10 +344,12 @@ const submitLeave = async () => {
   formError.value = '';
   submitting.value = true;
   try {
+    const startYmd = String(form.start_date || '').slice(0, 10);
+    const endYmd = String(form.end_date || '').slice(0, 10);
     const { data } = await api.post('/leaves', {
       request_type: form.request_type,
-      start_date: form.start_date,
-      end_date: form.end_date,
+      start_date: startYmd,
+      end_date: endYmd,
       reason: form.reason || null,
     });
     if (data.success) {

@@ -1,21 +1,18 @@
 const db = require('../config/database');
+const {
+  normalizeCalendarYmdFromBody,
+  getAttendanceYmdBounds,
+  assertYmdInInclusiveRange,
+} = require('../utils/calendarDate');
 
-/** YYYY-MM-DD in the server's local timezone (no UTC date drift for "today"). */
-const getServerLocalDateString = () => {
-  const n = new Date();
-  const y = n.getFullYear();
-  const m = String(n.getMonth() + 1).padStart(2, '0');
-  const d = String(n.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-};
-
-const assertAttendanceDateIsToday = (attendance_date) => {
-  const submitted = String(attendance_date || '').slice(0, 10);
-  const today = getServerLocalDateString();
-  if (submitted !== today) {
-    return 'Attendance can only be recorded for today. Past and future dates are not allowed.';
-  }
-  return null;
+const assertAttendanceDateInLsWindow = (ymd) => {
+  const { minYmd, maxYmd } = getAttendanceYmdBounds();
+  return assertYmdInInclusiveRange(
+    ymd,
+    minYmd,
+    maxYmd,
+    'Attendance date must be between 10 days ago and today (inclusive).'
+  );
 };
 
 const fetchEmployeeProfileForUser = async (userId) => {
@@ -66,7 +63,12 @@ const saveMyOvertime = async (req, res) => {
       });
     }
 
-    const dateErr = assertAttendanceDateIsToday(attendance_date);
+    const normDate = normalizeCalendarYmdFromBody(attendance_date);
+    if (!normDate.ok) {
+      return res.status(400).json({ success: false, message: normDate.error });
+    }
+    const attendanceYmd = normDate.ymd;
+    const dateErr = assertAttendanceDateInLsWindow(attendanceYmd);
     if (dateErr) {
       return res.status(400).json({ success: false, message: dateErr });
     }
@@ -84,7 +86,7 @@ const saveMyOvertime = async (req, res) => {
 
     const [existing] = await db.query(
       'SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?',
-      [userId, attendance_date]
+      [userId, attendanceYmd]
     );
 
     if (existing.length === 0 || !existing[0].clock_in_time) {
@@ -104,12 +106,12 @@ const saveMyOvertime = async (req, res) => {
       `UPDATE attendance
        SET ot_start_time = ?, ot_end_time = ?, ot_summary = ?
        WHERE user_id = ? AND attendance_date = ?`,
-      [ot_start_time, ot_end_time, summary, userId, attendance_date]
+      [ot_start_time, ot_end_time, summary, userId, attendanceYmd]
     );
 
     const [updated] = await db.query(
       'SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?',
-      [userId, attendance_date]
+      [userId, attendanceYmd]
     );
 
     res.json({ success: true, message: 'Overtime saved.', data: updated[0] });
@@ -136,7 +138,12 @@ const createAttendance = async (req, res) => {
       return res.status(400).json({ success: false, message: 'type, attendance_date and time are required.' });
     }
 
-    const dateErr = assertAttendanceDateIsToday(attendance_date);
+    const normDate = normalizeCalendarYmdFromBody(attendance_date);
+    if (!normDate.ok) {
+      return res.status(400).json({ success: false, message: normDate.error });
+    }
+    const attendanceYmd = normDate.ymd;
+    const dateErr = assertAttendanceDateInLsWindow(attendanceYmd);
     if (dateErr) {
       return res.status(400).json({ success: false, message: dateErr });
     }
@@ -161,7 +168,7 @@ const createAttendance = async (req, res) => {
 
     const [existing] = await db.query(
       'SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?',
-      [userId, attendance_date]
+      [userId, attendanceYmd]
     );
 
     if (type === 'clock_in') {
@@ -174,13 +181,13 @@ const createAttendance = async (req, res) => {
           `INSERT INTO attendance
             (user_id, employee_id, nik, attendance_date, clock_in_time, clock_in_lat, clock_in_lng, clock_in_address, status)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-          [userId, employeeId, nikNorm, attendance_date, time, latitude || null, longitude || null, address || null]
+          [userId, employeeId, nikNorm, attendanceYmd, time, latitude || null, longitude || null, address || null]
         );
       } else {
         await db.query(
           `UPDATE attendance SET employee_id=?, nik=?, clock_in_time=?, clock_in_lat=?, clock_in_lng=?, clock_in_address=?
            WHERE user_id=? AND attendance_date=?`,
-          [employeeId, nikNorm, time, latitude || null, longitude || null, address || null, userId, attendance_date]
+          [employeeId, nikNorm, time, latitude || null, longitude || null, address || null, userId, attendanceYmd]
         );
       }
     } else if (type === 'clock_out') {
@@ -194,7 +201,7 @@ const createAttendance = async (req, res) => {
       await db.query(
         `UPDATE attendance SET clock_out_time=?, clock_out_lat=?, clock_out_lng=?, clock_out_address=?, nik=?, employee_id=?
          WHERE user_id=? AND attendance_date=?`,
-        [time, latitude || null, longitude || null, address || null, nikNorm, employeeId, userId, attendance_date]
+        [time, latitude || null, longitude || null, address || null, nikNorm, employeeId, userId, attendanceYmd]
       );
     } else {
       return res.status(400).json({ success: false, message: "type must be 'clock_in' or 'clock_out'." });
@@ -202,7 +209,7 @@ const createAttendance = async (req, res) => {
 
     const [updated] = await db.query(
       'SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?',
-      [userId, attendance_date]
+      [userId, attendanceYmd]
     );
 
     res.json({ success: true, message: `${type === 'clock_in' ? 'Clock-in' : 'Clock-out'} recorded.`, data: updated[0] });

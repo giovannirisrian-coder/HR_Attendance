@@ -1,4 +1,5 @@
 const db = require('../config/database');
+const { normalizeCalendarYmdFromBody, compareYmd } = require('../utils/calendarDate');
 
 const VALID_TYPES = ['cuti', 'izin', 'sakit'];
 
@@ -35,11 +36,22 @@ const createLeave = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid request_type.' });
     }
 
-    const days = inclusiveDays(start_date, end_date);
+    const startNorm = normalizeCalendarYmdFromBody(start_date);
+    const endNorm = normalizeCalendarYmdFromBody(end_date);
+    if (!startNorm.ok) {
+      return res.status(400).json({ success: false, message: `start_date: ${startNorm.error}` });
+    }
+    if (!endNorm.ok) {
+      return res.status(400).json({ success: false, message: `end_date: ${endNorm.error}` });
+    }
+    const startYmd = startNorm.ymd;
+    const endYmd = endNorm.ymd;
+
+    const days = inclusiveDays(startYmd, endYmd);
     if (days === null || days < 1) {
       return res.status(400).json({ success: false, message: 'Invalid date range.' });
     }
-    if (new Date(start_date) > new Date(end_date)) {
+    if (compareYmd(startYmd, endYmd) > 0) {
       return res.status(400).json({ success: false, message: 'End date must be on or after start date.' });
     }
 
@@ -53,7 +65,7 @@ const createLeave = async (req, res) => {
     const [ins] = await db.query(
       `INSERT INTO leave_requests (user_id, request_type, start_date, end_date, reason, status)
        VALUES (?, ?, ?, ?, ?, 'pending')`,
-      [userId, request_type, start_date, end_date, reasonTrim]
+      [userId, request_type, startYmd, endYmd, reasonTrim]
     );
 
     const [rows] = await db.query(

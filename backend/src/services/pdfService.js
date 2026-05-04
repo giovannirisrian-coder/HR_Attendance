@@ -44,18 +44,33 @@ function rowWorkingMins(clockIn, clockOut) {
   return d >= 0 ? d : null;
 }
 
-function formatDateOnly(raw) {
-  if (!raw) return '—';
+function ymdFromRaw(raw) {
+  if (raw == null || raw === '') return null;
+  if (typeof raw === 'string') {
+    const m = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (m) return m[1];
+  }
   const d = raw instanceof Date ? raw : new Date(raw);
-  if (Number.isNaN(d.getTime())) return String(raw).slice(0, 10);
-  return d.toISOString().slice(0, 10);
+  if (Number.isNaN(d.getTime())) return null;
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${mo}-${day}`;
+}
+
+function formatDateOnly(raw) {
+  const ymd = ymdFromRaw(raw);
+  if (!ymd) return '—';
+  return ymd;
 }
 
 function formatDayShort(raw) {
-  if (!raw) return '';
-  const d = raw instanceof Date ? raw : new Date(raw);
-  if (Number.isNaN(d.getTime())) return '';
-  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
+  const ymd = ymdFromRaw(raw);
+  if (!ymd) return '';
+  const [y, mo, d] = ymd.split('-').map((x) => parseInt(x, 10));
+  const dt = new Date(y, mo - 1, d);
+  if (Number.isNaN(dt.getTime())) return '';
+  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dt.getDay()];
 }
 
 function aggregateByEmployee(rows) {
@@ -88,11 +103,7 @@ function aggregateByEmployee(rows) {
     if (mins != null && st === 'approved') g.totalMins += mins;
   }
   for (const g of map.values()) {
-    g.rows.sort((a, b) => {
-      const da = new Date(a.attendance_date).getTime();
-      const db = new Date(b.attendance_date).getTime();
-      return da - db;
-    });
+    g.rows.sort((a, b) => String(a.attendance_date).localeCompare(String(b.attendance_date)));
   }
   return Array.from(map.values());
 }
