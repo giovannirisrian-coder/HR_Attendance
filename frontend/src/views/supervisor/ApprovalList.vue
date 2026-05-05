@@ -273,7 +273,7 @@
             class="btn"
             :class="bulkModal.action === 'approve' ? 'btn-primary' : 'btn-danger'"
             @click="submitBulkApproval"
-            :disabled="bulkProcessing || sheetSelectedIds.size === 0 || (bulkModal.action === 'reject' && !bulkModal.note.trim())"
+            :disabled="bulkProcessing || selectedIds.size === 0 || (bulkModal.action === 'reject' && !bulkModal.note.trim())"
           >
             {{ bulkModal.action === 'approve' ? 'Confirm Approve' : 'Confirm Reject' }}
           </button>
@@ -284,7 +284,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, inject } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
 import api from '../../utils/api';
 import SupervisorApprovalLsSidebar from './SupervisorApprovalLsSidebar.vue';
 
@@ -293,6 +293,7 @@ const bulkProcessing = ref(false);
 const records = ref([]);
 const pagination = reactive({ total: 0, page: 1, limit: 15 });
 const filters = reactive({ status: '', start_date: '', end_date: '' });
+const selectedIds = ref(new Set());
 
 const lsMembers = ref([]);
 const sidebarSearch = ref('');
@@ -317,7 +318,6 @@ const sheetPagination = reactive({ total: 0, page: 1, limit: 15 });
 const sheetFilters = reactive({ search: '', status: '', start_date: '', end_date: '' });
 const sheetMonthBounds = reactive({ start: '', end: '' });
 
-const bulkProcessing = ref(false);
 const detailModal = reactive({ show: false, record: null });
 const bulkModal = reactive({ show: false, action: 'approve', note: '' });
 const sheetSelectedIds = ref(new Set());
@@ -438,6 +438,24 @@ const clearFilters = () => {
   fetchData();
 };
 
+const toggleSelectAll = (event) => {
+  const checked = event.target.checked;
+  const next = new Set(selectedIds.value);
+  if (checked) {
+    pendingIdsOnPage.value.forEach((id) => next.add(id));
+  } else {
+    pendingIdsOnPage.value.forEach((id) => next.delete(id));
+  }
+  selectedIds.value = next;
+};
+
+const toggleRow = (id, checked) => {
+  const next = new Set(selectedIds.value);
+  if (checked) next.add(id);
+  else next.delete(id);
+  selectedIds.value = next;
+};
+
 const openEmployeeSheet = (emp) => {
   const { start, end } = currentMonthBounds();
   employeeSheet.user_id = emp.user_id;
@@ -529,7 +547,7 @@ const openBulkModal = () => {
 
 const submitBulkApproval = async () => {
   if (bulkModal.action === 'reject' && !bulkModal.note.trim()) return;
-  const attendance_ids = Array.from(sheetSelectedIds.value).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0);
+  const attendance_ids = Array.from(selectedIds.value).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0);
   if (attendance_ids.length === 0) return;
   bulkProcessing.value = true;
   try {
@@ -543,10 +561,8 @@ const submitBulkApproval = async () => {
       window.alert(`${data.data.skipped_count} record tidak diproses karena bukan status pending.`);
     }
     bulkModal.show = false;
-    sheetSelectedIds.value = new Set();
-    await fetchSheetRecords();
-    await fetchMonthStats();
-    await fetchEmployeesOverview();
+    selectedIds.value = new Set();
+    await fetchData();
     if (typeof refreshSupervisorBadges === 'function') await refreshSupervisorBadges();
   } catch (err) {
     window.alert(err?.response?.data?.message || 'Bulk approval gagal diproses.');

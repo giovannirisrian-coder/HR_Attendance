@@ -244,7 +244,7 @@ const getTeamLeavesEmployeesOverview = async (req, res) => {
 const getTeamLeaves = async (req, res) => {
   try {
     const supervisorId = req.user.id;
-    const { request_type, search, status, page = 1, limit = 20, start_date, end_date } = req.query;
+    const { request_type, search, status, page = 1, limit = 20, start_date, end_date, user_id } = req.query;
 
     if (request_type && !VALID_TYPES.includes(request_type)) {
       return res.status(400).json({ success: false, message: 'Invalid request_type.' });
