@@ -3,7 +3,7 @@ import vue from '@vitejs/plugin-vue'
 import path from 'path'
 
 function devProxyTarget(apiBase) {
-  const raw = (apiBase || '').trim() || 'http://localhost:3000/api'
+  const raw = (apiBase || '').trim() || 'http://127.0.0.1:3000'
   try {
     if (raw.startsWith('http://') || raw.startsWith('https://')) {
       return new URL(raw).origin
@@ -11,7 +11,7 @@ function devProxyTarget(apiBase) {
   } catch {
     // ignore
   }
-  return 'http://localhost:3000'
+  return 'http://127.0.0.1:3000'
 }
 
 export default defineConfig(({ mode }) => {

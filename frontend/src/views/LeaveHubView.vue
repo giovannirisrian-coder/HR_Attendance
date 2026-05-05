@@ -673,7 +673,7 @@ const clearSupervisorDetailFilters = () => {
 };
 
 const fetchList = async () => {
-  if (!isLs.value) return;
+  if (!isLs.value && !isSupervisor.value) return;
   loading.value = true;
   try {
     const params = {
@@ -745,7 +745,7 @@ const approve = async (id) => {
   actionId.value = id;
   try {
     await api.put(`/leaves/${id}/approval`, { action: 'approve' });
-    if (isLs.value) await fetchList();
+    if (isLs.value || isSupervisor.value) await fetchList();
     else await refreshSupervisorLeaveData();
   } catch { /* */ } finally {
     actionId.value = null;
@@ -767,7 +767,7 @@ const confirmReject = async () => {
       rejection_note: rejectModal.note,
     });
     rejectModal.show = false;
-    if (isLs.value) await fetchList();
+    if (isLs.value || isSupervisor.value) await fetchList();
     else await refreshSupervisorLeaveData();
   } catch { /* */ } finally {
     actionId.value = null;
@@ -795,6 +795,8 @@ watch(
 onMounted(() => {
   resetFormDates();
   if (isLs.value) {
+    fetchList();
+  } else if (isSupervisor.value) {
     fetchList();
   } else {
     fetchLeaveMonthStats();
