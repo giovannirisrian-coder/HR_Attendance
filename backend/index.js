@@ -18,19 +18,6 @@ const { authenticate, authorize } = require('./src/middleware/auth');
 const attendanceController = require('./src/controllers/attendanceController');
 const leaveController = require('./src/controllers/leaveController');
 
-/** Supervisor team overview — registered on app so paths are always available (used by ApprovalList & LeaveHub). */
-app.get(
-  '/api/attendance/team/month-stats',
-  authenticate,
-  authorize('ls_supervisor'),
-  attendanceController.getTeamAttendanceMonthStats
-);
-app.get(
-  '/api/attendance/team/employees-overview',
-  authenticate,
-  authorize('ls_supervisor'),
-  attendanceController.getTeamAttendanceEmployeesOverview
-);
 app.get(
   '/api/leaves/team/month-stats',
   authenticate,

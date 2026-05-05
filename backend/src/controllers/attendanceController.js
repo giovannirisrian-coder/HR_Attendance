@@ -698,8 +698,6 @@ module.exports = {
   getMyAttendance,
   getTeamLsMembers,
   getTeamAttendance,
-  getTeamAttendanceMonthStats,
-  getTeamAttendanceEmployeesOverview,
   updateApproval,
   updateApprovalBulk,
   getMonthlyAttendanceRecap,

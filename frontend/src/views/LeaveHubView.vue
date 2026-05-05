@@ -1,6 +1,6 @@
 <template>
   <div class="leave-hub" :class="isSupervisor ? 'leave-hub--supervisor-split' : 'leave-hub--single'">
-    <header class="leave-obj-header">
+    <div class="leave-obj-header">
       <div class="leave-obj-header__titles">
         <h1 class="page-title">{{ isLs ? 'Leave' : 'Leave approvals' }}</h1>
         <p class="page-subtitle">Cuti, izin, dan sakit</p>
