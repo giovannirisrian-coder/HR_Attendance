@@ -7,26 +7,26 @@
       </div>
     </div>
 
-    <!-- Stats -->
+    <!-- Stats: bulan berjalan (API) -->
     <div class="stat-grid">
       <div class="stat-card">
         <div class="stat-card-label">Total Records</div>
-        <div class="stat-card-value">{{ pagination.total }}</div>
-        <div class="stat-card-sub">This period</div>
+        <div class="stat-card-value">{{ monthStats.total }}</div>
+        <div class="stat-card-sub">{{ monthStatsLabel }}</div>
       </div>
       <div class="stat-card" style="border-left:4px solid var(--bc-pending);">
         <div class="stat-card-label">Pending</div>
-        <div class="stat-card-value" style="color:var(--bc-pending)">{{ statusCounts.pending }}</div>
+        <div class="stat-card-value" style="color:var(--bc-pending)">{{ monthStats.pending }}</div>
         <div class="stat-card-sub">Awaiting action</div>
       </div>
       <div class="stat-card" style="border-left:4px solid var(--bc-approved);">
         <div class="stat-card-label">Approved</div>
-        <div class="stat-card-value" style="color:var(--bc-approved)">{{ statusCounts.approved }}</div>
+        <div class="stat-card-value" style="color:var(--bc-approved)">{{ monthStats.approved }}</div>
         <div class="stat-card-sub">Processed</div>
       </div>
       <div class="stat-card" style="border-left:4px solid var(--bc-rejected);">
         <div class="stat-card-label">Rejected</div>
-        <div class="stat-card-value" style="color:var(--bc-rejected)">{{ statusCounts.rejected }}</div>
+        <div class="stat-card-value" style="color:var(--bc-rejected)">{{ monthStats.rejected }}</div>
         <div class="stat-card-sub">Denied</div>
       </div>
     </div>
@@ -243,13 +243,10 @@
     <div v-if="bulkModal.show" class="modal-backdrop" @click.self="bulkModal.show = false">
       <div class="modal" style="max-width:440px;">
         <div class="modal-header">
-          <span class="modal-title">Bulk Approval Action</span>
+          <span class="modal-title">Bulk Approval</span>
           <button class="modal-close" @click="bulkModal.show = false">✕</button>
         </div>
         <div class="modal-body">
-          <p style="margin-bottom:14px;color:var(--bc-gray-600);">
-            You are about to process <strong>{{ selectedIds.size }}</strong> selected record(s).
-          </p>
           <div class="form-group">
             <label class="form-label">Action <span style="color:var(--bc-rejected)">*</span></label>
             <select v-model="bulkModal.action" class="form-control">
@@ -276,7 +273,7 @@
             class="btn"
             :class="bulkModal.action === 'approve' ? 'btn-primary' : 'btn-danger'"
             @click="submitBulkApproval"
-            :disabled="bulkProcessing || (bulkModal.action === 'reject' && !bulkModal.note.trim())"
+            :disabled="bulkProcessing || sheetSelectedIds.size === 0 || (bulkModal.action === 'reject' && !bulkModal.note.trim())"
           >
             {{ bulkModal.action === 'approve' ? 'Confirm Approve' : 'Confirm Reject' }}
           </button>
@@ -287,7 +284,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted, inject } from 'vue';
 import api from '../../utils/api';
 import SupervisorApprovalLsSidebar from './SupervisorApprovalLsSidebar.vue';
 
@@ -301,9 +298,41 @@ const lsMembers = ref([]);
 const sidebarSearch = ref('');
 const selectedUserId = ref(null);
 
+const monthStats = reactive({ year: null, month: null, total: 0, pending: 0, approved: 0, rejected: 0 });
+const overviewLoading = ref(false);
+const employees = ref([]);
+/** '' = semua; otherwise matches `user_id` as string */
+const overviewEmployeeUserId = ref('');
+
+const employeeSheet = reactive({
+  show: false,
+  user_id: null,
+  employee_name: '',
+  employee_id: '',
+  nik: null,
+});
+const sheetLoading = ref(false);
+const sheetRecords = ref([]);
+const sheetPagination = reactive({ total: 0, page: 1, limit: 15 });
+const sheetFilters = reactive({ search: '', status: '', start_date: '', end_date: '' });
+const sheetMonthBounds = reactive({ start: '', end: '' });
+
+const bulkProcessing = ref(false);
 const detailModal = reactive({ show: false, record: null });
 const bulkModal = reactive({ show: false, action: 'approve', note: '' });
-const selectedIds = ref(new Set());
+const sheetSelectedIds = ref(new Set());
+
+const monthStatsLabel = computed(() => {
+  if (!monthStats.year || !monthStats.month) return 'Bulan berjalan';
+  const d = new Date(monthStats.year, monthStats.month - 1, 1);
+  return d.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+});
+
+const sortedOverviewEmployees = computed(() =>
+  [...employees.value].sort((a, b) =>
+    String(a.employee_name || '').localeCompare(String(b.employee_name || ''), 'id', { sensitivity: 'base' })
+  )
+);
 
 const filteredLsMembers = computed(() => {
   const q = sidebarSearch.value.trim().toLowerCase();
@@ -339,11 +368,12 @@ const isPartiallyChecked = computed(() => {
   return selectedOnPage > 0 && selectedOnPage < pendingIdsOnPage.value.length;
 });
 
-const statusCounts = computed(() => ({
-  pending:  records.value.filter(r => r.status === 'pending').length,
-  approved: records.value.filter(r => r.status === 'approved').length,
-  rejected: records.value.filter(r => r.status === 'rejected').length,
-}));
+const sheetPendingIdsOnPage = computed(() => sheetRecords.value.filter((r) => r.status === 'pending').map((r) => r.id));
+const sheetAllSelectableChecked = computed(() => sheetPendingIdsOnPage.value.length > 0 && sheetPendingIdsOnPage.value.every((id) => sheetSelectedIds.value.has(id)));
+const sheetPartiallyChecked = computed(() => {
+  const n = sheetPendingIdsOnPage.value.filter((id) => sheetSelectedIds.value.has(id)).length;
+  return n > 0 && n < sheetPendingIdsOnPage.value.length;
+});
 
 const syncSelectionToMembers = () => {
   const list = lsMembers.value;
@@ -408,26 +438,87 @@ const clearFilters = () => {
   fetchData();
 };
 
-const openDetail = (r) => { detailModal.record = r; detailModal.show = true; };
-
-const toggleSelectAll = (event) => {
-  const checked = event.target.checked;
-  if (checked) {
-    const next = new Set(selectedIds.value);
-    pendingIdsOnPage.value.forEach((id) => next.add(id));
-    selectedIds.value = next;
-    return;
-  }
-  const next = new Set(selectedIds.value);
-  pendingIdsOnPage.value.forEach((id) => next.delete(id));
-  selectedIds.value = next;
+const openEmployeeSheet = (emp) => {
+  const { start, end } = currentMonthBounds();
+  employeeSheet.user_id = emp.user_id;
+  employeeSheet.employee_name = emp.employee_name;
+  employeeSheet.employee_id = emp.employee_id;
+  employeeSheet.nik = emp.nik;
+  employeeSheet.show = true;
+  sheetMonthBounds.start = start;
+  sheetMonthBounds.end = end;
+  Object.assign(sheetFilters, { search: '', status: '', start_date: start, end_date: end });
+  sheetPagination.page = 1;
+  sheetSelectedIds.value = new Set();
+  fetchSheetRecords();
 };
 
-const toggleRow = (id, checked) => {
-  const next = new Set(selectedIds.value);
+const closeEmployeeSheet = async () => {
+  employeeSheet.show = false;
+  sheetSelectedIds.value = new Set();
+  await fetchEmployeesOverview();
+  await fetchMonthStats();
+  if (typeof refreshSupervisorBadges === 'function') await refreshSupervisorBadges();
+};
+
+const resetSheetFilters = () => {
+  Object.assign(sheetFilters, {
+    search: '',
+    status: '',
+    start_date: sheetMonthBounds.start,
+    end_date: sheetMonthBounds.end,
+  });
+  sheetPagination.page = 1;
+  fetchSheetRecords();
+};
+
+let sheetDebounce;
+const debouncedSheetFetch = () => {
+  clearTimeout(sheetDebounce);
+  sheetDebounce = setTimeout(() => { sheetPagination.page = 1; fetchSheetRecords(); }, 400);
+};
+
+const fetchSheetRecords = async () => {
+  if (!employeeSheet.user_id) return;
+  sheetLoading.value = true;
+  try {
+    const params = {
+      page: sheetPagination.page,
+      limit: sheetPagination.limit,
+      user_id: employeeSheet.user_id,
+    };
+    if (sheetFilters.search.trim()) params.search = sheetFilters.search.trim();
+    if (sheetFilters.status) params.status = sheetFilters.status;
+    if (sheetFilters.start_date) params.start_date = sheetFilters.start_date;
+    if (sheetFilters.end_date) params.end_date = sheetFilters.end_date;
+    const { data } = await api.get('/attendance/team', { params });
+    sheetRecords.value = data.data;
+    Object.assign(sheetPagination, data.pagination);
+    const selectable = new Set(sheetRecords.value.filter((r) => r.status === 'pending').map((r) => r.id));
+    sheetSelectedIds.value = new Set([...sheetSelectedIds.value].filter((id) => selectable.has(id)));
+  } catch { /* silent */ } finally { sheetLoading.value = false; }
+};
+
+const changeSheetPage = (p) => { sheetPagination.page = p; fetchSheetRecords(); };
+
+const openDetail = (r) => { detailModal.record = r; detailModal.show = true; };
+
+const toggleSheetSelectAll = (event) => {
+  const checked = event.target.checked;
+  const next = new Set(sheetSelectedIds.value);
+  if (checked) {
+    sheetPendingIdsOnPage.value.forEach((id) => next.add(id));
+  } else {
+    sheetPendingIdsOnPage.value.forEach((id) => next.delete(id));
+  }
+  sheetSelectedIds.value = next;
+};
+
+const toggleSheetRow = (id, checked) => {
+  const next = new Set(sheetSelectedIds.value);
   if (checked) next.add(id);
   else next.delete(id);
-  selectedIds.value = next;
+  sheetSelectedIds.value = next;
 };
 
 const openBulkModal = () => {
@@ -438,10 +529,12 @@ const openBulkModal = () => {
 
 const submitBulkApproval = async () => {
   if (bulkModal.action === 'reject' && !bulkModal.note.trim()) return;
+  const attendance_ids = Array.from(sheetSelectedIds.value).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0);
+  if (attendance_ids.length === 0) return;
   bulkProcessing.value = true;
   try {
     const payload = {
-      attendance_ids: Array.from(selectedIds.value),
+      attendance_ids,
       action: bulkModal.action,
       rejection_note: bulkModal.action === 'reject' ? bulkModal.note.trim() : null,
     };
@@ -450,8 +543,11 @@ const submitBulkApproval = async () => {
       window.alert(`${data.data.skipped_count} record tidak diproses karena bukan status pending.`);
     }
     bulkModal.show = false;
-    selectedIds.value = new Set();
-    await fetchData();
+    sheetSelectedIds.value = new Set();
+    await fetchSheetRecords();
+    await fetchMonthStats();
+    await fetchEmployeesOverview();
+    if (typeof refreshSupervisorBadges === 'function') await refreshSupervisorBadges();
   } catch (err) {
     window.alert(err?.response?.data?.message || 'Bulk approval gagal diproses.');
   } finally {

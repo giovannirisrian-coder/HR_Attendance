@@ -36,6 +36,7 @@ const routes = [
     children: [
       { path: 'approvals', component: () => import('../views/supervisor/ApprovalList.vue') },
       { path: 'monthly-recap', component: () => import('../views/supervisor/MonthlyAttendanceRecap.vue') },
+      { path: 'glog-upload', component: () => import('../views/glog/GlogUpload.vue') },
       { path: 'leave', component: () => import('../views/LeaveHubView.vue') },
     ],
   },
@@ -56,6 +57,7 @@ const routes = [
     meta: { requiresAuth: true, role: 'ls_hr' },
     children: [
       { path: 'approvals', component: () => import('../views/SubmissionQueue.vue'), meta: { queue: 'hr' } },
+      { path: 'glog-upload', component: () => import('../views/glog/GlogUpload.vue') },
     ],
   },
 

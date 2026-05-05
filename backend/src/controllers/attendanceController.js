@@ -576,11 +576,54 @@ const getMonthlyAttendanceRecap = async (req, res) => {
       [year, month, year, month, year, month, supervisorId]
     );
 
+    const firstDay = `${year}-${String(month).padStart(2, '0')}-01`;
+    const lastDayNum = new Date(year, month, 0).getDate();
+    const lastDay = `${year}-${String(month).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
+
+    const [leaveDetailRows] = await db.query(
+      `SELECT
+         lr.id,
+         lr.user_id,
+         lr.request_type,
+         lr.start_date,
+         lr.end_date,
+         lr.reason,
+         lr.status,
+         lr.rejection_note,
+         lr.approved_at,
+         lr.created_at
+       FROM leave_requests lr
+       JOIN users u ON lr.user_id = u.id
+       WHERE u.supervisor_id = ? AND u.role = 'ls'
+         AND lr.start_date <= ?
+         AND lr.end_date >= ?
+       ORDER BY lr.user_id ASC, lr.start_date ASC, lr.id ASC`,
+      [supervisorId, lastDay, firstDay]
+    );
+
+    const leavesByUserId = {};
+    for (const lr of leaveDetailRows) {
+      const uid = lr.user_id;
+      if (!leavesByUserId[uid]) leavesByUserId[uid] = [];
+      leavesByUserId[uid].push({
+        id: lr.id,
+        request_type: lr.request_type,
+        start_date: lr.start_date,
+        end_date: lr.end_date,
+        reason: lr.reason,
+        status: lr.status,
+        rejection_note: lr.rejection_note,
+        approved_at: lr.approved_at,
+        created_at: lr.created_at,
+      });
+    }
+
     res.json({
       success: true,
       data: rows.map((r) => ({
         ...r,
         nik: r.nik || null,
+        leave_requests: leavesByUserId[r.user_id] || [],
       })),
       meta: { month, year },
     });
@@ -655,6 +698,8 @@ module.exports = {
   getMyAttendance,
   getTeamLsMembers,
   getTeamAttendance,
+  getTeamAttendanceMonthStats,
+  getTeamAttendanceEmployeesOverview,
   updateApproval,
   updateApprovalBulk,
   getMonthlyAttendanceRecap,

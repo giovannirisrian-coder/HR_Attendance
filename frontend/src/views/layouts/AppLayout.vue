@@ -104,6 +104,10 @@
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4m5 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
             <span v-if="!sidebarCollapsed">Approval List</span>
           </router-link>
+          <router-link to="/ls-hr/glog-upload" class="nav-item" active-class="active" title="Upload log mesin (.csv / .txt)">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M8 8l4-4 4 4M4 20h16"/></svg>
+            <span v-if="!sidebarCollapsed">Upload Attendance Log</span>
+          </router-link>
         </template>
 
         <template v-if="user?.role === 'ssu'">
@@ -257,6 +261,7 @@ const pageTitle = computed(() => {
   if (path.match(/\/ls\/attendance\/\d+$/)) return 'Attendance Detail';
   if (path.includes('approvals'))         return 'Approval List';
   if (path.includes('/supervisor/monthly-recap')) return 'Monthly Attendance Recap';
+  if (path.includes('/glog-upload')) return 'Upload Glog';
   if (path.includes('/vendor/reports') && path.includes('detail')) return 'Report Detail';
   if (path.includes('/vendor/reports')) return 'Report List';
   if (path.includes('/ls-hr/approvals')) return 'LS HR Approvals';
@@ -384,6 +389,25 @@ const handleLogout = () => {
 }
 .nav-item:hover { background: rgba(255,255,255,.08); color: white; }
 .nav-item.active { background: var(--bc-green-600); color: white; font-weight: 700; box-shadow: 0 2px 8px rgba(34,153,74,.35); }
+.nav-item__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.nav-badge {
+  flex-shrink: 0;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #fbbf24;
+  color: #78350f;
+  font-size: 11px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.nav-item.active .nav-badge {
+  background: rgba(255,255,255,.25);
+  color: white;
+}
 .nav-item--sub { padding-left: 14px; font-size: 13px; }
 .nav-item--sub .nav-icon { width: 16px; height: 16px; opacity: .9; }
 .nav-icon { width: 18px; height: 18px; flex-shrink: 0; }

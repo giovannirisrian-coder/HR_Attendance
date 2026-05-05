@@ -3,6 +3,19 @@ const { normalizeCalendarYmdFromBody, compareYmd } = require('../utils/calendarD
 
 const VALID_TYPES = ['cuti', 'izin', 'sakit'];
 
+/** Resolve calendar month bounds (local server date if year/month omitted). */
+const resolveCalendarMonth = (req) => {
+  const now = new Date();
+  const qYear = parseInt(req.query.year, 10);
+  const qMonth = parseInt(req.query.month, 10);
+  const year = Number.isInteger(qYear) && qYear >= 2000 && qYear <= 2100 ? qYear : now.getFullYear();
+  const month = Number.isInteger(qMonth) && qMonth >= 1 && qMonth <= 12 ? qMonth : now.getMonth() + 1;
+  const startStr = `${year}-${String(month).padStart(2, '0')}-01`;
+  const lastD = new Date(year, month, 0).getDate();
+  const endStr = `${year}-${String(month).padStart(2, '0')}-${String(lastD).padStart(2, '0')}`;
+  return { year, month, startStr, endStr };
+};
+
 const inclusiveDays = (start, end) => {
   const a = new Date(`${start}T12:00:00`).getTime();
   const b = new Date(`${end}T12:00:00`).getTime();
@@ -132,6 +145,101 @@ const getMyLeaves = async (req, res) => {
   }
 };
 
+// Supervisor: counts for team leave requests overlapping a calendar month
+const getTeamLeavesMonthStats = async (req, res) => {
+  try {
+    const supervisorId = req.user.id;
+    const { year, month, startStr, endStr } = resolveCalendarMonth(req);
+
+    const [[row]] = await db.query(
+      `SELECT
+         COUNT(*) AS total,
+         SUM(CASE WHEN lr.status = 'pending' THEN 1 ELSE 0 END) AS pending,
+         SUM(CASE WHEN lr.status = 'approved' THEN 1 ELSE 0 END) AS approved,
+         SUM(CASE WHEN lr.status = 'rejected' THEN 1 ELSE 0 END) AS rejected
+       FROM leave_requests lr
+       JOIN users u ON lr.user_id = u.id
+       WHERE u.supervisor_id = ?
+         AND lr.start_date <= ?
+         AND lr.end_date >= ?`,
+      [supervisorId, endStr, startStr]
+    );
+
+    res.json({
+      success: true,
+      data: {
+        year,
+        month,
+        total: Number(row.total) || 0,
+        pending: Number(row.pending) || 0,
+        approved: Number(row.approved) || 0,
+        rejected: Number(row.rejected) || 0,
+      },
+    });
+  } catch (err) {
+    console.error('Team leaves month stats error:', err);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
+// Supervisor: per-LS counts for leave overlapping a calendar month
+const getTeamLeavesEmployeesOverview = async (req, res) => {
+  try {
+    const supervisorId = req.user.id;
+    const { year, month, startStr, endStr } = resolveCalendarMonth(req);
+    const searchRaw = req.query.search;
+    const search = searchRaw && String(searchRaw).trim() ? String(searchRaw).trim() : '';
+
+    let userWhere = 'WHERE u.supervisor_id = ? AND u.role = ?';
+    const userParams = [supervisorId, 'ls'];
+    if (search) {
+      const t = `%${search}%`;
+      userWhere += ' AND (u.name LIKE ? OR u.employee_id LIKE ? OR e.nik LIKE ?)';
+      userParams.push(t, t, t);
+    }
+
+    const [rows] = await db.query(
+      `SELECT
+         u.id AS user_id,
+         u.name AS employee_name,
+         u.employee_id,
+         MAX(e.nik) AS nik,
+         COUNT(lr.id) AS total,
+         SUM(CASE WHEN lr.status = 'pending' THEN 1 ELSE 0 END) AS pending,
+         SUM(CASE WHEN lr.status = 'approved' THEN 1 ELSE 0 END) AS approved,
+         SUM(CASE WHEN lr.status = 'rejected' THEN 1 ELSE 0 END) AS rejected
+       FROM users u
+       LEFT JOIN employees e ON e.user_id = u.id
+       LEFT JOIN leave_requests lr
+         ON lr.user_id = u.id
+        AND lr.start_date <= ?
+        AND lr.end_date >= ?
+       ${userWhere}
+       GROUP BY u.id, u.name, u.employee_id
+       ORDER BY u.name ASC`,
+      [endStr, startStr, ...userParams]
+    );
+
+    res.json({
+      success: true,
+      data: rows.map((r) => ({
+        user_id: r.user_id,
+        employee_name: r.employee_name,
+        employee_id: r.employee_id,
+        nik: r.nik || null,
+        total: Number(r.total) || 0,
+        pending: Number(r.pending) || 0,
+        approved: Number(r.approved) || 0,
+        rejected: Number(r.rejected) || 0,
+      })),
+      meta: { year, month },
+    });
+  } catch (err) {
+    console.error('Team leaves employees overview error:', err);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
 // Supervisor: team leave requests — optional request_type filter
 const getTeamLeaves = async (req, res) => {
   try {
@@ -147,6 +255,17 @@ const getTeamLeaves = async (req, res) => {
     if (request_type) {
       where += ' AND lr.request_type = ?';
       params.push(request_type);
+    }
+
+    const uid = parseInt(user_id, 10);
+    if (Number.isInteger(uid) && uid > 0) {
+      where += ' AND lr.user_id = ?';
+      params.push(uid);
+    }
+
+    if (start_date && end_date) {
+      where += ' AND lr.start_date <= ? AND lr.end_date >= ?';
+      params.push(end_date, start_date);
     }
 
     if (search && String(search).trim()) {
@@ -258,9 +377,100 @@ const updateLeaveApproval = async (req, res) => {
   }
 };
 
+// Supervisor: bulk approve / reject pending leave requests under supervision
+const updateLeaveApprovalBulk = async (req, res) => {
+  const conn = await db.getConnection();
+  try {
+    const supervisorId = req.user.id;
+    const { leave_ids, action, rejection_note } = req.body;
+
+    if (!Array.isArray(leave_ids) || leave_ids.length === 0) {
+      return res.status(400).json({ success: false, message: 'leave_ids is required and must be a non-empty array.' });
+    }
+    if (!['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ success: false, message: "action must be 'approve' or 'reject'." });
+    }
+
+    const ids = [...new Set(leave_ids.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))];
+    if (ids.length === 0) {
+      return res.status(400).json({ success: false, message: 'No valid leave ids were provided.' });
+    }
+
+    const placeholders = ids.map(() => '?').join(',');
+    const [ownedRows] = await conn.query(
+      `SELECT lr.id
+       FROM leave_requests lr
+       JOIN users u ON lr.user_id = u.id
+       WHERE lr.id IN (${placeholders}) AND u.supervisor_id = ?`,
+      [...ids, supervisorId]
+    );
+    const ownedIds = new Set(ownedRows.map((r) => Number(r.id)));
+    if (ownedIds.size !== ids.length) {
+      return res.status(403).json({
+        success: false,
+        message: 'Some selected requests are not under your supervision.',
+      });
+    }
+
+    const [pendingRows] = await conn.query(
+      `SELECT id FROM leave_requests WHERE id IN (${placeholders}) AND status = 'pending'`,
+      ids
+    );
+    const pendingIds = pendingRows.map((r) => Number(r.id));
+    if (pendingIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No pending requests were selected. Only pending requests can be processed.',
+      });
+    }
+
+    if (action === 'reject' && !(rejection_note && String(rejection_note).trim())) {
+      return res.status(400).json({
+        success: false,
+        message: 'rejection_note is required when rejecting.',
+      });
+    }
+
+    const pendingPlaceholders = pendingIds.map(() => '?').join(',');
+    const newStatus = action === 'approve' ? 'approved' : 'rejected';
+    const noteValue = action === 'reject' ? String(rejection_note).trim() : null;
+
+    await conn.beginTransaction();
+    await conn.query(
+      `UPDATE leave_requests
+       SET status = ?, approved_by = ?, approved_at = NOW(), rejection_note = ?
+       WHERE id IN (${pendingPlaceholders})`,
+      [newStatus, supervisorId, noteValue, ...pendingIds]
+    );
+    await conn.commit();
+
+    res.json({
+      success: true,
+      message: `${pendingIds.length} leave request(s) ${newStatus} successfully.`,
+      data: {
+        processed_ids: pendingIds,
+        skipped_count: ids.length - pendingIds.length,
+      },
+    });
+  } catch (err) {
+    try {
+      await conn.rollback();
+    } catch (_) {
+      /* no-op */
+    }
+    console.error('Leave bulk approval error:', err);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  } finally {
+    conn.release();
+  }
+};
+
 module.exports = {
   createLeave,
   getMyLeaves,
   getTeamLeaves,
+  getTeamLeavesMonthStats,
+  getTeamLeavesEmployeesOverview,
   updateLeaveApproval,
+  updateLeaveApprovalBulk,
 };

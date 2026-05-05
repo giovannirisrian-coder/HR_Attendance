@@ -22,6 +22,7 @@ router.get('/my', authenticate, authorize('ls'), getMyAttendance);
 router.get('/team/members', authenticate, authorize('ls_supervisor'), getTeamLsMembers);
 router.get('/team', authenticate, authorize('ls_supervisor'), getTeamAttendance);
 router.get('/team/monthly-recap', authenticate, authorize('ls_supervisor'), getMonthlyAttendanceRecap);
+router.get('/team', authenticate, authorize('ls_supervisor'), getTeamAttendance);
 router.put('/:id/approval', authenticate, authorize('ls_supervisor'), updateApproval);
 router.put('/approval/bulk', authenticate, authorize('ls_supervisor'), updateApprovalBulk);
 
