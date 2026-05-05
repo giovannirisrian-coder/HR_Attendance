@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const db = require('../config/database');
 
@@ -191,6 +193,18 @@ function toSqlTime(value) {
   return `${h}:${min}:${sec}`;
 }
 
+/** NIK untuk kolom employees.nik (max 16 karakter, digit-only diisi ke kiri). */
+function normalizeNik16ForStorage(raw) {
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (!digits.length) return null;
+  if (digits.length >= 16) return digits.slice(-16);
+  return digits.padStart(16, '0');
+}
+
+function timesEqualSql(a, b) {
+  return toSqlTime(a) === toSqlTime(b);
+}
+
 /**
  * Cocokkan NIK file glog ke employees (hanya user LS aktif).
  * Aturan: TRIM sama, atau tanpa spasi sama, atau hanya digit sama (MySQL 8 REGEXP_REPLACE).
@@ -219,10 +233,213 @@ async function resolveEmployeeForGlogNik(conn, rawNik) {
 }
 
 /**
+ * Buat user LS + baris employees untuk NIK dari glog yang belum ada di master.
+ * Email deterministik per NIK; jika bentrok (sudah ada), kembalikan employee hasil resolve.
+ */
+async function createPlaceholderLsUserAndEmployee(conn, row) {
+  const nik16 = normalizeNik16ForStorage(row.nik);
+  if (!nik16) return null;
+  const name = String(row.employee_name || 'Glog Import').trim().slice(0, 150) || 'Glog Import';
+  const email = `glog_${nik16}@import.local`;
+  const passwordHash = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 10);
+  let inTx = false;
+  try {
+    await conn.beginTransaction();
+    inTx = true;
+    const [ins] = await conn.query(
+      `INSERT INTO users (name, employee_id, email, password, role, vendor_id, supervisor_id, is_active)
+       VALUES (?, NULL, ?, ?, 'ls', NULL, NULL, 1)`,
+      [name, email, passwordHash]
+    );
+    const userId = ins.insertId;
+    await conn.query('INSERT INTO employees (user_id, nik) VALUES (?, ?)', [userId, nik16]);
+    await conn.commit();
+    inTx = false;
+    const [empRows] = await conn.query(
+      'SELECT id AS employee_id, user_id, nik FROM employees WHERE user_id = ? LIMIT 1',
+      [userId]
+    );
+    return empRows[0] || null;
+  } catch (err) {
+    if (inTx) {
+      try {
+        await conn.rollback();
+      } catch (_) {
+        /* no-op */
+      }
+    }
+    if (err && err.code === 'ER_DUP_ENTRY') {
+      const again = await resolveEmployeeForGlogNik(conn, row.nik);
+      return again.employee || null;
+    }
+    throw err;
+  }
+}
+
+function mysqlLockErrorMessage(err) {
+  if (!err || !err.code) return null;
+  if (err.code === 'ER_LOCK_WAIT_TIMEOUT') {
+    return 'Database sibuk (timeout kunci). Tutup proses glog/absensi lain yang berjalan bersamaan, tunggu sebentar, lalu coba lagi.';
+  }
+  if (err.code === 'ER_LOCK_DEADLOCK') {
+    return 'Terjadi deadlock database. Silakan coba lagi.';
+  }
+  return null;
+}
+
+const PROCESS_JOB_TTL_MS = 30 * 60 * 1000;
+const PROCESS_JOB_CHUNK_SIZE = 1000;
+const processJobs = new Map();
+
+function createProcessJob({ batchId, uploaderId, type }) {
+  const id = crypto.randomUUID();
+  const nowIso = new Date().toISOString();
+  const job = {
+    id,
+    type: type || 'glog_process_batch',
+    batch_id: batchId,
+    uploader_id: uploaderId,
+    status: 'queued',
+    progress: { processed: 0, total: 0, percent: 0 },
+    data: null,
+    error: null,
+    created_at: nowIso,
+    started_at: null,
+    finished_at: null,
+  };
+  processJobs.set(id, job);
+  return job;
+}
+
+function touchJobProgress(job, processed, total) {
+  const safeTotal = Math.max(0, Number(total || 0));
+  const safeProcessed = Math.max(0, Number(processed || 0));
+  const percent = safeTotal > 0 ? Math.min(100, Math.round((safeProcessed / safeTotal) * 100)) : 0;
+  job.progress = { processed: safeProcessed, total: safeTotal, percent };
+}
+
+function cleanupProcessJobs() {
+  const now = Date.now();
+  for (const [id, job] of processJobs.entries()) {
+    if (!job.finished_at) continue;
+    const finishedAt = Date.parse(job.finished_at);
+    if (Number.isNaN(finishedAt)) continue;
+    if (now - finishedAt > PROCESS_JOB_TTL_MS) processJobs.delete(id);
+  }
+}
+
+async function getDailyRowsChunk(conn, batchId, lastId, limit) {
+  const [rows] = await conn.query(
+    `SELECT id, nik, employee_name, attendance_date, time_in, time_out
+     FROM glog_import_daily
+     WHERE batch_id = ? AND id > ?
+     ORDER BY id ASC
+     LIMIT ?`,
+    [batchId, lastId, limit]
+  );
+  return rows;
+}
+
+/**
+ * Satu baris glog_import_daily → attendance (match by karyawan LS hasil resolve NIK + tanggal).
+ * createEmployeeIfUnmatched: true = patch (buat placeholder user+employee jika NIK tidak ketemu).
+ */
+async function upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnmatched }) {
+  const out = {
+    result: 'skip',
+    skipReason: null,
+    employeeCreated: false,
+  };
+
+  let empMatch = await resolveEmployeeForGlogNik(conn, row.nik);
+  let { employee, reason } = empMatch;
+
+  if (!employee && createEmployeeIfUnmatched && reason === 'unmatched_nik') {
+    const created = await createPlaceholderLsUserAndEmployee(conn, row);
+    if (created) {
+      employee = created;
+      out.employeeCreated = true;
+    }
+  }
+
+  if (!employee) {
+    if (reason === 'ambiguous_nik') out.skipReason = 'ambiguous_nik';
+    else if (reason === 'empty_nik') out.skipReason = 'invalid_time';
+    else out.skipReason = 'unmatched_nik';
+    return out;
+  }
+
+  const attendanceDate = toSqlDate(row.attendance_date);
+  const clockIn = toSqlTime(row.time_in);
+  const clockOut = toSqlTime(row.time_out);
+  if (!attendanceDate || !clockIn || !clockOut) {
+    out.skipReason = 'invalid_time';
+    return out;
+  }
+
+  const canonicalNik = String(employee.nik || '').trim().slice(0, 16);
+
+  const [existing] = await conn.query(
+    'SELECT id, status, clock_in_time, clock_out_time FROM attendance WHERE user_id = ? AND attendance_date = ? LIMIT 1',
+    [employee.user_id, attendanceDate]
+  );
+
+  if (existing.length === 0) {
+    await conn.query(
+      `INSERT INTO attendance (
+         user_id, employee_id, nik, attendance_date,
+         clock_in_time, clock_out_time,
+         clock_in_lat, clock_in_lng, clock_in_address,
+         clock_out_lat, clock_out_lng, clock_out_address,
+         ot_start_time, ot_end_time, ot_summary,
+         status
+       ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'pending')`,
+      [employee.user_id, employee.employee_id, canonicalNik, attendanceDate, clockIn, clockOut]
+    );
+    out.result = 'insert';
+    return out;
+  }
+
+  if (existing[0].status !== 'pending') {
+    out.skipReason = 'non_pending';
+    return out;
+  }
+
+  if (timesEqualSql(existing[0].clock_in_time, clockIn) && timesEqualSql(existing[0].clock_out_time, clockOut)) {
+    out.skipReason = 'duplicate_noop';
+    return out;
+  }
+
+  await conn.query(
+    `UPDATE attendance SET
+       employee_id = ?,
+       nik = ?,
+       clock_in_time = ?,
+       clock_out_time = ?,
+       updated_at = CURRENT_TIMESTAMP
+     WHERE user_id = ? AND attendance_date = ? AND status = 'pending'`,
+    [employee.employee_id, canonicalNik, clockIn, clockOut, employee.user_id, attendanceDate]
+  );
+  out.result = 'update';
+  return out;
+}
+
+function tallyUpsertStats(stats, r) {
+  if (r.result === 'insert') stats.attendance_inserted += 1;
+  else if (r.result === 'update') stats.attendance_updated_pending += 1;
+  else if (r.skipReason === 'non_pending') stats.attendance_skipped_non_pending += 1;
+  else if (r.skipReason === 'ambiguous_nik') stats.attendance_skipped_ambiguous_nik += 1;
+  else if (r.skipReason === 'invalid_time') stats.attendance_skipped_invalid_time += 1;
+  else if (r.skipReason === 'unmatched_nik') stats.attendance_skipped_unmatched_nik += 1;
+  else if (r.skipReason === 'duplicate_noop') stats.attendance_skipped_duplicate_noop += 1;
+}
+
+/**
  * Sinkronkan baris glog_import_daily batch ini ke attendance.
  * - INSERT jika belum ada (user_id + attendance_date).
  * - UPDATE clock_in_time / clock_out_time + employee_id + nik kanonik hanya jika status = pending.
  * - Lewati jika sudah approved/rejected (jaga alur persetujuan).
+ * - Lewati update jika pending sudah sama dengan glog (nik+tanggal+t jam sama).
  * Geo & lembur (OT) tidak diubah pada UPDATE (tetap seperti data aplikasi).
  */
 async function syncGlogDailyToAttendance(conn, batchId) {
@@ -233,74 +450,263 @@ async function syncGlogDailyToAttendance(conn, batchId) {
     attendance_skipped_unmatched_nik: 0,
     attendance_skipped_ambiguous_nik: 0,
     attendance_skipped_invalid_time: 0,
+    attendance_skipped_duplicate_noop: 0,
   };
 
-  const [dailyRows] = await conn.query(
-    `SELECT id, nik, employee_name, attendance_date, time_in, time_out
-     FROM glog_import_daily
-     WHERE batch_id = ?`,
-    [batchId]
-  );
-
-  for (const row of dailyRows) {
-    const { employee, reason } = await resolveEmployeeForGlogNik(conn, row.nik);
-    if (!employee) {
-      if (reason === 'ambiguous_nik') stats.attendance_skipped_ambiguous_nik += 1;
-      else if (reason === 'empty_nik') stats.attendance_skipped_invalid_time += 1;
-      else stats.attendance_skipped_unmatched_nik += 1;
-      continue;
+  let lastId = 0;
+  for (;;) {
+    const rows = await getDailyRowsChunk(conn, batchId, lastId, PROCESS_JOB_CHUNK_SIZE);
+    if (rows.length === 0) break;
+    for (const row of rows) {
+      const r = await upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnmatched: false });
+      tallyUpsertStats(stats, r);
+      lastId = row.id;
     }
-
-    const attendanceDate = toSqlDate(row.attendance_date);
-    const clockIn = toSqlTime(row.time_in);
-    const clockOut = toSqlTime(row.time_out);
-    if (!attendanceDate || !clockIn || !clockOut) {
-      stats.attendance_skipped_invalid_time += 1;
-      continue;
-    }
-
-    const canonicalNik = String(employee.nik || '').trim().slice(0, 16);
-
-    const [existing] = await conn.query(
-      'SELECT id, status FROM attendance WHERE user_id = ? AND attendance_date = ? LIMIT 1',
-      [employee.user_id, attendanceDate]
-    );
-
-    if (existing.length === 0) {
-      await conn.query(
-        `INSERT INTO attendance (
-           user_id, employee_id, nik, attendance_date,
-           clock_in_time, clock_out_time,
-           clock_in_lat, clock_in_lng, clock_in_address,
-           clock_out_lat, clock_out_lng, clock_out_address,
-           ot_start_time, ot_end_time, ot_summary,
-           status
-         ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'pending')`,
-        [employee.user_id, employee.employee_id, canonicalNik, attendanceDate, clockIn, clockOut]
-      );
-      stats.attendance_inserted += 1;
-      continue;
-    }
-
-    if (existing[0].status !== 'pending') {
-      stats.attendance_skipped_non_pending += 1;
-      continue;
-    }
-
-    await conn.query(
-      `UPDATE attendance SET
-         employee_id = ?,
-         nik = ?,
-         clock_in_time = ?,
-         clock_out_time = ?,
-         updated_at = CURRENT_TIMESTAMP
-       WHERE user_id = ? AND attendance_date = ? AND status = 'pending'`,
-      [employee.employee_id, canonicalNik, clockIn, clockOut, employee.user_id, attendanceDate]
-    );
-    stats.attendance_updated_pending += 1;
   }
 
   return stats;
+}
+
+/**
+ * Patch / update attendance dari glog_import_daily: sama seperti sinkron, tetapi
+ * jika NIK belum ada di master → buat user LS + employees placeholder lalu insert attendance.
+ */
+async function patchGlogDailyToAttendance(conn, batchId) {
+  const stats = {
+    attendance_inserted: 0,
+    attendance_updated_pending: 0,
+    attendance_skipped_non_pending: 0,
+    attendance_skipped_unmatched_nik: 0,
+    attendance_skipped_ambiguous_nik: 0,
+    attendance_skipped_invalid_time: 0,
+    attendance_skipped_duplicate_noop: 0,
+    employee_placeholder_created: 0,
+  };
+
+  let lastId = 0;
+  for (;;) {
+    const rows = await getDailyRowsChunk(conn, batchId, lastId, PROCESS_JOB_CHUNK_SIZE);
+    if (rows.length === 0) break;
+    for (const row of rows) {
+      const r = await upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnmatched: true });
+      if (r.employeeCreated) stats.employee_placeholder_created += 1;
+      tallyUpsertStats(stats, r);
+      lastId = row.id;
+    }
+  }
+
+  return stats;
+}
+
+async function runPatchAttendanceInternal(conn, batchId, onProgress) {
+  const stats = {
+    attendance_inserted: 0,
+    attendance_updated_pending: 0,
+    attendance_skipped_non_pending: 0,
+    attendance_skipped_unmatched_nik: 0,
+    attendance_skipped_ambiguous_nik: 0,
+    attendance_skipped_invalid_time: 0,
+    attendance_skipped_duplicate_noop: 0,
+    employee_placeholder_created: 0,
+  };
+
+  const [[{ total }]] = await conn.query(
+    'SELECT COUNT(*) AS total FROM glog_import_daily WHERE batch_id = ?',
+    [batchId]
+  );
+  const totalRows = Number(total || 0);
+  if (typeof onProgress === 'function') onProgress(0, totalRows);
+
+  let processed = 0;
+  let lastId = 0;
+  for (;;) {
+    const rows = await getDailyRowsChunk(conn, batchId, lastId, PROCESS_JOB_CHUNK_SIZE);
+    if (rows.length === 0) break;
+    for (const row of rows) {
+      const r = await upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnmatched: true });
+      if (r.employeeCreated) stats.employee_placeholder_created += 1;
+      tallyUpsertStats(stats, r);
+      processed += 1;
+      lastId = row.id;
+    }
+    if (typeof onProgress === 'function') onProgress(processed, totalRows);
+  }
+
+  return {
+    batch_id: batchId,
+    ...stats,
+  };
+}
+
+async function runProcessBatchInternal(conn, batchId, onProgress) {
+  const [[stagingDup]] = await conn.query(
+    `SELECT
+       SUM(CASE WHEN parse_error IS NULL AND attendance_date IS NOT NULL AND event_time IS NOT NULL THEN 1 ELSE 0 END) AS staging_ok_rows
+     FROM glog_import_staging WHERE batch_id = ?`,
+    [batchId]
+  );
+  const [[stagingDistinct]] = await conn.query(
+    `SELECT COUNT(*) AS c FROM (
+       SELECT DISTINCT nik, attendance_date, event_time
+       FROM glog_import_staging
+       WHERE batch_id = ?
+         AND parse_error IS NULL
+         AND attendance_date IS NOT NULL
+         AND event_time IS NOT NULL
+     ) t`,
+    [batchId]
+  );
+  const stagingOkRows = Number(stagingDup.staging_ok_rows || 0);
+  const distinctEvents = Number(stagingDistinct.c || 0);
+  const staging_duplicate_event_rows = Math.max(0, stagingOkRows - distinctEvents);
+
+  let aggResult;
+  await conn.beginTransaction();
+  try {
+    await conn.query('DELETE FROM glog_import_daily WHERE batch_id = ?', [batchId]);
+    const [insertResult] = await conn.query(
+      `INSERT INTO glog_import_daily (batch_id, nik, employee_name, attendance_date, time_in, time_out, tap_count)
+       SELECT
+         batch_id,
+         nik,
+         MAX(employee_name) AS employee_name,
+         attendance_date,
+         MIN(event_time) AS time_in,
+         MAX(event_time) AS time_out,
+         COUNT(*) AS tap_count
+       FROM (
+         SELECT
+           batch_id,
+           nik,
+           attendance_date,
+           event_time,
+           MAX(employee_name) AS employee_name
+         FROM glog_import_staging
+         WHERE batch_id = ?
+           AND parse_error IS NULL
+           AND attendance_date IS NOT NULL
+           AND event_time IS NOT NULL
+         GROUP BY batch_id, nik, attendance_date, event_time
+       ) AS dedup
+       GROUP BY batch_id, nik, attendance_date`,
+      [batchId]
+    );
+    aggResult = insertResult;
+    await conn.commit();
+  } catch (aggErr) {
+    try {
+      await conn.rollback();
+    } catch (_) {
+      /* no-op */
+    }
+    throw aggErr;
+  }
+
+  const stats = {
+    attendance_inserted: 0,
+    attendance_updated_pending: 0,
+    attendance_skipped_non_pending: 0,
+    attendance_skipped_unmatched_nik: 0,
+    attendance_skipped_ambiguous_nik: 0,
+    attendance_skipped_invalid_time: 0,
+    attendance_skipped_duplicate_noop: 0,
+  };
+  const [[{ total }]] = await conn.query(
+    'SELECT COUNT(*) AS total FROM glog_import_daily WHERE batch_id = ?',
+    [batchId]
+  );
+  const totalRows = Number(total || 0);
+  if (typeof onProgress === 'function') onProgress(0, totalRows);
+
+  let processed = 0;
+  let lastId = 0;
+  for (;;) {
+    const rows = await getDailyRowsChunk(conn, batchId, lastId, PROCESS_JOB_CHUNK_SIZE);
+    if (rows.length === 0) break;
+    for (const row of rows) {
+      const r = await upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnmatched: false });
+      tallyUpsertStats(stats, r);
+      processed += 1;
+      lastId = row.id;
+    }
+    if (typeof onProgress === 'function') onProgress(processed, totalRows);
+  }
+
+  await conn.beginTransaction();
+  try {
+    await conn.query(
+      `UPDATE glog_import_batches SET status = 'processed', processed_at = NOW() WHERE id = ?`,
+      [batchId]
+    );
+    await conn.commit();
+  } catch (statusErr) {
+    try {
+      await conn.rollback();
+    } catch (_) {
+      /* no-op */
+    }
+    throw statusErr;
+  }
+
+  const dailyCount = aggResult.affectedRows != null ? aggResult.affectedRows : 0;
+  return {
+    batch_id: batchId,
+    daily_row_count: dailyCount,
+    staging_ok_rows: stagingOkRows,
+    staging_distinct_nik_date_time_rows: distinctEvents,
+    staging_duplicate_event_rows,
+    ...stats,
+  };
+}
+
+function startProcessBatchJob(job) {
+  setImmediate(async () => {
+    const conn = await db.getConnection();
+    try {
+      job.status = 'running';
+      job.started_at = new Date().toISOString();
+      const result = await runProcessBatchInternal(conn, job.batch_id, (processed, total) =>
+        touchJobProgress(job, processed, total)
+      );
+      job.status = 'done';
+      job.data = result;
+      job.finished_at = new Date().toISOString();
+      touchJobProgress(job, job.progress.total, job.progress.total);
+    } catch (err) {
+      job.status = 'error';
+      job.error = mysqlLockErrorMessage(err) || err.message || 'Server error.';
+      job.finished_at = new Date().toISOString();
+      console.error('Glog process background job error:', err);
+    } finally {
+      conn.release();
+      cleanupProcessJobs();
+    }
+  });
+}
+
+function startPatchAttendanceJob(job) {
+  setImmediate(async () => {
+    const conn = await db.getConnection();
+    try {
+      job.status = 'running';
+      job.started_at = new Date().toISOString();
+      const result = await runPatchAttendanceInternal(conn, job.batch_id, (processed, total) =>
+        touchJobProgress(job, processed, total)
+      );
+      job.status = 'done';
+      job.data = result;
+      job.finished_at = new Date().toISOString();
+      touchJobProgress(job, job.progress.total, job.progress.total);
+    } catch (err) {
+      job.status = 'error';
+      job.error = mysqlLockErrorMessage(err) || err.message || 'Server error.';
+      job.finished_at = new Date().toISOString();
+      console.error('Glog patch background job error:', err);
+    } finally {
+      conn.release();
+      cleanupProcessJobs();
+    }
+  });
 }
 
 const uploadGlog = async (req, res) => {
@@ -399,48 +805,27 @@ const processBatch = async (req, res) => {
     if (Number(batches[0].uploaded_by) !== Number(uploaderId)) {
       return res.status(403).json({ success: false, message: 'Anda tidak memiliki akses ke batch ini.' });
     }
-
-    await conn.beginTransaction();
-    await conn.query('DELETE FROM glog_import_daily WHERE batch_id = ?', [batchId]);
-
-    const [aggResult] = await conn.query(
-      `INSERT INTO glog_import_daily (batch_id, nik, employee_name, attendance_date, time_in, time_out, tap_count)
-       SELECT
-         batch_id,
-         nik,
-         MAX(employee_name) AS employee_name,
-         attendance_date,
-         MIN(event_time) AS time_in,
-         MAX(event_time) AS time_out,
-         COUNT(*) AS tap_count
-       FROM glog_import_staging
-       WHERE batch_id = ?
-         AND parse_error IS NULL
-         AND attendance_date IS NOT NULL
-         AND event_time IS NOT NULL
-       GROUP BY batch_id, nik, attendance_date`,
-      [batchId]
+    const existingRunning = Array.from(processJobs.values()).find(
+      (j) =>
+        j.type === 'glog_process_batch' &&
+        j.batch_id === batchId &&
+        Number(j.uploader_id) === Number(uploaderId) &&
+        (j.status === 'queued' || j.status === 'running')
     );
+    if (existingRunning) {
+      return res.status(202).json({
+        success: true,
+        message: 'Proses batch sedang berjalan di background.',
+        data: { job_id: existingRunning.id, status: existingRunning.status },
+      });
+    }
 
-    const attendanceStats = await syncGlogDailyToAttendance(conn, batchId);
-
-    await conn.query(
-      `UPDATE glog_import_batches SET status = 'processed', processed_at = NOW() WHERE id = ?`,
-      [batchId]
-    );
-    await conn.commit();
-
-    const dailyCount = aggResult.affectedRows != null ? aggResult.affectedRows : 0;
-
-    return res.json({
+    const job = createProcessJob({ batchId, uploaderId, type: 'glog_process_batch' });
+    startProcessBatchJob(job);
+    return res.status(202).json({
       success: true,
-      message:
-        'Agregasi harian selesai (glog_import_daily). Data yang cocok dengan master karyawan (LS aktif) disinkronkan ke attendance (insert baru atau update hanya jika status pending).',
-      data: {
-        batch_id: batchId,
-        daily_row_count: dailyCount,
-        ...attendanceStats,
-      },
+      message: 'Proses batch dimulai di background. Gunakan endpoint status job untuk memantau progres.',
+      data: { job_id: job.id, status: job.status },
     });
   } catch (err) {
     try {
@@ -449,7 +834,109 @@ const processBatch = async (req, res) => {
       /* no-op */
     }
     console.error('Glog process error:', err);
+    const lockMsg = mysqlLockErrorMessage(err);
+    return res.status(500).json({
+      success: false,
+      message: lockMsg || err.message || 'Server error.',
+    });
+  } finally {
+    conn.release();
+  }
+};
+
+const getProcessJobStatus = async (req, res) => {
+  try {
+    const jobId = String(req.params.jobId || '').trim();
+    if (!jobId) {
+      return res.status(400).json({ success: false, message: 'Job ID tidak valid.' });
+    }
+    const job = processJobs.get(jobId);
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job tidak ditemukan atau sudah kedaluwarsa.' });
+    }
+    if (Number(job.uploader_id) !== Number(req.user.id)) {
+      return res.status(403).json({ success: false, message: 'Forbidden.' });
+    }
+    return res.json({
+      success: true,
+      data: {
+        job_id: job.id,
+        status: job.status,
+        progress: job.progress,
+        batch_id: job.batch_id,
+        result: job.data,
+        error: job.error,
+        created_at: job.created_at,
+        started_at: job.started_at,
+        finished_at: job.finished_at,
+      },
+    });
+  } catch (err) {
+    console.error('Get glog process job status error:', err);
     return res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
+/** Patch attendance dari glog_import_daily (NIK + tanggal): insert/update pending; lewati approved; buat user+employee jika NIK baru. */
+const patchAttendanceFromBatch = async (req, res) => {
+  const conn = await db.getConnection();
+  try {
+    const batchId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(batchId) || batchId < 1) {
+      return res.status(400).json({ success: false, message: 'ID batch tidak valid.' });
+    }
+
+    const uploaderId = req.user.id;
+    const [batches] = await conn.query(
+      'SELECT id, uploaded_by, status FROM glog_import_batches WHERE id = ? LIMIT 1',
+      [batchId]
+    );
+    if (batches.length === 0) {
+      return res.status(404).json({ success: false, message: 'Batch tidak ditemukan.' });
+    }
+    if (Number(batches[0].uploaded_by) !== Number(uploaderId)) {
+      return res.status(403).json({ success: false, message: 'Anda tidak memiliki akses ke batch ini.' });
+    }
+    if (String(batches[0].status) !== 'processed') {
+      return res.status(400).json({
+        success: false,
+        message: 'Batch belum diproses. Jalankan Proses & Sinkronisasi terlebih dahulu.',
+      });
+    }
+
+    const existingRunning = Array.from(processJobs.values()).find(
+      (j) =>
+        j.type === 'glog_patch_attendance' &&
+        j.batch_id === batchId &&
+        Number(j.uploader_id) === Number(uploaderId) &&
+        (j.status === 'queued' || j.status === 'running')
+    );
+    if (existingRunning) {
+      return res.status(202).json({
+        success: true,
+        message: 'Submit attendance sedang berjalan di background.',
+        data: { job_id: existingRunning.id, status: existingRunning.status },
+      });
+    }
+
+    const job = createProcessJob({ batchId, uploaderId, type: 'glog_patch_attendance' });
+    startPatchAttendanceJob(job);
+    return res.status(202).json({
+      success: true,
+      message:
+        'Submit attendance dimulai di background. Gunakan endpoint status job untuk memantau progres.',
+      data: {
+        job_id: job.id,
+        status: job.status,
+      },
+    });
+  } catch (err) {
+    console.error('Glog patch attendance error:', err);
+    const lockMsg = mysqlLockErrorMessage(err);
+    return res.status(500).json({
+      success: false,
+      message: lockMsg || err.message || 'Server error.',
+    });
   } finally {
     conn.release();
   }
@@ -544,6 +1031,8 @@ module.exports = {
   uploadGlog,
   uploadGlogMiddleware,
   processBatch,
+  getProcessJobStatus,
+  patchAttendanceFromBatch,
   getBatchDetail,
   listMyBatches,
 };
