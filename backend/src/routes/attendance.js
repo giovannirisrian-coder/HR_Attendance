@@ -4,6 +4,7 @@ const {
   createAttendance,
   saveMyOvertime,
   getMyAttendance,
+  getTeamLsMembers,
   getTeamAttendance,
   updateApproval,
   updateApprovalBulk,
@@ -17,7 +18,9 @@ router.post('/overtime', authenticate, authorize('ls'), saveMyOvertime);
 router.post('/', authenticate, authorize('ls'), createAttendance);
 router.get('/my', authenticate, authorize('ls'), getMyAttendance);
 
-// Supervisor routes (month-stats & employees-overview are registered in index.js)
+// Supervisor routes
+router.get('/team/members', authenticate, authorize('ls_supervisor'), getTeamLsMembers);
+router.get('/team', authenticate, authorize('ls_supervisor'), getTeamAttendance);
 router.get('/team/monthly-recap', authenticate, authorize('ls_supervisor'), getMonthlyAttendanceRecap);
 router.get('/team', authenticate, authorize('ls_supervisor'), getTeamAttendance);
 router.put('/:id/approval', authenticate, authorize('ls_supervisor'), updateApproval);

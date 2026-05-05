@@ -1,21 +1,18 @@
 const db = require('../config/database');
+const {
+  normalizeCalendarYmdFromBody,
+  getAttendanceYmdBounds,
+  assertYmdInInclusiveRange,
+} = require('../utils/calendarDate');
 
-/** YYYY-MM-DD in the server's local timezone (no UTC date drift for "today"). */
-const getServerLocalDateString = () => {
-  const n = new Date();
-  const y = n.getFullYear();
-  const m = String(n.getMonth() + 1).padStart(2, '0');
-  const d = String(n.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-};
-
-const assertAttendanceDateIsToday = (attendance_date) => {
-  const submitted = String(attendance_date || '').slice(0, 10);
-  const today = getServerLocalDateString();
-  if (submitted !== today) {
-    return 'Attendance can only be recorded for today. Past and future dates are not allowed.';
-  }
-  return null;
+const assertAttendanceDateInLsWindow = (ymd) => {
+  const { minYmd, maxYmd } = getAttendanceYmdBounds();
+  return assertYmdInInclusiveRange(
+    ymd,
+    minYmd,
+    maxYmd,
+    'Attendance date must be between 10 days ago and today (inclusive).'
+  );
 };
 
 const fetchEmployeeProfileForUser = async (userId) => {
@@ -66,7 +63,12 @@ const saveMyOvertime = async (req, res) => {
       });
     }
 
-    const dateErr = assertAttendanceDateIsToday(attendance_date);
+    const normDate = normalizeCalendarYmdFromBody(attendance_date);
+    if (!normDate.ok) {
+      return res.status(400).json({ success: false, message: normDate.error });
+    }
+    const attendanceYmd = normDate.ymd;
+    const dateErr = assertAttendanceDateInLsWindow(attendanceYmd);
     if (dateErr) {
       return res.status(400).json({ success: false, message: dateErr });
     }
@@ -84,7 +86,7 @@ const saveMyOvertime = async (req, res) => {
 
     const [existing] = await db.query(
       'SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?',
-      [userId, attendance_date]
+      [userId, attendanceYmd]
     );
 
     if (existing.length === 0 || !existing[0].clock_in_time) {
@@ -104,12 +106,12 @@ const saveMyOvertime = async (req, res) => {
       `UPDATE attendance
        SET ot_start_time = ?, ot_end_time = ?, ot_summary = ?
        WHERE user_id = ? AND attendance_date = ?`,
-      [ot_start_time, ot_end_time, summary, userId, attendance_date]
+      [ot_start_time, ot_end_time, summary, userId, attendanceYmd]
     );
 
     const [updated] = await db.query(
       'SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?',
-      [userId, attendance_date]
+      [userId, attendanceYmd]
     );
 
     res.json({ success: true, message: 'Overtime saved.', data: updated[0] });
@@ -136,7 +138,12 @@ const createAttendance = async (req, res) => {
       return res.status(400).json({ success: false, message: 'type, attendance_date and time are required.' });
     }
 
-    const dateErr = assertAttendanceDateIsToday(attendance_date);
+    const normDate = normalizeCalendarYmdFromBody(attendance_date);
+    if (!normDate.ok) {
+      return res.status(400).json({ success: false, message: normDate.error });
+    }
+    const attendanceYmd = normDate.ymd;
+    const dateErr = assertAttendanceDateInLsWindow(attendanceYmd);
     if (dateErr) {
       return res.status(400).json({ success: false, message: dateErr });
     }
@@ -161,7 +168,7 @@ const createAttendance = async (req, res) => {
 
     const [existing] = await db.query(
       'SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?',
-      [userId, attendance_date]
+      [userId, attendanceYmd]
     );
 
     if (type === 'clock_in') {
@@ -174,13 +181,13 @@ const createAttendance = async (req, res) => {
           `INSERT INTO attendance
             (user_id, employee_id, nik, attendance_date, clock_in_time, clock_in_lat, clock_in_lng, clock_in_address, status)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-          [userId, employeeId, nikNorm, attendance_date, time, latitude || null, longitude || null, address || null]
+          [userId, employeeId, nikNorm, attendanceYmd, time, latitude || null, longitude || null, address || null]
         );
       } else {
         await db.query(
           `UPDATE attendance SET employee_id=?, nik=?, clock_in_time=?, clock_in_lat=?, clock_in_lng=?, clock_in_address=?
            WHERE user_id=? AND attendance_date=?`,
-          [employeeId, nikNorm, time, latitude || null, longitude || null, address || null, userId, attendance_date]
+          [employeeId, nikNorm, time, latitude || null, longitude || null, address || null, userId, attendanceYmd]
         );
       }
     } else if (type === 'clock_out') {
@@ -194,7 +201,7 @@ const createAttendance = async (req, res) => {
       await db.query(
         `UPDATE attendance SET clock_out_time=?, clock_out_lat=?, clock_out_lng=?, clock_out_address=?, nik=?, employee_id=?
          WHERE user_id=? AND attendance_date=?`,
-        [time, latitude || null, longitude || null, address || null, nikNorm, employeeId, userId, attendance_date]
+        [time, latitude || null, longitude || null, address || null, nikNorm, employeeId, userId, attendanceYmd]
       );
     } else {
       return res.status(400).json({ success: false, message: "type must be 'clock_in' or 'clock_out'." });
@@ -202,7 +209,7 @@ const createAttendance = async (req, res) => {
 
     const [updated] = await db.query(
       'SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?',
-      [userId, attendance_date]
+      [userId, attendanceYmd]
     );
 
     res.json({ success: true, message: `${type === 'clock_in' ? 'Clock-in' : 'Clock-out'} recorded.`, data: updated[0] });
@@ -231,8 +238,28 @@ const getMyAttendance = async (req, res) => {
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
+    const leaveDayTypeExpr = `CASE
+      WHEN EXISTS (
+        SELECT 1 FROM leave_requests lr
+        WHERE lr.user_id = a.user_id AND lr.status = 'approved' AND lr.request_type = 'cuti'
+          AND a.attendance_date BETWEEN lr.start_date AND lr.end_date
+      ) THEN 'cuti'
+      WHEN EXISTS (
+        SELECT 1 FROM leave_requests lr
+        WHERE lr.user_id = a.user_id AND lr.status = 'approved' AND lr.request_type = 'izin'
+          AND a.attendance_date BETWEEN lr.start_date AND lr.end_date
+      ) THEN 'izin'
+      WHEN EXISTS (
+        SELECT 1 FROM leave_requests lr
+        WHERE lr.user_id = a.user_id AND lr.status = 'approved' AND lr.request_type = 'sakit'
+          AND a.attendance_date BETWEEN lr.start_date AND lr.end_date
+      ) THEN 'sakit'
+      ELSE NULL
+    END`;
+
     const [rows] = await db.query(
-      `SELECT a.*, u.name AS employee_name, u.employee_id
+      `SELECT a.*, u.name AS employee_name, u.employee_id,
+              (${leaveDayTypeExpr}) AS leave_day_type
        FROM attendance a
        JOIN users u ON a.user_id = u.id
        LEFT JOIN employees e ON e.id = a.employee_id
@@ -251,117 +278,74 @@ const getMyAttendance = async (req, res) => {
       params
     );
 
-    res.json({ success: true, data: rows, pagination: { total, page: parseInt(page), limit: parseInt(limit) } });
+    const [[summaryRow]] = await db.query(
+      `SELECT
+         COALESCE(SUM(
+           CASE
+             WHEN a.ot_start_time IS NOT NULL AND a.ot_end_time IS NOT NULL
+             THEN TIME_TO_SEC(TIMEDIFF(a.ot_end_time, a.ot_start_time)) / 3600
+             ELSE 0
+           END
+         ), 0) AS overtime_hours,
+         COUNT(DISTINCT CASE
+           WHEN EXISTS (
+             SELECT 1 FROM leave_requests lr
+             WHERE lr.user_id = a.user_id AND lr.status = 'approved' AND lr.request_type = 'cuti'
+               AND a.attendance_date BETWEEN lr.start_date AND lr.end_date
+           ) THEN a.attendance_date END) AS cuti_days,
+         COUNT(DISTINCT CASE
+           WHEN EXISTS (
+             SELECT 1 FROM leave_requests lr
+             WHERE lr.user_id = a.user_id AND lr.status = 'approved' AND lr.request_type = 'izin'
+               AND a.attendance_date BETWEEN lr.start_date AND lr.end_date
+           ) THEN a.attendance_date END) AS izin_days,
+         COUNT(DISTINCT CASE
+           WHEN EXISTS (
+             SELECT 1 FROM leave_requests lr
+             WHERE lr.user_id = a.user_id AND lr.status = 'approved' AND lr.request_type = 'sakit'
+               AND a.attendance_date BETWEEN lr.start_date AND lr.end_date
+           ) THEN a.attendance_date END) AS sakit_days
+       FROM attendance a
+       JOIN users u ON a.user_id = u.id
+       LEFT JOIN employees e ON e.id = a.employee_id
+       ${where}`,
+      params
+    );
+
+    const summary = {
+      overtime_hours: Number(summaryRow?.overtime_hours) || 0,
+      cuti_days: Number(summaryRow?.cuti_days) || 0,
+      izin_days: Number(summaryRow?.izin_days) || 0,
+      sakit_days: Number(summaryRow?.sakit_days) || 0,
+    };
+
+    res.json({
+      success: true,
+      data: rows,
+      pagination: { total, page: parseInt(page), limit: parseInt(limit) },
+      summary,
+    });
   } catch (err) {
     console.error('Get attendance error:', err);
     res.status(500).json({ success: false, message: 'Server error.' });
   }
 };
 
-/** Resolve calendar month bounds (local server date if year/month omitted). */
-const resolveCalendarMonth = (req) => {
-  const now = new Date();
-  const qYear = parseInt(req.query.year, 10);
-  const qMonth = parseInt(req.query.month, 10);
-  const year = Number.isInteger(qYear) && qYear >= 2000 && qYear <= 2100 ? qYear : now.getFullYear();
-  const month = Number.isInteger(qMonth) && qMonth >= 1 && qMonth <= 12 ? qMonth : now.getMonth() + 1;
-  const startStr = `${year}-${String(month).padStart(2, '0')}-01`;
-  const lastD = new Date(year, month, 0).getDate();
-  const endStr = `${year}-${String(month).padStart(2, '0')}-${String(lastD).padStart(2, '0')}`;
-  return { year, month, startStr, endStr };
-};
-
-// LS Supervisor: counts for team attendance in a calendar month (default: current month)
-const getTeamAttendanceMonthStats = async (req, res) => {
+// LS Supervisor: LS users under this supervisor (master list for approvals UI)
+const getTeamLsMembers = async (req, res) => {
   try {
     const supervisorId = req.user.id;
-    const { year, month } = resolveCalendarMonth(req);
-
-    const [[row]] = await db.query(
-      `SELECT
-         COUNT(*) AS total,
-         SUM(CASE WHEN a.status = 'pending' THEN 1 ELSE 0 END) AS pending,
-         SUM(CASE WHEN a.status = 'approved' THEN 1 ELSE 0 END) AS approved,
-         SUM(CASE WHEN a.status = 'rejected' THEN 1 ELSE 0 END) AS rejected
-       FROM attendance a
-       JOIN users u ON a.user_id = u.id
-       WHERE u.supervisor_id = ?
-         AND YEAR(a.attendance_date) = ?
-         AND MONTH(a.attendance_date) = ?`,
-      [supervisorId, year, month]
-    );
-
-    res.json({
-      success: true,
-      data: {
-        year,
-        month,
-        total: Number(row.total) || 0,
-        pending: Number(row.pending) || 0,
-        approved: Number(row.approved) || 0,
-        rejected: Number(row.rejected) || 0,
-      },
-    });
-  } catch (err) {
-    console.error('Team attendance month stats error:', err);
-    res.status(500).json({ success: false, message: 'Server error.' });
-  }
-};
-
-// LS Supervisor: per-LS counts for attendance in a calendar month (all supervised LS, including zero rows)
-const getTeamAttendanceEmployeesOverview = async (req, res) => {
-  try {
-    const supervisorId = req.user.id;
-    const { year, month } = resolveCalendarMonth(req);
-    const searchRaw = req.query.search;
-    const search = searchRaw && String(searchRaw).trim() ? String(searchRaw).trim() : '';
-
-    let userWhere = 'WHERE u.supervisor_id = ? AND u.role = ?';
-    const userParams = [supervisorId, 'ls'];
-    if (search) {
-      const t = `%${search}%`;
-      userWhere += ' AND (u.name LIKE ? OR u.employee_id LIKE ? OR e.nik LIKE ?)';
-      userParams.push(t, t, t);
-    }
-
     const [rows] = await db.query(
-      `SELECT
-         u.id AS user_id,
-         u.name AS employee_name,
-         u.employee_id,
-         MAX(COALESCE(e.nik, a.nik)) AS nik,
-         COUNT(a.id) AS total,
-         SUM(CASE WHEN a.status = 'pending' THEN 1 ELSE 0 END) AS pending,
-         SUM(CASE WHEN a.status = 'approved' THEN 1 ELSE 0 END) AS approved,
-         SUM(CASE WHEN a.status = 'rejected' THEN 1 ELSE 0 END) AS rejected
+      `SELECT u.id, u.name, u.employee_id, e.nik AS nik
        FROM users u
        LEFT JOIN employees e ON e.user_id = u.id
-       LEFT JOIN attendance a
-         ON a.user_id = u.id
-        AND YEAR(a.attendance_date) = ?
-        AND MONTH(a.attendance_date) = ?
-       ${userWhere}
-       GROUP BY u.id, u.name, u.employee_id
+       WHERE u.supervisor_id = ? AND u.role = 'ls'
        ORDER BY u.name ASC`,
-      [year, month, ...userParams]
+      [supervisorId]
     );
-
-    res.json({
-      success: true,
-      data: rows.map((r) => ({
-        user_id: r.user_id,
-        employee_name: r.employee_name,
-        employee_id: r.employee_id,
-        nik: r.nik || null,
-        total: Number(r.total) || 0,
-        pending: Number(r.pending) || 0,
-        approved: Number(r.approved) || 0,
-        rejected: Number(r.rejected) || 0,
-      })),
-      meta: { year, month },
-    });
+    res.json({ success: true, data: rows });
   } catch (err) {
-    console.error('Team attendance employees overview error:', err);
+    console.error('Get team LS members error:', err);
     res.status(500).json({ success: false, message: 'Server error.' });
   }
 };
@@ -370,15 +354,17 @@ const getTeamAttendanceEmployeesOverview = async (req, res) => {
 const getTeamAttendance = async (req, res) => {
   try {
     const supervisorId = req.user.id;
-    const { search, status, start_date, end_date, user_id, page = 1, limit = 20 } = req.query;
+    const { search, status, start_date, end_date, page = 1, limit = 20, user_id } = req.query;
 
     let where = 'WHERE u.supervisor_id = ?';
     const params = [supervisorId];
 
-    const uid = parseInt(user_id, 10);
-    if (Number.isInteger(uid) && uid > 0) {
-      where += ' AND a.user_id = ?';
-      params.push(uid);
+    if (user_id !== undefined && user_id !== null && user_id !== '') {
+      const uid = parseInt(user_id, 10);
+      if (!Number.isNaN(uid)) {
+        where += ' AND a.user_id = ?';
+        params.push(uid);
+      }
     }
 
     if (search) {
@@ -710,6 +696,7 @@ module.exports = {
   createAttendance,
   saveMyOvertime,
   getMyAttendance,
+  getTeamLsMembers,
   getTeamAttendance,
   getTeamAttendanceMonthStats,
   getTeamAttendanceEmployeesOverview,

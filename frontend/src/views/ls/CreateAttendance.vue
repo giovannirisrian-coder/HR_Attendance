@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">Create Attendance</h1>
-        <p class="page-subtitle">Submit your clock-in or clock-out for today</p>
+        <p class="page-subtitle">Submit clock-in or clock-out for the selected date (up to 10 calendar days back)</p>
       </div>
     </div>
 
@@ -41,12 +41,12 @@
                 type="date"
                 class="form-control"
                 required
-                readonly
-                :min="form.attendance_date"
-                :max="form.attendance_date"
+                :min="attendanceDateMin"
+                :max="attendanceDateMax"
+                @change="onAttendanceDateChange"
               />
               <p class="text-sm text-muted" style="margin-top:6px;">
-                Only today’s date is allowed. Backdating is disabled (validated on the server in the server’s local timezone).
+                Choose a date between {{ attendanceDateMin }} and today (max. 10 calendar days back). The server enforces the same range.
               </p>
             </div>
 
@@ -155,7 +155,7 @@
             "
           >
             <div class="card-header" style="display: flex; justify-content: space-between; align-items: flex-end;">
-              <span class="card-title" style="font-size: 1.17em;">Today's Summary</span>
+              <span class="card-title" style="font-size: 1.17em;">Daily summary</span>
               <span class="text-muted text-sm" style="white-space:nowrap; margin-left: 12px;">{{ summaryDateLabel }}</span>
             </div>
             <div class="card-body" style="overflow-x: auto;">
@@ -253,6 +253,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import api from '../../utils/api';
+import { formatYmdLocal, addDaysToYmdLocal } from '../../utils/calendarDate';
 
 const loading = ref(false);
 const loadingRecord = ref(false);
@@ -264,21 +265,15 @@ const otErrorMsg = ref('');
 const geoStatus = ref('idle'); // idle | loading | success | error
 const todayRecord = ref(null);
 
-/** YYYY-MM-DD in the browser’s local timezone (aligns with typical “today” UX). */
-const calendarTodayLocal = () => {
-  const n = new Date();
-  const y = n.getFullYear();
-  const m = String(n.getMonth() + 1).padStart(2, '0');
-  const d = String(n.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-};
-
 const now = new Date();
 const nowTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
+const attendanceDateMax = computed(() => formatYmdLocal());
+const attendanceDateMin = computed(() => addDaysToYmdLocal(attendanceDateMax.value, -10));
+
 const form = reactive({
   type: '',
-  attendance_date: calendarTodayLocal(),
+  attendance_date: formatYmdLocal(),
   time: nowTime,
   latitude: null,
   longitude: null,
@@ -342,6 +337,18 @@ const captureLocation = () => {
   );
 };
 
+const clampAttendanceDateToWindow = () => {
+  const min = attendanceDateMin.value;
+  const max = attendanceDateMax.value;
+  if (form.attendance_date < min) form.attendance_date = min;
+  if (form.attendance_date > max) form.attendance_date = max;
+};
+
+const onAttendanceDateChange = () => {
+  clampAttendanceDateToWindow();
+  loadRecordForSelectedDate();
+};
+
 const syncOtFormFromRecord = () => {
   const r = todayRecord.value;
   if (!r) {
@@ -355,11 +362,11 @@ const syncOtFormFromRecord = () => {
   otForm.ot_summary = r.ot_summary || '';
 };
 
-const loadTodayRecord = async () => {
+const loadRecordForSelectedDate = async () => {
   loadingRecord.value = true;
   try {
-    const d = calendarTodayLocal();
-    form.attendance_date = d;
+    clampAttendanceDateToWindow();
+    const d = form.attendance_date;
     const { data } = await api.get('/attendance/my', { params: { start_date: d, end_date: d } });
     todayRecord.value = data.data?.[0] || null;
     syncOtFormFromRecord();
@@ -370,10 +377,11 @@ const submitOvertime = async () => {
   otSuccessMsg.value = '';
   otErrorMsg.value = '';
   if (!canEditOvertime.value) return;
-  const today = calendarTodayLocal();
-  if (form.attendance_date !== today) {
-    otErrorMsg.value = 'Overtime can only be saved for today. Backdating is not allowed.';
-    form.attendance_date = today;
+  clampAttendanceDateToWindow();
+  const min = attendanceDateMin.value;
+  const max = attendanceDateMax.value;
+  if (form.attendance_date < min || form.attendance_date > max) {
+    otErrorMsg.value = 'Date must be within the last 10 calendar days through today.';
     return;
   }
   if (!otForm.ot_start_time || !otForm.ot_end_time) {
@@ -383,7 +391,7 @@ const submitOvertime = async () => {
   otLoading.value = true;
   try {
     const { data } = await api.post('/attendance/overtime', {
-      attendance_date: today,
+      attendance_date: form.attendance_date,
       ot_start_time: otForm.ot_start_time,
       ot_end_time: otForm.ot_end_time,
       ot_summary: otForm.ot_summary || null,
@@ -401,10 +409,11 @@ const submitOvertime = async () => {
 };
 
 const submitAttendance = async () => {
-  const today = calendarTodayLocal();
-  if (form.attendance_date !== today) {
-    errorMsg.value = 'Attendance can only be submitted for today. Backdating is not allowed.';
-    form.attendance_date = today;
+  clampAttendanceDateToWindow();
+  const min = attendanceDateMin.value;
+  const max = attendanceDateMax.value;
+  if (form.attendance_date < min || form.attendance_date > max) {
+    errorMsg.value = 'Date must be within the last 10 calendar days through today.';
     return;
   }
   loading.value = true;
@@ -415,7 +424,7 @@ const submitAttendance = async () => {
     const { data } = await api.post('/attendance', payload);
     if (data.success) {
       successMsg.value = data.message;
-      await loadTodayRecord();
+      await loadRecordForSelectedDate();
       form.type = '';
     }
   } catch (err) {
@@ -432,18 +441,20 @@ const calcDuration = (inTime, outTime) => {
 };
 
 let dateTick;
-const syncDateToToday = () => {
-  const t = calendarTodayLocal();
-  if (form.attendance_date !== t) {
-    form.attendance_date = t;
-    loadTodayRecord();
+/** Keep selected date within the allowed window when the calendar day rolls over. */
+const syncDateWindow = () => {
+  const prev = form.attendance_date;
+  clampAttendanceDateToWindow();
+  if (prev !== form.attendance_date) {
+    loadRecordForSelectedDate();
   }
 };
 
 onMounted(() => {
-  loadTodayRecord();
+  clampAttendanceDateToWindow();
+  loadRecordForSelectedDate();
   captureLocation();
-  dateTick = window.setInterval(syncDateToToday, 60_000);
+  dateTick = window.setInterval(syncDateWindow, 60_000);
 });
 
 onBeforeUnmount(() => {

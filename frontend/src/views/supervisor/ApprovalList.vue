@@ -31,111 +31,55 @@
       </div>
     </div>
 
-    <div class="card">
-      <div class="card-header">
-        <span class="card-title">Tim LS — {{ monthStatsLabel }}</span>
-      </div>
-      <div class="card-body" style="padding-bottom:0;">
-        <div class="filter-bar filter-bar--wrap">
-          <label class="overview-filter-label" for="overview-employee">Karyawan</label>
-          <select
-            id="overview-employee"
-            v-model="overviewEmployeeUserId"
-            class="form-control overview-employee-select"
-          >
-            <option value="">Semua karyawan</option>
-            <option
-              v-for="e in sortedOverviewEmployees"
-              :key="e.user_id"
-              :value="String(e.user_id)"
-            >
-              {{ e.employee_name }} — {{ e.employee_id }}<template v-if="e.nik"> ({{ e.nik }})</template>
-            </option>
-          </select>
-          <button class="btn btn-outline btn-sm" type="button" @click="clearOverviewEmployeeFilter">Reset</button>
-        </div>
-      </div>
+    <div class="card approval-master-detail-card">
+      <div class="approval-split">
+        <SupervisorApprovalLsSidebar
+          class="approval-split-master"
+          :members="filteredLsMembers"
+          :has-roster="lsMembers.length > 0"
+          :selected-id="selectedUserId"
+          :search="sidebarSearch"
+          @update:search="sidebarSearch = $event"
+          @update:selected-id="onSelectUser"
+        />
 
-      <div class="overview-body">
-        <div v-if="overviewLoading" class="loading-overlay"><span class="spinner"></span> Loading…</div>
-        <div v-else class="employee-grid">
-          <div v-if="employees.length === 0" class="empty-state empty-state--pad">
-            <div class="empty-state-icon">✅</div>
-            <h3>No team members or no data</h3>
-            <p>There are no LS employees under your supervision.</p>
-          </div>
-          <div v-else-if="displayedOverviewEmployees.length === 0" class="empty-state empty-state--pad">
-            <div class="empty-state-icon">🔎</div>
-            <h3>No cards for this selection</h3>
-            <p>Choose another employee or reset the filter.</p>
-          </div>
-          <button
-            v-for="emp in displayedOverviewEmployees"
-            :key="emp.user_id"
-            type="button"
-            class="employee-card"
-            @click="openEmployeeSheet(emp)"
-          >
-            <div class="employee-card__main">
-              <div class="font-bold employee-card__name">{{ emp.employee_name }}</div>
-              <div class="text-sm text-muted">{{ emp.employee_id }}</div>
-              <div v-if="emp.nik" class="text-sm text-muted font-mono">{{ emp.nik }}</div>
+        <div class="approval-split-detail">
+          <div class="detail-panel-header">
+            <div class="detail-panel-title-wrap">
+              <h2 class="detail-panel-title">Daily attendance</h2>
+              <p v-if="selectedLsLabel" class="detail-panel-sub">{{ selectedLsLabel }}</p>
+              <p v-else class="detail-panel-sub text-muted">Select an LS employee to load records.</p>
             </div>
-            <div class="employee-card__counts">
-              <span class="mini-pill">Total {{ emp.total }}</span>
-              <span v-if="emp.pending > 0" class="mini-pill mini-pill--pending">Pending {{ emp.pending }}</span>
-              <span class="mini-pill mini-pill--muted">OK {{ emp.approved }}</span>
-              <span v-if="emp.rejected > 0" class="mini-pill mini-pill--rej">Rejected {{ emp.rejected }}</span>
+            <div class="bulk-toolbar">
+              <span class="selected-info">{{ selectedIds.size }} selected</span>
+              <button class="btn btn-primary btn-sm" :disabled="selectedIds.size === 0 || bulkProcessing" @click="openBulkModal">
+                Approval
+              </button>
             </div>
-            <div class="employee-card__cta">Proses approval →</div>
-          </button>
-        </div>
-      </div>
-    </div>
+          </div>
 
-    <!-- ── Sheet: detail per orang ── -->
-    <div v-if="employeeSheet.show" class="modal-backdrop sheet-backdrop" @click.self="closeEmployeeSheet">
-      <div class="modal sheet-modal">
-        <div class="modal-header">
-          <div>
-            <span class="modal-title">{{ employeeSheet.employee_name }}</span>
-            <div class="text-sm text-muted" style="margin-top:4px;">
-              {{ employeeSheet.employee_id }}<span v-if="employeeSheet.nik"> · {{ employeeSheet.nik }}</span>
-            </div>
-          </div>
-          <button class="modal-close" @click="closeEmployeeSheet">✕</button>
-        </div>
-        <div class="modal-body sheet-body">
-          <div class="bulk-toolbar sheet-toolbar">
-            <span class="selected-info">{{ sheetSelectedIds.size }} selected</span>
-            <button class="btn btn-primary btn-sm" :disabled="sheetSelectedIds.size === 0 || bulkProcessing" @click="openBulkModal">
-              Approval
-            </button>
-          </div>
-          <div class="filter-bar">
-            <div class="search-wrap">
-              <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-              <input v-model="sheetFilters.search" @input="debouncedSheetFetch" class="form-control" placeholder="Search…" style="max-width:200px;" />
-            </div>
-            <select v-model="sheetFilters.status" @change="fetchSheetRecords" class="form-control" style="max-width:150px;">
+          <div class="detail-panel-filters">
+            <select v-model="filters.status" @change="onFilterChange" class="form-control" style="max-width:160px;">
               <option value="">All Status</option>
               <option value="pending">Pending</option>
               <option value="approved">Approved</option>
               <option value="rejected">Rejected</option>
             </select>
-            <input v-model="sheetFilters.start_date" @change="fetchSheetRecords" type="date" class="form-control" style="max-width:150px;" />
-            <input v-model="sheetFilters.end_date"   @change="fetchSheetRecords" type="date" class="form-control" style="max-width:150px;" />
-            <button class="btn btn-outline btn-sm" @click="resetSheetFilters">Reset range</button>
+            <input v-model="filters.start_date" @change="onFilterChange" type="date" class="form-control" style="max-width:150px;" />
+            <input v-model="filters.end_date" @change="onFilterChange" type="date" class="form-control" style="max-width:150px;" />
+            <button class="btn btn-outline btn-sm" @click="clearFilters">Reset</button>
           </div>
 
-          <div class="table-wrapper sheet-table">
-            <div v-if="sheetLoading" class="loading-overlay"><span class="spinner"></span> Loading…</div>
+          <div class="table-wrapper detail-table-wrap">
+            <div v-if="loading" class="loading-overlay"><span class="spinner"></span> Loading…</div>
             <table v-else>
               <thead>
                 <tr>
                   <th style="width:42px;">
-                    <input type="checkbox" :checked="sheetAllSelectableChecked" :indeterminate.prop="sheetPartiallyChecked" @change="toggleSheetSelectAll" />
+                    <input type="checkbox" :checked="allSelectableChecked" :indeterminate.prop="isPartiallyChecked" @change="toggleSelectAll" />
                   </th>
+                  <th>Employee</th>
+                  <th>NIK</th>
                   <th>Date</th>
                   <th>Clock In</th>
                   <th>Clock Out</th>
@@ -147,24 +91,38 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-if="sheetRecords.length === 0">
-                  <td colspan="9">
+                <tr v-if="!selectedUserId">
+                  <td colspan="11">
                     <div class="empty-state">
-                      <div class="empty-state-icon">📋</div>
-                      <h3>No records</h3>
-                      <p>No attendance for this person in the selected range.</p>
+                      <div class="empty-state-icon">👈</div>
+                      <h3>Select a team member</h3>
+                      <p>Choose an LS employee in the list on the left to review their attendance.</p>
                     </div>
                   </td>
                 </tr>
-                <tr v-for="r in sheetRecords" :key="r.id">
+                <tr v-else-if="records.length === 0">
+                  <td colspan="11">
+                    <div class="empty-state">
+                      <div class="empty-state-icon">✅</div>
+                      <h3>No records found</h3>
+                      <p>All attendance records have been reviewed or no records match the filters.</p>
+                    </div>
+                  </td>
+                </tr>
+                <tr v-for="r in records" :key="r.id">
                   <td>
                     <input
                       type="checkbox"
                       :disabled="r.status !== 'pending'"
-                      :checked="sheetSelectedIds.has(r.id)"
-                      @change="toggleSheetRow(r.id, $event.target.checked)"
+                      :checked="selectedIds.has(r.id)"
+                      @change="toggleRow(r.id, $event.target.checked)"
                     />
                   </td>
+                  <td>
+                    <div class="font-bold">{{ r.employee_name }}</div>
+                    <div class="text-sm text-muted">{{ r.employee_id }}</div>
+                  </td>
+                  <td><span class="text-sm font-mono">{{ r.nik || '—' }}</span></td>
                   <td>
                     <div class="font-bold">{{ formatDate(r.attendance_date) }}</div>
                     <div class="text-sm text-muted">{{ getDayName(r.attendance_date) }}</div>
@@ -202,14 +160,13 @@
             </table>
           </div>
 
-          <div v-if="sheetPagination.total > 0" class="pagination sheet-pag">
-            <span class="pagination-info">{{ ((sheetPagination.page-1)*sheetPagination.limit)+1 }}–{{ Math.min(sheetPagination.page*sheetPagination.limit, sheetPagination.total) }} of {{ sheetPagination.total }}</span>
-            <button class="btn btn-ghost btn-sm" :disabled="sheetPagination.page<=1" @click="changeSheetPage(sheetPagination.page-1)">‹ Prev</button>
-            <button class="btn btn-ghost btn-sm" :disabled="sheetPagination.page*sheetPagination.limit>=sheetPagination.total" @click="changeSheetPage(sheetPagination.page+1)">Next ›</button>
+          <div v-if="selectedUserId && pagination.total > 0" class="detail-pagination">
+            <div class="pagination">
+              <span class="pagination-info">{{ ((pagination.page-1)*pagination.limit)+1 }}–{{ Math.min(pagination.page*pagination.limit, pagination.total) }} of {{ pagination.total }}</span>
+              <button class="btn btn-ghost btn-sm" :disabled="pagination.page<=1" @click="changePage(pagination.page-1)">‹ Prev</button>
+              <button class="btn btn-ghost btn-sm" :disabled="pagination.page*pagination.limit>=pagination.total" @click="changePage(pagination.page+1)">Next ›</button>
+            </div>
           </div>
-        </div>
-        <div class="modal-footer">
-          <button class="btn btn-outline" @click="closeEmployeeSheet">Tutup</button>
         </div>
       </div>
     </div>
@@ -329,8 +286,17 @@
 <script setup>
 import { ref, reactive, computed, onMounted, inject } from 'vue';
 import api from '../../utils/api';
+import SupervisorApprovalLsSidebar from './SupervisorApprovalLsSidebar.vue';
 
-const refreshSupervisorBadges = inject('refreshSupervisorBadges', null);
+const loading = ref(false);
+const bulkProcessing = ref(false);
+const records = ref([]);
+const pagination = reactive({ total: 0, page: 1, limit: 15 });
+const filters = reactive({ status: '', start_date: '', end_date: '' });
+
+const lsMembers = ref([]);
+const sidebarSearch = ref('');
+const selectedUserId = ref(null);
 
 const monthStats = reactive({ year: null, month: null, total: 0, pending: 0, approved: 0, rejected: 0 });
 const overviewLoading = ref(false);
@@ -368,10 +334,38 @@ const sortedOverviewEmployees = computed(() =>
   )
 );
 
-const displayedOverviewEmployees = computed(() => {
-  const uid = overviewEmployeeUserId.value;
-  if (!uid) return employees.value;
-  return employees.value.filter((e) => String(e.user_id) === uid);
+const filteredLsMembers = computed(() => {
+  const q = sidebarSearch.value.trim().toLowerCase();
+  let list = lsMembers.value;
+  if (q) {
+    list = list.filter(
+      (m) =>
+        (m.name || '').toLowerCase().includes(q) ||
+        String(m.nik || '').toLowerCase().includes(q) ||
+        String(m.employee_id || '').toLowerCase().includes(q)
+    );
+  }
+  const sel = selectedUserId.value;
+  if (sel != null && !list.some((m) => m.id === sel)) {
+    const full = lsMembers.value.find((m) => m.id === sel);
+    if (full) list = [full, ...list];
+  }
+  return list;
+});
+
+const selectedLsLabel = computed(() => {
+  const id = selectedUserId.value;
+  if (id == null) return '';
+  const m = lsMembers.value.find((x) => x.id === id);
+  if (!m) return '';
+  return `${m.name} · ${m.nik || '—'}`;
+});
+
+const pendingIdsOnPage = computed(() => records.value.filter((r) => r.status === 'pending').map((r) => r.id));
+const allSelectableChecked = computed(() => pendingIdsOnPage.value.length > 0 && pendingIdsOnPage.value.every((id) => selectedIds.value.has(id)));
+const isPartiallyChecked = computed(() => {
+  const selectedOnPage = pendingIdsOnPage.value.filter((id) => selectedIds.value.has(id)).length;
+  return selectedOnPage > 0 && selectedOnPage < pendingIdsOnPage.value.length;
 });
 
 const sheetPendingIdsOnPage = computed(() => sheetRecords.value.filter((r) => r.status === 'pending').map((r) => r.id));
@@ -381,54 +375,67 @@ const sheetPartiallyChecked = computed(() => {
   return n > 0 && n < sheetPendingIdsOnPage.value.length;
 });
 
-const currentMonthBounds = () => {
-  const t = new Date();
-  const y = t.getFullYear();
-  const m = t.getMonth() + 1;
-  const start = `${y}-${String(m).padStart(2, '0')}-01`;
-  const lastD = new Date(y, m, 0).getDate();
-  const end = `${y}-${String(m).padStart(2, '0')}-${String(lastD).padStart(2, '0')}`;
-  return { start, end, y, m };
-};
-
-const fetchMonthStats = async () => {
-  try {
-    const { data } = await api.get('/attendance/team/month-stats');
-    const d = data?.data;
-    if (d) {
-      Object.assign(monthStats, {
-        year: d.year,
-        month: d.month,
-        total: d.total ?? 0,
-        pending: d.pending ?? 0,
-        approved: d.approved ?? 0,
-        rejected: d.rejected ?? 0,
-      });
-    }
-  } catch { /* silent */ }
-};
-
-const fetchEmployeesOverview = async () => {
-  overviewLoading.value = true;
-  try {
-    const { data } = await api.get('/attendance/team/employees-overview');
-    employees.value = data?.data || [];
-    if (data?.meta?.year && data?.meta?.month) {
-      monthStats.year = data.meta.year;
-      monthStats.month = data.meta.month;
-    }
-    if (overviewEmployeeUserId.value && !employees.value.some((e) => String(e.user_id) === overviewEmployeeUserId.value)) {
-      overviewEmployeeUserId.value = '';
-    }
-  } catch {
-    employees.value = [];
-  } finally {
-    overviewLoading.value = false;
+const syncSelectionToMembers = () => {
+  const list = lsMembers.value;
+  if (!list.length) {
+    selectedUserId.value = null;
+    return;
+  }
+  if (selectedUserId.value == null || !list.some((m) => m.id === selectedUserId.value)) {
+    selectedUserId.value = list[0].id;
   }
 };
 
-const clearOverviewEmployeeFilter = () => {
-  overviewEmployeeUserId.value = '';
+const fetchLsMembers = async () => {
+  try {
+    const { data } = await api.get('/attendance/team/members');
+    lsMembers.value = data.data || [];
+    syncSelectionToMembers();
+  } catch { /* silent */ }
+};
+
+const fetchData = async () => {
+  if (selectedUserId.value == null) {
+    records.value = [];
+    Object.assign(pagination, { total: 0, page: 1 });
+    return;
+  }
+  loading.value = true;
+  try {
+    const params = {
+      page: pagination.page,
+      limit: pagination.limit,
+      user_id: selectedUserId.value,
+    };
+    if (filters.status)     params.status     = filters.status;
+    if (filters.start_date) params.start_date = filters.start_date;
+    if (filters.end_date)   params.end_date   = filters.end_date;
+    const { data } = await api.get('/attendance/team', { params });
+    records.value = data.data;
+    Object.assign(pagination, data.pagination);
+    const selectableSet = new Set(records.value.filter((r) => r.status === 'pending').map((r) => r.id));
+    selectedIds.value = new Set([...selectedIds.value].filter((id) => selectableSet.has(id)));
+  } catch { /* silent */ } finally { loading.value = false; }
+};
+
+const onSelectUser = (id) => {
+  if (selectedUserId.value === id) return;
+  selectedUserId.value = id;
+  pagination.page = 1;
+  fetchData();
+};
+
+const onFilterChange = () => {
+  pagination.page = 1;
+  fetchData();
+};
+
+const changePage = (p) => { pagination.page = p; fetchData(); };
+const clearFilters = () => {
+  Object.assign(filters, { status:'', start_date:'', end_date:'' });
+  pagination.page = 1;
+  selectedIds.value = new Set();
+  fetchData();
 };
 
 const openEmployeeSheet = (emp) => {
@@ -568,13 +575,13 @@ const calcDuration = (inT, outT) => {
 };
 
 onMounted(async () => {
-  await fetchMonthStats();
-  await fetchEmployeesOverview();
+  await fetchLsMembers();
+  await fetchData();
 });
 </script>
 
 <style scoped>
-.bulk-toolbar { display: flex; align-items: center; gap: 8px; }
+.bulk-toolbar { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .selected-info {
   font-size: 12px;
   font-weight: 600;
@@ -590,6 +597,89 @@ onMounted(async () => {
 .text-red   { color: var(--bc-rejected); }
 .location-cell { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--bc-gray-500); }
 
+.approval-master-detail-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.approval-split {
+  display: flex;
+  align-items: stretch;
+  min-height: min(70vh, 640px);
+  max-height: min(78vh, 720px);
+}
+
+.approval-split-master {
+  flex: 3 1 0;
+  min-width: 200px;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.approval-split-detail {
+  flex: 7 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  min-height: 0;
+}
+
+.detail-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--bc-gray-100);
+}
+
+.detail-panel-title-wrap {
+  min-width: 0;
+}
+
+.detail-panel-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--bc-green-600);
+  letter-spacing: -0.02em;
+}
+
+.detail-panel-sub {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--bc-gray-600);
+}
+
+.detail-panel-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px 12px;
+  border-bottom: 1px solid var(--bc-gray-100);
+  background: #fafdfb;
+}
+
+.detail-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: none;
+  border-radius: 0;
+}
+
+.detail-pagination {
+  flex-shrink: 0;
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--bc-gray-100);
+  background: #fff;
+}
+
 .detail-grid { display: flex; flex-direction: column; gap: 20px; }
 .detail-section h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; color: var(--bc-green-600); margin-bottom: 10px; }
 .dl { display: flex; flex-direction: column; gap: 6px; }
@@ -600,94 +690,19 @@ onMounted(async () => {
 .rejection-note { font-size: 13.5px; color: var(--bc-gray-700); background: #fee2e2; padding: 12px; border-radius: var(--radius); }
 .ot-sum { margin: 0; font-size: 13px; white-space: pre-wrap; color: var(--bc-gray-700); }
 
-.filter-bar--wrap { flex-wrap: wrap; align-items: center; gap: 10px; }
-.overview-filter-label {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--bc-gray-600);
-  margin: 0;
-}
-.overview-employee-select {
-  min-width: 220px;
-  max-width: min(420px, 100%);
-}
-
-.overview-body { position: relative; min-height: 120px; }
-.employee-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 14px;
-  padding: 16px;
-}
-.employee-card {
-  text-align: left;
-  border: 1px solid var(--bc-gray-200);
-  border-radius: var(--radius);
-  padding: 14px 16px;
-  background: var(--bc-white);
-  cursor: pointer;
-  transition: box-shadow .15s, border-color .15s;
-}
-.employee-card:hover {
-  border-color: var(--bc-green-500);
-  box-shadow: var(--shadow-sm);
-}
-.employee-card__name { font-size: 15px; }
-.employee-card__counts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
-}
-.mini-pill {
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 8px;
-  border-radius: 999px;
-  background: var(--bc-gray-100);
-  color: var(--bc-gray-700);
-}
-.mini-pill--pending { background: #fef3c7; color: #b45309; }
-.mini-pill--muted { background: #ecfdf5; color: var(--bc-green-700); }
-.mini-pill--rej { background: #fee2e2; color: #b91c1c; }
-.employee-card__cta {
-  margin-top: 12px;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--bc-green-600);
-}
-.empty-state--pad { padding: 32px 16px; }
-
-.sheet-backdrop { align-items: flex-end; justify-content: center; padding: 0; }
-@media (min-width: 900px) {
-  .sheet-backdrop { align-items: center; padding: 24px; }
-}
-.sheet-modal {
-  width: 100%;
-  max-width: 960px;
-  max-height: 92vh;
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  border-radius: 12px 12px 0 0;
-}
-@media (min-width: 900px) {
-  .sheet-modal { border-radius: 12px; max-height: 90vh; }
-}
-.sheet-body {
-  overflow: auto;
-  flex: 1;
-  min-height: 0;
-}
-.sheet-toolbar { margin-bottom: 12px; }
-.sheet-table { border: 1px solid var(--bc-gray-200); border-radius: var(--radius); }
-.sheet-pag {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 12px;
-  padding-bottom: 4px;
+@media (max-width: 900px) {
+  .approval-split {
+    flex-direction: column;
+    max-height: none;
+  }
+  .approval-split-master {
+    max-width: none;
+    flex: 0 0 auto;
+    max-height: 240px;
+  }
+  .approval-split-detail {
+    flex: 1 1 auto;
+    min-height: 360px;
+  }
 }
 </style>

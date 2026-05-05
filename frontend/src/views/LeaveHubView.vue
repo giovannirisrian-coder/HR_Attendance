@@ -1,7 +1,7 @@
 <template>
-  <div>
-    <div class="page-header">
-      <div>
+  <div class="leave-hub" :class="isSupervisor ? 'leave-hub--supervisor-split' : 'leave-hub--single'">
+    <header class="leave-obj-header">
+      <div class="leave-obj-header__titles">
         <h1 class="page-title">{{ isLs ? 'Leave' : 'Leave approvals' }}</h1>
         <p class="page-subtitle">Cuti, izin, dan sakit</p>
       </div>
@@ -120,6 +120,145 @@
               <button class="btn btn-ghost btn-sm" :disabled="pagination.page <= 1" @click="changePage(pagination.page - 1)">‹ Prev</button>
               <button class="btn btn-ghost btn-sm" :disabled="pagination.page * pagination.limit >= pagination.total" @click="changePage(pagination.page + 1)">Next ›</button>
             </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <template v-else-if="isSupervisor">
+      <div class="leave-supervisor-split">
+        <aside class="leave-master card" aria-label="Daftar karyawan LS">
+          <div class="leave-master__head">
+            <span class="card-title leave-master__title">Karyawan LS</span>
+            <div class="search-wrap leave-master__search">
+              <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+              <input v-model="sidebarSearch" class="form-control" type="search" placeholder="Cari nama atau NIK…" autocomplete="off" />
+            </div>
+          </div>
+          <div class="leave-master__scroll">
+            <div v-if="loading" class="leave-master__loading"><span class="spinner"></span> Memuat…</div>
+            <template v-else>
+              <p v-if="filteredSidebarEmployees.length === 0" class="leave-master__empty text-muted text-sm">
+                {{ uniqueEmployees.length === 0 ? 'Belum ada pengajuan tim untuk filter ini.' : 'Tidak ada karyawan yang cocok.' }}
+              </p>
+              <ul v-else class="leave-master__list" role="listbox" :aria-activedescendant="selectedUserId ? `ls-item-${selectedUserId}` : undefined">
+                <li
+                  v-for="emp in filteredSidebarEmployees"
+                  :id="`ls-item-${emp.user_id}`"
+                  :key="emp.user_id"
+                  role="option"
+                  :aria-selected="selectedUserId == emp.user_id"
+                  class="leave-master__item"
+                  :class="{ 'leave-master__item--active': selectedUserId == emp.user_id }"
+                  @click="selectedUserId = emp.user_id"
+                >
+                  <div class="leave-master__item-name">{{ emp.employee_name }}</div>
+                  <div class="leave-master__item-nik" title="NIK">{{ emp.nik || '—' }}</div>
+                  <span v-if="pendingCountForUser(emp.user_id) > 0" class="leave-master__pending">{{ pendingCountForUser(emp.user_id) }} pending</span>
+                </li>
+              </ul>
+            </template>
+          </div>
+        </aside>
+
+        <div class="leave-detail card">
+          <div class="leave-detail__head card-header">
+            <div class="leave-detail__head-left">
+              <span class="card-title">Pengajuan tim</span>
+              <template v-if="selectedEmployeeLabel">
+                <span class="leave-detail__sep" aria-hidden="true">·</span>
+                <span class="leave-detail__selected">{{ selectedEmployeeLabel }}</span>
+              </template>
+            </div>
+          </div>
+          <div class="leave-detail__filter-row detail-panel-filters">
+            <select v-model="filterRequestType" class="form-control leave-detail__select" @change="onFilterChange">
+              <option value="">Semua jenis</option>
+              <option value="cuti">Cuti</option>
+              <option value="izin">Izin</option>
+              <option value="sakit">Sakit</option>
+            </select>
+            <select v-model="filters.status" class="form-control leave-detail__select" @change="onFilterChange">
+              <option value="">Semua status</option>
+              <option value="pending">Pending</option>
+              <option value="approved">Disetujui</option>
+              <option value="rejected">Ditolak</option>
+            </select>
+            <input v-model="filters.start_date" type="date" class="form-control leave-detail__date" @change="onFilterChange" />
+            <input v-model="filters.end_date" type="date" class="form-control leave-detail__date" @change="onFilterChange" />
+            <button type="button" class="btn btn-outline btn-sm" @click="clearSupervisorDetailFilters">Reset</button>
+          </div>
+          <p v-if="supervisorTruncated" class="leave-detail__trunc text-sm text-muted">
+            Menampilkan {{ records.length }} pengajuan terbaru dari {{ pagination.total }} total — saring jenis, status, atau tanggal untuk menyempitkan.
+          </p>
+          <div class="leave-detail__body">
+            <template v-if="!selectedUserId">
+              <div class="empty-state leave-detail__placeholder">
+                <div class="empty-state-icon">👈</div>
+                <h3>Pilih karyawan LS</h3>
+                <p>Gunakan daftar di kiri untuk membuka cuti, izin, dan sakit.</p>
+              </div>
+            </template>
+            <template v-else>
+              <div v-if="sortedLeavesForSelectedUser.length === 0" class="empty-state leave-detail__placeholder">
+                <div class="empty-state-icon">📋</div>
+                <h3>Tidak ada pengajuan</h3>
+                <p class="text-muted text-sm">Tidak ada cuti, izin, atau sakit untuk karyawan ini dengan filter saat ini.</p>
+              </div>
+              <div v-else class="table-wrapper leave-detail__table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Jenis</th>
+                      <th>Periode</th>
+                      <th>Hari</th>
+                      <th>Alasan</th>
+                      <th>Status</th>
+                      <th style="min-width:200px;">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="r in sortedLeavesForSelectedUser" :key="r.id">
+                      <td><span class="badge badge-type">{{ typeLabel(r.request_type) }}</span></td>
+                      <td>
+                        <div class="font-bold">{{ fmtRange(r.start_date, r.end_date) }}</div>
+                      </td>
+                      <td>{{ countDays(r.start_date, r.end_date) }}</td>
+                      <td><span class="cell-reason">{{ r.reason || '—' }}</span></td>
+                      <td><span class="badge" :class="`badge-${r.status}`">{{ r.status }}</span></td>
+                      <td>
+                        <div class="action-btns">
+                          <template v-if="r.status === 'pending'">
+                            <button class="btn btn-primary btn-sm" :disabled="actionId === r.id" @click="approve(r.id)">Setujui</button>
+                            <button class="btn btn-danger btn-sm" :disabled="actionId === r.id" @click="openReject(r)">Tolak</button>
+                          </template>
+                          <span v-else class="text-muted text-sm">—</span>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="rejectModal.show" class="modal-backdrop" @click.self="rejectModal.show = false">
+        <div class="modal" style="max-width:440px;">
+          <div class="modal-header">
+            <span class="modal-title">Tolak pengajuan</span>
+            <button type="button" class="modal-close" @click="rejectModal.show = false">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label class="form-label">Alasan <span style="color:var(--bc-rejected)">*</span></label>
+              <textarea v-model="rejectModal.note" class="form-control" rows="3" placeholder="Berikan alasan…" />
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline" @click="rejectModal.show = false">Batal</button>
+            <button type="button" class="btn btn-danger" :disabled="!rejectModal.note.trim() || actionId" @click="confirmReject">Konfirmasi</button>
           </div>
         </div>
       </div>
@@ -391,13 +530,16 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, inject } from 'vue';
+import { ref, reactive, computed, onMounted, watch } from 'vue';
 import api from '../utils/api';
 import { getUser } from '../utils/auth';
+import { formatYmdLocal, formatCalendarDateLocale } from '../utils/calendarDate';
 
 const user = getUser();
 const isLs = computed(() => user?.role === 'ls');
-const refreshSupervisorBadges = inject('refreshSupervisorBadges', null);
+const isSupervisor = computed(() => user?.role === 'ls_supervisor');
+
+const SUPERVISOR_TEAM_FETCH_LIMIT = 500;
 
 const typeLabel = (t) => ({ cuti: 'Cuti', izin: 'Izin', sakit: 'Sakit' }[t] || t);
 
@@ -415,62 +557,75 @@ const records = ref([]);
 const pagination = reactive({ total: 0, page: 1, limit: 15 });
 const filterStatus = ref('');
 const filterRequestType = ref('');
+const filters = reactive({ search: '', status: '', start_date: '', end_date: '' });
 const rejectModal = reactive({ show: false, id: null, note: '' });
 const actionId = ref(null);
 
-const leaveMonthStats = reactive({ year: null, month: null, total: 0, pending: 0, approved: 0, rejected: 0 });
-const leaveMonthStatsLabel = computed(() => {
-  if (!leaveMonthStats.year || !leaveMonthStats.month) return 'Bulan berjalan';
-  const d = new Date(leaveMonthStats.year, leaveMonthStats.month - 1, 1);
-  return d.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
-});
+const sidebarSearch = ref('');
+const selectedUserId = ref(null);
 
-const teamEmployees = ref([]);
-const overviewLoading = ref(false);
-const overviewEmployeeUserId = ref('');
-
-const sortedTeamEmployeeOptions = computed(() =>
-  [...teamEmployees.value].sort((a, b) =>
+const uniqueEmployees = computed(() => {
+  const map = new Map();
+  for (const r of records.value) {
+    const uid = r.user_id;
+    if (uid == null) continue;
+    if (!map.has(uid)) {
+      map.set(uid, {
+        user_id: uid,
+        employee_name: r.employee_name,
+        employee_id: r.employee_id,
+        nik: r.nik || null,
+      });
+    } else if (r.nik) {
+      const cur = map.get(uid);
+      if (!cur.nik) cur.nik = r.nik;
+    }
+  }
+  return [...map.values()].sort((a, b) =>
     String(a.employee_name || '').localeCompare(String(b.employee_name || ''), 'id', { sensitivity: 'base' })
-  )
-);
-
-const displayedTeamEmployees = computed(() => {
-  const uid = overviewEmployeeUserId.value;
-  if (!uid) return teamEmployees.value;
-  return teamEmployees.value.filter((e) => String(e.user_id) === uid);
+  );
 });
 
-const leaveEmployeeSheet = reactive({
-  show: false,
-  user_id: null,
-  employee_name: '',
-  employee_id: '',
-  nik: null,
+const filteredSidebarEmployees = computed(() => {
+  const q = sidebarSearch.value.trim().toLowerCase();
+  if (!q) return uniqueEmployees.value;
+  return uniqueEmployees.value.filter(
+    (e) =>
+      String(e.employee_name || '').toLowerCase().includes(q) ||
+      String(e.nik || '').toLowerCase().includes(q) ||
+      String(e.employee_id || '').toLowerCase().includes(q)
+  );
 });
-const sheetLoading = ref(false);
-const sheetRecords = ref([]);
-const sheetPagination = reactive({ total: 0, page: 1, limit: 15 });
-const sheetFilters = reactive({ status: '', start_date: '', end_date: '' });
-const sheetFilterRequestType = ref('');
-const sheetMonthBounds = reactive({ start: '', end: '' });
 
-const sheetSelectedLeaveIds = ref(new Set());
-const leaveBulkModal = reactive({ show: false, action: 'approve', note: '' });
-const leaveBulkProcessing = ref(false);
-
-const sheetPendingLeaveIdsOnPage = computed(() =>
-  sheetRecords.value.filter((r) => r.status === 'pending').map((r) => r.id)
-);
-const sheetLeaveAllSelectableChecked = computed(
-  () =>
-    sheetPendingLeaveIdsOnPage.value.length > 0 &&
-    sheetPendingLeaveIdsOnPage.value.every((id) => sheetSelectedLeaveIds.value.has(id))
-);
-const sheetLeavePartiallyChecked = computed(() => {
-  const n = sheetPendingLeaveIdsOnPage.value.filter((id) => sheetSelectedLeaveIds.value.has(id)).length;
-  return n > 0 && n < sheetPendingLeaveIdsOnPage.value.length;
+const leavesForSelectedUser = computed(() => {
+  if (selectedUserId.value == null) return [];
+  return records.value.filter((r) => r.user_id == selectedUserId.value);
 });
+
+const sortedLeavesForSelectedUser = computed(() =>
+  leavesForSelectedUser.value
+    .slice()
+    .sort((a, b) => {
+      const cmp = String(b.start_date || '').localeCompare(String(a.start_date || ''));
+      if (cmp !== 0) return cmp;
+      return (b.id || 0) - (a.id || 0);
+    })
+);
+
+const selectedEmployeeLabel = computed(() => {
+  const emp = uniqueEmployees.value.find((e) => e.user_id == selectedUserId.value);
+  if (!emp) return '';
+  return `${emp.employee_name} · NIK ${emp.nik || '—'}`;
+});
+
+const supervisorTruncated = computed(
+  () => isSupervisor.value && pagination.total > records.value.length
+);
+
+function pendingCountForUser(userId) {
+  return records.value.filter((r) => r.user_id == userId && r.status === 'pending').length;
+}
+
 const reasonRequired = computed(() => form.request_type === 'izin' || form.request_type === 'sakit');
 const reasonPlaceholder = computed(() => {
   if (form.request_type === 'cuti') return 'Opsional — konteks untuk approver…';
@@ -484,24 +639,23 @@ const dayCount = computed(() => {
 });
 
 const countDays = (start, end) => {
-  const a = new Date(`${start}T12:00:00`).getTime();
-  const b = new Date(`${end}T12:00:00`).getTime();
+  const a = new Date(`${String(start).slice(0, 10)}T12:00:00`).getTime();
+  const b = new Date(`${String(end).slice(0, 10)}T12:00:00`).getTime();
   if (Number.isNaN(a) || Number.isNaN(b)) return '—';
   const d = Math.floor((b - a) / 86400000) + 1;
   return d < 1 ? '—' : d;
 };
 
-const fmtShort = (d) => new Date(d).toLocaleDateString('en-ID', { day: '2-digit', month: 'short', year: 'numeric' });
+const fmtShort = (d) => formatCalendarDateLocale(d, 'en-ID', { day: '2-digit', month: 'short', year: 'numeric' });
 const fmtRange = (s, e) => {
   if (s === e) return fmtShort(s);
   return `${fmtShort(s)} → ${fmtShort(e)}`;
 };
 
 const resetFormDates = () => {
-  const t = new Date();
-  const iso = t.toISOString().split('T')[0];
-  form.start_date = iso;
-  form.end_date = iso;
+  const ymd = formatYmdLocal();
+  form.start_date = ymd;
+  form.end_date = ymd;
   form.reason = '';
   form.request_type = 'cuti';
 };
@@ -511,177 +665,11 @@ const onFilterChange = () => {
   fetchList();
 };
 
-const currentMonthBounds = () => {
-  const t = new Date();
-  const y = t.getFullYear();
-  const m = t.getMonth() + 1;
-  const start = `${y}-${String(m).padStart(2, '0')}-01`;
-  const lastD = new Date(y, m, 0).getDate();
-  const end = `${y}-${String(m).padStart(2, '0')}-${String(lastD).padStart(2, '0')}`;
-  return { start, end };
-};
-
-const fetchLeaveMonthStats = async () => {
-  try {
-    const { data } = await api.get('/leaves/team/month-stats');
-    const d = data?.data;
-    if (d) {
-      Object.assign(leaveMonthStats, {
-        year: d.year,
-        month: d.month,
-        total: d.total ?? 0,
-        pending: d.pending ?? 0,
-        approved: d.approved ?? 0,
-        rejected: d.rejected ?? 0,
-      });
-    }
-  } catch { /* */ }
-};
-
-const fetchTeamEmployeesOverview = async () => {
-  overviewLoading.value = true;
-  try {
-    const { data } = await api.get('/leaves/team/employees-overview');
-    teamEmployees.value = data?.data || [];
-    if (data?.meta?.year && data?.meta?.month) {
-      leaveMonthStats.year = data.meta.year;
-      leaveMonthStats.month = data.meta.month;
-    }
-    if (overviewEmployeeUserId.value && !teamEmployees.value.some((e) => String(e.user_id) === overviewEmployeeUserId.value)) {
-      overviewEmployeeUserId.value = '';
-    }
-  } catch {
-    teamEmployees.value = [];
-  } finally {
-    overviewLoading.value = false;
-  }
-};
-
-const clearOverviewEmployeeFilter = () => {
-  overviewEmployeeUserId.value = '';
-};
-
-const refreshSupervisorLeaveData = async () => {
-  await fetchLeaveMonthStats();
-  await fetchTeamEmployeesOverview();
-  if (leaveEmployeeSheet.show) await fetchSheetLeaves();
-  if (typeof refreshSupervisorBadges === 'function') await refreshSupervisorBadges();
-};
-
-const openLeaveEmployeeSheet = (emp) => {
-  const { start, end } = currentMonthBounds();
-  leaveEmployeeSheet.user_id = emp.user_id;
-  leaveEmployeeSheet.employee_name = emp.employee_name;
-  leaveEmployeeSheet.employee_id = emp.employee_id;
-  leaveEmployeeSheet.nik = emp.nik;
-  leaveEmployeeSheet.show = true;
-  sheetMonthBounds.start = start;
-  sheetMonthBounds.end = end;
-  sheetFilterRequestType.value = '';
-  Object.assign(sheetFilters, { status: '', start_date: start, end_date: end });
-  sheetPagination.page = 1;
-  sheetSelectedLeaveIds.value = new Set();
-  fetchSheetLeaves();
-};
-
-const closeLeaveEmployeeSheet = () => {
-  leaveEmployeeSheet.show = false;
-  sheetSelectedLeaveIds.value = new Set();
-  refreshSupervisorLeaveData();
-};
-
-const resetSheetLeaveFilters = () => {
-  sheetFilterRequestType.value = '';
-  Object.assign(sheetFilters, {
-    status: '',
-    start_date: sheetMonthBounds.start,
-    end_date: sheetMonthBounds.end,
-  });
-  sheetPagination.page = 1;
-  fetchSheetLeaves();
-};
-
-const onSheetFilterChange = () => {
-  sheetPagination.page = 1;
-  fetchSheetLeaves();
-};
-
-const fetchSheetLeaves = async () => {
-  if (!leaveEmployeeSheet.user_id) return;
-  sheetLoading.value = true;
-  try {
-    const params = {
-      page: sheetPagination.page,
-      limit: sheetPagination.limit,
-      user_id: leaveEmployeeSheet.user_id,
-      start_date: sheetFilters.start_date,
-      end_date: sheetFilters.end_date,
-    };
-    if (sheetFilterRequestType.value) params.request_type = sheetFilterRequestType.value;
-    if (sheetFilters.status) params.status = sheetFilters.status;
-    const { data } = await api.get('/leaves/team', { params });
-    sheetRecords.value = data.data || [];
-    Object.assign(sheetPagination, data.pagination || {});
-    const selectable = new Set(sheetRecords.value.filter((r) => r.status === 'pending').map((r) => r.id));
-    sheetSelectedLeaveIds.value = new Set([...sheetSelectedLeaveIds.value].filter((id) => selectable.has(id)));
-  } catch {
-    sheetRecords.value = [];
-  } finally {
-    sheetLoading.value = false;
-  }
-};
-
-const toggleSheetLeaveSelectAll = (event) => {
-  const checked = event.target.checked;
-  const next = new Set(sheetSelectedLeaveIds.value);
-  if (checked) {
-    sheetPendingLeaveIdsOnPage.value.forEach((id) => next.add(id));
-  } else {
-    sheetPendingLeaveIdsOnPage.value.forEach((id) => next.delete(id));
-  }
-  sheetSelectedLeaveIds.value = next;
-};
-
-const toggleSheetLeaveRow = (id, checked) => {
-  const next = new Set(sheetSelectedLeaveIds.value);
-  if (checked) next.add(id);
-  else next.delete(id);
-  sheetSelectedLeaveIds.value = next;
-};
-
-const openLeaveBulkModal = () => {
-  leaveBulkModal.action = 'approve';
-  leaveBulkModal.note = '';
-  leaveBulkModal.show = true;
-};
-
-const submitLeaveBulkApproval = async () => {
-  if (leaveBulkModal.action === 'reject' && !leaveBulkModal.note.trim()) return;
-  const leave_ids = Array.from(sheetSelectedLeaveIds.value).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0);
-  if (leave_ids.length === 0) return;
-  leaveBulkProcessing.value = true;
-  try {
-    const { data } = await api.put('/leaves/approval/bulk', {
-      leave_ids,
-      action: leaveBulkModal.action,
-      rejection_note: leaveBulkModal.action === 'reject' ? leaveBulkModal.note.trim() : null,
-    });
-    if (data?.data?.skipped_count > 0) {
-      window.alert(`${data.data.skipped_count} pengajuan tidak diproses (bukan status pending).`);
-    }
-    leaveBulkModal.show = false;
-    sheetSelectedLeaveIds.value = new Set();
-    await refreshSupervisorLeaveData();
-  } catch (err) {
-    window.alert(err?.response?.data?.message || 'Bulk approval gagal.');
-  } finally {
-    leaveBulkProcessing.value = false;
-  }
-};
-
-const changeSheetPage = (p) => {
-  sheetPagination.page = p;
-  fetchSheetLeaves();
+const clearSupervisorDetailFilters = () => {
+  filters.status = '';
+  filters.start_date = '';
+  filters.end_date = '';
+  onFilterChange();
 };
 
 const fetchList = async () => {
@@ -693,10 +681,29 @@ const fetchList = async () => {
       limit: pagination.limit,
     };
     if (filterRequestType.value) params.request_type = filterRequestType.value;
-    if (filterStatus.value) params.status = filterStatus.value;
-    const { data } = await api.get('/leaves/my', { params });
-    records.value = data.data || [];
-    Object.assign(pagination, data.pagination || {});
+    if (isLs.value) {
+      if (filterStatus.value) params.status = filterStatus.value;
+      const { data } = await api.get('/leaves/my', { params });
+      records.value = data.data || [];
+      Object.assign(pagination, data.pagination || {});
+    } else if (isSupervisor.value) {
+      params.page = 1;
+      params.limit = SUPERVISOR_TEAM_FETCH_LIMIT;
+      if (filters.status) params.status = filters.status;
+      const sd = String(filters.start_date || '').slice(0, 10);
+      const ed = String(filters.end_date || '').slice(0, 10);
+      if (sd) params.start_date = sd;
+      if (ed) params.end_date = ed;
+      const { data } = await api.get('/leaves/team', { params });
+      records.value = data.data || [];
+      Object.assign(pagination, data.pagination || {});
+    } else {
+      if (filters.search.trim()) params.search = filters.search.trim();
+      if (filters.status) params.status = filters.status;
+      const { data } = await api.get('/leaves/team', { params });
+      records.value = data.data || [];
+      Object.assign(pagination, data.pagination || {});
+    }
   } catch {
     records.value = [];
   } finally {
@@ -714,10 +721,12 @@ const submitLeave = async () => {
   formError.value = '';
   submitting.value = true;
   try {
+    const startYmd = String(form.start_date || '').slice(0, 10);
+    const endYmd = String(form.end_date || '').slice(0, 10);
     const { data } = await api.post('/leaves', {
       request_type: form.request_type,
-      start_date: form.start_date,
-      end_date: form.end_date,
+      start_date: startYmd,
+      end_date: endYmd,
       reason: form.reason || null,
     });
     if (data.success) {
@@ -765,6 +774,24 @@ const confirmReject = async () => {
   }
 };
 
+watch(
+  [filteredSidebarEmployees, loading, records],
+  () => {
+    if (!isSupervisor.value) return;
+    if (loading.value) return;
+    const list = filteredSidebarEmployees.value;
+    if (list.length === 0) {
+      selectedUserId.value = null;
+      return;
+    }
+    const stillVisible = list.some((e) => e.user_id == selectedUserId.value);
+    if (selectedUserId.value == null || !stillVisible) {
+      selectedUserId.value = list[0].user_id;
+    }
+  },
+  { flush: 'post' }
+);
+
 onMounted(() => {
   resetFormDates();
   if (isLs.value) {
@@ -777,6 +804,203 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.leave-hub { max-width: 1120px; }
+.leave-hub--supervisor-split {
+  max-width: 1400px;
+}
+
+.leave-supervisor-split {
+  display: flex;
+  align-items: stretch;
+  gap: 24px;
+  min-height: min(72vh, 800px);
+}
+
+.leave-master {
+  flex: 0 0 30%;
+  width: 30%;
+  max-width: 30%;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--bc-gray-200);
+}
+
+.leave-master__head {
+  flex-shrink: 0;
+  padding: 14px 14px 12px;
+  border-bottom: 1px solid var(--bc-gray-100);
+  background: linear-gradient(180deg, #fff 0%, var(--bc-gray-50, #f9fafb) 100%);
+}
+
+.leave-master__title {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 15px;
+}
+
+.leave-master__search .form-control {
+  width: 100%;
+  max-width: none;
+  border-color: var(--bc-gray-200);
+}
+
+.leave-master__search .form-control:focus {
+  border-color: var(--bc-green-500);
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.12);
+}
+
+.leave-master__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.leave-master__loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 28px 12px;
+  color: var(--bc-gray-600);
+  font-size: 14px;
+}
+
+.leave-master__empty {
+  padding: 16px 10px;
+  text-align: center;
+}
+
+.leave-master__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.leave-master__item {
+  padding: 12px 12px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.leave-master__item:hover {
+  background: var(--bc-gray-50, #f9fafb);
+  border-color: var(--bc-gray-200);
+}
+
+.leave-master__item--active {
+  background: #ecfdf5;
+  border-color: var(--bc-green-500);
+  box-shadow: 0 1px 2px rgba(22, 101, 52, 0.08);
+}
+
+.leave-master__item-name {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--bc-gray-900);
+}
+
+.leave-master__item-nik {
+  font-size: 12px;
+  color: var(--bc-gray-600);
+  margin-top: 2px;
+  font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.leave-master__pending {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.leave-detail {
+  flex: 1 1 70%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--bc-gray-200);
+}
+
+.leave-detail__head {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--bc-gray-100);
+  background: #fff;
+}
+
+.leave-detail__head-left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.leave-detail__sep {
+  color: var(--bc-gray-400);
+}
+
+.leave-detail__selected {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--bc-green-800);
+}
+
+.leave-detail__select {
+  max-width: 160px;
+}
+
+.leave-detail__filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px 12px;
+  border-bottom: 1px solid var(--bc-gray-100);
+  background: #fafdfb;
+}
+
+.leave-detail__date {
+  max-width: 150px;
+}
+
+.leave-detail__trunc {
+  margin: 0;
+  padding: 8px 16px 0;
+}
+
+.leave-detail__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 16px 20px;
+}
+
+.leave-detail__placeholder {
+  padding: 40px 16px;
+}
+
+.leave-detail__table-wrap {
+  border: 1px solid var(--bc-gray-200);
+  border-radius: 8px;
+}
 .leave-obj-header {
   display: flex;
   align-items: stretch;
@@ -942,5 +1166,17 @@ onMounted(() => {
 
 @media (max-width: 900px) {
   .leave-grid { grid-template-columns: 1fr; }
+
+  .leave-supervisor-split {
+    flex-direction: column;
+    min-height: auto;
+  }
+
+  .leave-master {
+    flex: 0 0 auto;
+    width: 100%;
+    max-width: none;
+    max-height: 280px;
+  }
 }
 </style>
