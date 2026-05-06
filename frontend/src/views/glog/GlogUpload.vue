@@ -74,22 +74,20 @@
           </div>
           <div>Data Baru: <strong>{{ lastProcessStats.attendance_inserted }}</strong></div>
           <div>Data Diupdate (hanya status pending): <strong>{{ lastProcessStats.attendance_updated_pending }}</strong></div>
-          <div>Lewati — Data Sudah Sama: <strong>{{ lastProcessStats.attendance_skipped_duplicate_noop }}</strong></div>
-          <div>Lewati — Data Sudah Disetujui/Ditolak: <strong>{{ lastProcessStats.attendance_skipped_non_pending }}</strong></div>
-          <div>Lewati — NIK Tidak Cocok dengan Data Karyawan: <strong>{{ lastProcessStats.attendance_skipped_unmatched_nik }}</strong></div>
-          <div>Lewati — NIK ambigu (&gt;1 karyawan): <strong>{{ lastProcessStats.attendance_skipped_ambiguous_nik }}</strong></div>
-          <div>Lewati — Tanggal/Jam Tidak Valid: <strong>{{ lastProcessStats.attendance_skipped_invalid_time }}</strong></div>
+          <div>Skip — Data Sudah Sama: <strong>{{ lastProcessStats.attendance_skipped_duplicate_noop }}</strong></div>
+          <div>Skip — Data Sudah Disetujui/Ditolak: <strong>{{ lastProcessStats.attendance_skipped_non_pending }}</strong></div>
+          <div>Skip — NIK Tidak Cocok dengan Data Karyawan: <strong>{{ lastProcessStats.attendance_skipped_unmatched_nik }}</strong></div>
+          <div>Skip — Tanggal/Jam Tidak Valid: <strong>{{ lastProcessStats.attendance_skipped_invalid_time }}</strong></div>
         </div>
         <div v-if="lastPatchStats" class="batch-summary" style="margin-top:12px;">
           <div class="text-sm" style="font-weight:700;margin-bottom:6px;">Hasil Submit ke <code>attendance</code></div>
-          <div>Karyawan placeholder dibuat (user LS + <code>employees</code>): <strong>{{ lastPatchStats.employee_placeholder_created }}</strong></div>
+          <div>Karyawan : <strong>{{ lastPatchStats.employee_placeholder_created }}</strong></div>
           <div>Data Baru: <strong>{{ lastPatchStats.attendance_inserted }}</strong></div>
           <div>Data Diupdate (hanya status pending): <strong>{{ lastPatchStats.attendance_updated_pending }}</strong></div>
-          <div>Lewati — Data Sudah Sama: <strong>{{ lastPatchStats.attendance_skipped_duplicate_noop }}</strong></div>
-          <div>Lewati — Data Sudah Disetujui/Ditolak: <strong>{{ lastPatchStats.attendance_skipped_non_pending }}</strong></div>
-          <div>Lewati — NIK Tidak Cocok dengan Data Karyawan: <strong>{{ lastPatchStats.attendance_skipped_unmatched_nik }}</strong></div>
-          <div>Lewati — NIK ambigu: <strong>{{ lastPatchStats.attendance_skipped_ambiguous_nik }}</strong></div>
-          <div>Lewati — Tanggal/Jam Tidak Valid: <strong>{{ lastPatchStats.attendance_skipped_invalid_time }}</strong></div>
+          <div>Skip — Data Sudah Sama: <strong>{{ lastPatchStats.attendance_skipped_duplicate_noop }}</strong></div>
+          <div>Skip — Data Sudah Disetujui/Ditolak: <strong>{{ lastPatchStats.attendance_skipped_non_pending }}</strong></div>
+          <div>Skip — NIK Tidak Cocok dengan Data Karyawan: <strong>{{ lastPatchStats.attendance_skipped_unmatched_nik }}</strong></div>
+          <div>Skip — Tanggal/Jam Tidak Valid: <strong>{{ lastPatchStats.attendance_skipped_invalid_time }}</strong></div>
         </div>
       </div>
     </div>
