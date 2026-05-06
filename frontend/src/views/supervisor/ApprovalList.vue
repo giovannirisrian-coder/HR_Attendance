@@ -438,6 +438,50 @@ const clearFilters = () => {
   fetchData();
 };
 
+/** YYYY-MM-DD bounds for the supervisor’s local calendar month (used by sheet filters). */
+const currentMonthBounds = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
+  const pad = (n) => String(n).padStart(2, '0');
+  const start = `${year}-${pad(month)}-01`;
+  const lastDay = new Date(year, month, 0).getDate();
+  const end = `${year}-${pad(month)}-${pad(lastDay)}`;
+  return { start, end };
+};
+
+/** Team-wide counts for the current calendar month (same source as Monthly Recap). */
+const fetchMonthStats = async () => {
+  try {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth() + 1;
+    const { data } = await api.get('/attendance/team/monthly-recap', {
+      params: { year, month },
+    });
+    const rows = data?.data || [];
+    let total = 0;
+    let pending = 0;
+    let approved = 0;
+    let rejected = 0;
+    for (const r of rows) {
+      total += Number(r.total_attendance_records) || 0;
+      pending += Number(r.pending_attendance) || 0;
+      approved += Number(r.approved_attendance) || 0;
+      rejected += Number(r.rejected_attendance) || 0;
+    }
+    const meta = data?.meta || {};
+    Object.assign(monthStats, {
+      year: meta.year ?? year,
+      month: meta.month ?? month,
+      total,
+      pending,
+      approved,
+      rejected,
+    });
+  } catch { /* silent */ }
+};
+
 const toggleSelectAll = (event) => {
   const checked = event.target.checked;
   const next = new Set(selectedIds.value);
@@ -474,7 +518,6 @@ const openEmployeeSheet = (emp) => {
 const closeEmployeeSheet = async () => {
   employeeSheet.show = false;
   sheetSelectedIds.value = new Set();
-  await fetchEmployeesOverview();
   await fetchMonthStats();
   if (typeof refreshSupervisorBadges === 'function') await refreshSupervisorBadges();
 };
@@ -563,6 +606,7 @@ const submitBulkApproval = async () => {
     bulkModal.show = false;
     selectedIds.value = new Set();
     await fetchData();
+    await fetchMonthStats();
     if (typeof refreshSupervisorBadges === 'function') await refreshSupervisorBadges();
   } catch (err) {
     window.alert(err?.response?.data?.message || 'Bulk approval gagal diproses.');
@@ -593,6 +637,7 @@ const calcDuration = (inT, outT) => {
 onMounted(async () => {
   await fetchLsMembers();
   await fetchData();
+  await fetchMonthStats();
 });
 </script>
 

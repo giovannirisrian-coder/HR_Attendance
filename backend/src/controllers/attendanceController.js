@@ -540,40 +540,52 @@ const getMonthlyAttendanceRecap = async (req, res) => {
       return res.status(400).json({ success: false, message: 'year is out of allowed range.' });
     }
 
+    // Attendance aggregates only from `attendance`; leave rows in a separate subquery so joins
+    // do not duplicate attendance rows and inflate counts.
     const [rows] = await db.query(
       `SELECT
          u.id AS user_id,
          u.employee_id,
          u.name AS employee_name,
          e.nik,
-         COUNT(a.id) AS total_attendance_records,
-         SUM(CASE WHEN a.status = 'approved' THEN 1 ELSE 0 END) AS approved_attendance,
-         SUM(CASE WHEN a.status = 'pending' THEN 1 ELSE 0 END) AS pending_attendance,
-         SUM(CASE WHEN a.status = 'rejected' THEN 1 ELSE 0 END) AS rejected_attendance,
-         SUM(CASE WHEN a.clock_in_time IS NOT NULL THEN 1 ELSE 0 END) AS total_clock_in_days,
-         SUM(CASE WHEN lr.request_type = 'cuti' THEN 1 ELSE 0 END) AS leave_cuti,
-         SUM(CASE WHEN lr.request_type = 'izin' THEN 1 ELSE 0 END) AS leave_izin,
-         SUM(CASE WHEN lr.request_type = 'sakit' THEN 1 ELSE 0 END) AS leave_sakit
+         COALESCE(att.total_attendance_records, 0) AS total_attendance_records,
+         COALESCE(att.approved_attendance, 0) AS approved_attendance,
+         COALESCE(att.pending_attendance, 0) AS pending_attendance,
+         COALESCE(att.rejected_attendance, 0) AS rejected_attendance,
+         COALESCE(att.total_clock_in_days, 0) AS total_clock_in_days,
+         COALESCE(lv.leave_cuti, 0) AS leave_cuti,
+         COALESCE(lv.leave_izin, 0) AS leave_izin,
+         COALESCE(lv.leave_sakit, 0) AS leave_sakit
        FROM users u
-       LEFT JOIN employees e
-         ON e.user_id = u.id
-       LEFT JOIN attendance a
-         ON a.user_id = u.id
-        AND YEAR(a.attendance_date) = ?
-        AND MONTH(a.attendance_date) = ?
-       LEFT JOIN leave_requests lr
-         ON lr.user_id = u.id
-        AND lr.status = 'approved'
-        AND (
-          (YEAR(lr.start_date) = ? AND MONTH(lr.start_date) = ?)
-          OR
-          (YEAR(lr.end_date) = ? AND MONTH(lr.end_date) = ?)
-        )
-   
+       LEFT JOIN employees e ON e.user_id = u.id
+       LEFT JOIN (
+         SELECT
+           user_id,
+           COUNT(*) AS total_attendance_records,
+           SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved_attendance,
+           SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_attendance,
+           SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) AS rejected_attendance,
+           SUM(CASE WHEN clock_in_time IS NOT NULL THEN 1 ELSE 0 END) AS total_clock_in_days
+         FROM attendance
+         WHERE YEAR(attendance_date) = ? AND MONTH(attendance_date) = ?
+         GROUP BY user_id
+       ) att ON att.user_id = u.id
+       LEFT JOIN (
+         SELECT
+           user_id,
+           SUM(CASE WHEN request_type = 'cuti' THEN 1 ELSE 0 END) AS leave_cuti,
+           SUM(CASE WHEN request_type = 'izin' THEN 1 ELSE 0 END) AS leave_izin,
+           SUM(CASE WHEN request_type = 'sakit' THEN 1 ELSE 0 END) AS leave_sakit
+         FROM leave_requests
+         WHERE status = 'approved'
+           AND (
+             (YEAR(start_date) = ? AND MONTH(start_date) = ?)
+           )
+         GROUP BY user_id
+       ) lv ON lv.user_id = u.id
        WHERE u.supervisor_id = ? AND u.role = 'ls'
-       GROUP BY u.id, u.employee_id, u.name, e.nik
        ORDER BY u.name ASC`,
-      [year, month, year, month, year, month, supervisorId]
+      [year, month, year, month, supervisorId]
     );
 
     const firstDay = `${year}-${String(month).padStart(2, '0')}-01`;
