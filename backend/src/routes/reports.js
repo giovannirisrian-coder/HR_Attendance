@@ -21,10 +21,10 @@ const { authenticate, authorize } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 
 const docFields = upload.fields([
-  { name: 'bast_file', maxCount: 1 },
+  { name: 'tax_invoice_file', maxCount: 1 },
   { name: 'invoice_file', maxCount: 1 },
-  { name: 'recap_salary_file', maxCount: 1 },
-  { name: 'tax_file', maxCount: 1 },
+  { name: 'receipt_file', maxCount: 1 },
+  { name: 'other_supporting_documents', maxCount: 25 },
 ]);
 
 // ── LS HR ───────────────────────────────────────────────────────────────────
