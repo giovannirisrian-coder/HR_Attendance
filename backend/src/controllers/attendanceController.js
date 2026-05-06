@@ -121,7 +121,7 @@ const saveMyOvertime = async (req, res) => {
   }
 };
 
-// LS: create or update today's attendance (clock in / clock out)
+// LS: create attendance request row with in/out pairing sequence
 const createAttendance = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -166,53 +166,62 @@ const createAttendance = async (req, res) => {
     }
     const employeeId = emp.employee_id;
 
-    const [existing] = await db.query(
-      'SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?',
+    const [latestRows] = await db.query(
+      `SELECT *
+       FROM attendance
+       WHERE user_id = ? AND attendance_date = ?
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
       [userId, attendanceYmd]
     );
+    const latestRecord = latestRows[0] || null;
+    const hasOpenPair = !!(latestRecord?.clock_in_time && !latestRecord?.clock_out_time);
 
+    let affectedAttendanceId = null;
     if (type === 'clock_in') {
-      if (existing.length > 0 && existing[0].clock_in_time) {
-        return res.status(409).json({ success: false, message: 'Clock-in already recorded for this date.' });
+      if (hasOpenPair) {
+        return res.status(409).json({
+          success: false,
+          message: 'Complete clock-out for the latest clock-in before creating a new attendance pair.',
+        });
       }
 
-      if (existing.length === 0) {
-        await db.query(
-          `INSERT INTO attendance
-            (user_id, employee_id, nik, attendance_date, clock_in_time, clock_in_lat, clock_in_lng, clock_in_address, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-          [userId, employeeId, nikNorm, attendanceYmd, time, latitude || null, longitude || null, address || null]
-        );
-      } else {
-        await db.query(
-          `UPDATE attendance SET employee_id=?, nik=?, clock_in_time=?, clock_in_lat=?, clock_in_lng=?, clock_in_address=?
-           WHERE user_id=? AND attendance_date=?`,
-          [employeeId, nikNorm, time, latitude || null, longitude || null, address || null, userId, attendanceYmd]
-        );
-      }
+      const [insertResult] = await db.query(
+        `INSERT INTO attendance
+          (user_id, employee_id, nik, attendance_date, clock_in_time, clock_in_lat, clock_in_lng, clock_in_address, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+        [userId, employeeId, nikNorm, attendanceYmd, time, latitude || null, longitude || null, address || null]
+      );
+      affectedAttendanceId = insertResult.insertId;
     } else if (type === 'clock_out') {
-      if (existing.length === 0) {
-        return res.status(400).json({ success: false, message: 'No clock-in found for this date.' });
-      }
-      if (existing[0].clock_out_time) {
-        return res.status(409).json({ success: false, message: 'Clock-out already recorded for this date.' });
+      if (!hasOpenPair) {
+        return res.status(400).json({
+          success: false,
+          message: 'Clock-in is required first. Start a new clock-in pair for this date before clock-out.',
+        });
       }
 
       await db.query(
-        `UPDATE attendance SET clock_out_time=?, clock_out_lat=?, clock_out_lng=?, clock_out_address=?, nik=?, employee_id=?
-         WHERE user_id=? AND attendance_date=?`,
-        [time, latitude || null, longitude || null, address || null, nikNorm, employeeId, userId, attendanceYmd]
+        `UPDATE attendance
+         SET clock_out_time = ?, clock_out_lat = ?, clock_out_lng = ?, clock_out_address = ?, nik = ?, employee_id = ?
+         WHERE id = ?`,
+        [time, latitude || null, longitude || null, address || null, nikNorm, employeeId, latestRecord.id]
       );
+      affectedAttendanceId = latestRecord.id;
     } else {
       return res.status(400).json({ success: false, message: "type must be 'clock_in' or 'clock_out'." });
     }
 
     const [updated] = await db.query(
-      'SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?',
-      [userId, attendanceYmd]
+      'SELECT * FROM attendance WHERE id = ? LIMIT 1',
+      [affectedAttendanceId]
     );
 
-    res.json({ success: true, message: `${type === 'clock_in' ? 'Clock-in' : 'Clock-out'} recorded.`, data: updated[0] });
+    res.json({
+      success: true,
+      message: `${type === 'clock_in' ? 'Clock-in' : 'Clock-out'} recorded with Request Approval status.`,
+      data: updated[0],
+    });
   } catch (err) {
     console.error('Create attendance error:', err);
     res.status(500).json({ success: false, message: 'Server error.' });
@@ -264,7 +273,7 @@ const getMyAttendance = async (req, res) => {
        JOIN users u ON a.user_id = u.id
        LEFT JOIN employees e ON e.id = a.employee_id
        ${where}
-       ORDER BY a.attendance_date DESC
+       ORDER BY a.attendance_date DESC, a.created_at DESC, a.id DESC
        LIMIT ? OFFSET ?`,
       [...params, parseInt(limit), offset]
     );
@@ -386,7 +395,7 @@ const getTeamAttendance = async (req, res) => {
        LEFT JOIN users sup ON u.supervisor_id = sup.id
        LEFT JOIN employees e ON e.id = a.employee_id
        ${where}
-       ORDER BY a.attendance_date DESC
+       ORDER BY a.attendance_date DESC, a.created_at DESC, a.id DESC
        LIMIT ? OFFSET ?`,
       [...params, parseInt(limit), offset]
     );
