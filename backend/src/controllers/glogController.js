@@ -193,14 +193,6 @@ function toSqlTime(value) {
   return `${h}:${min}:${sec}`;
 }
 
-/** NIK untuk kolom employees.nik (max 16 karakter, digit-only diisi ke kiri). */
-function normalizeNik16ForStorage(raw) {
-  const digits = String(raw || '').replace(/\D/g, '');
-  if (!digits.length) return null;
-  if (digits.length >= 16) return digits.slice(-16);
-  return digits.padStart(16, '0');
-}
-
 function timesEqualSql(a, b) {
   return toSqlTime(a) === toSqlTime(b);
 }
@@ -212,23 +204,14 @@ function timesEqualSql(a, b) {
 async function resolveEmployeeForGlogNik(conn, rawNik) {
   const trimmed = String(rawNik || '').trim();
   if (!trimmed) return { employee: null, reason: 'empty_nik' };
-  const compact = trimmed.replace(/\s+/g, '');
   const [rows] = await conn.query(
     `SELECT e.id AS employee_id, e.user_id, e.nik
      FROM employees e
      INNER JOIN users u ON u.id = e.user_id AND u.role = 'ls' AND u.is_active = 1
-     WHERE TRIM(e.nik) <=> ?
-        OR REPLACE(TRIM(e.nik), ' ', '') <=> ?
-        OR (
-          LENGTH(REGEXP_REPLACE(TRIM(e.nik), '[^0-9]', '')) >= 4
-          AND LENGTH(REGEXP_REPLACE(TRIM(?), '[^0-9]', '')) >= 4
-          AND REGEXP_REPLACE(TRIM(e.nik), '[^0-9]', '') = REGEXP_REPLACE(TRIM(?), '[^0-9]', '')
-        )
-     LIMIT 2`,
-    [trimmed, compact, trimmed, trimmed]
+     WHERE e.nik = ? LIMIT 1`,
+    [trimmed]
   );
   if (rows.length === 0) return { employee: null, reason: 'unmatched_nik' };
-  if (rows.length > 1) return { employee: null, reason: 'ambiguous_nik' };
   return { employee: rows[0], reason: null };
 }
 
@@ -237,22 +220,21 @@ async function resolveEmployeeForGlogNik(conn, rawNik) {
  * Email deterministik per NIK; jika bentrok (sudah ada), kembalikan employee hasil resolve.
  */
 async function createPlaceholderLsUserAndEmployee(conn, row) {
-  const nik16 = normalizeNik16ForStorage(row.nik);
-  if (!nik16) return null;
+  if (!row.nik) return null;
   const name = String(row.employee_name || 'Glog Import').trim().slice(0, 150) || 'Glog Import';
-  const email = `glog_${nik16}@import.local`;
-  const passwordHash = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 10);
+  const email = `glog_${row.nik}@import.local`;
+  const passwordHash = await bcrypt.hash(process.env.PLACEHOLDER_PASSWORD, 10);
   let inTx = false;
   try {
     await conn.beginTransaction();
     inTx = true;
     const [ins] = await conn.query(
       `INSERT INTO users (name, employee_id, email, password, role, vendor_id, supervisor_id, is_active)
-       VALUES (?, NULL, ?, ?, 'ls', NULL, NULL, 1)`,
+       VALUES (?, NULL, ?, ?, 'ls', ${process.env.PLACEHOLDER_VENDOR_ID}, ${process.env.PLACEHOLDER_SUPERVISOR_ID}, 1)`,
       [name, email, passwordHash]
     );
     const userId = ins.insertId;
-    await conn.query('INSERT INTO employees (user_id, nik) VALUES (?, ?)', [userId, nik16]);
+    await conn.query('INSERT INTO employees (user_id, nik) VALUES (?, ?)', [userId, row.nik]);
     await conn.commit();
     inTx = false;
     const [empRows] = await conn.query(
@@ -363,8 +345,7 @@ async function upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnm
   }
 
   if (!employee) {
-    if (reason === 'ambiguous_nik') out.skipReason = 'ambiguous_nik';
-    else if (reason === 'empty_nik') out.skipReason = 'invalid_time';
+    if (reason === 'empty_nik') out.skipReason = 'invalid_time';
     else out.skipReason = 'unmatched_nik';
     return out;
   }
@@ -428,7 +409,6 @@ function tallyUpsertStats(stats, r) {
   if (r.result === 'insert') stats.attendance_inserted += 1;
   else if (r.result === 'update') stats.attendance_updated_pending += 1;
   else if (r.skipReason === 'non_pending') stats.attendance_skipped_non_pending += 1;
-  else if (r.skipReason === 'ambiguous_nik') stats.attendance_skipped_ambiguous_nik += 1;
   else if (r.skipReason === 'invalid_time') stats.attendance_skipped_invalid_time += 1;
   else if (r.skipReason === 'unmatched_nik') stats.attendance_skipped_unmatched_nik += 1;
   else if (r.skipReason === 'duplicate_noop') stats.attendance_skipped_duplicate_noop += 1;
@@ -448,7 +428,6 @@ async function syncGlogDailyToAttendance(conn, batchId) {
     attendance_updated_pending: 0,
     attendance_skipped_non_pending: 0,
     attendance_skipped_unmatched_nik: 0,
-    attendance_skipped_ambiguous_nik: 0,
     attendance_skipped_invalid_time: 0,
     attendance_skipped_duplicate_noop: 0,
   };
@@ -477,7 +456,6 @@ async function patchGlogDailyToAttendance(conn, batchId) {
     attendance_updated_pending: 0,
     attendance_skipped_non_pending: 0,
     attendance_skipped_unmatched_nik: 0,
-    attendance_skipped_ambiguous_nik: 0,
     attendance_skipped_invalid_time: 0,
     attendance_skipped_duplicate_noop: 0,
     employee_placeholder_created: 0,
@@ -504,7 +482,6 @@ async function runPatchAttendanceInternal(conn, batchId, onProgress) {
     attendance_updated_pending: 0,
     attendance_skipped_non_pending: 0,
     attendance_skipped_unmatched_nik: 0,
-    attendance_skipped_ambiguous_nik: 0,
     attendance_skipped_invalid_time: 0,
     attendance_skipped_duplicate_noop: 0,
     employee_placeholder_created: 0,
@@ -607,7 +584,6 @@ async function runProcessBatchInternal(conn, batchId, onProgress) {
     attendance_updated_pending: 0,
     attendance_skipped_non_pending: 0,
     attendance_skipped_unmatched_nik: 0,
-    attendance_skipped_ambiguous_nik: 0,
     attendance_skipped_invalid_time: 0,
     attendance_skipped_duplicate_noop: 0,
   };
