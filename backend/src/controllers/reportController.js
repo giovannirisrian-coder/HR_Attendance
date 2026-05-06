@@ -9,6 +9,55 @@ async function fetchVendorAttendanceRows(vendorId, month, year) {
   return fetchVendorAttendanceRowsForMonthlyPdf(vendorId, month, year);
 }
 
+/** IDR-style input: strips thousand separators (.) */
+function parseIdrInput(val) {
+  if (val == null || val === '') return 0;
+  const s = String(val).replace(/\./g, '').replace(/,/g, '.').trim();
+  const n = Number(s);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
+}
+
+function normalizeLineItems(raw) {
+  let arr = [];
+  if (typeof raw === 'string') {
+    try {
+      arr = JSON.parse(raw);
+    } catch {
+      arr = [];
+    }
+  } else if (Array.isArray(raw)) arr = raw;
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .filter((x) => x && typeof x === 'object')
+    .map((x) => ({
+      description: String(x.description ?? '').trim(),
+      amount: parseIdrInput(x.amount),
+    }))
+    .filter((x) => x.description !== '' || x.amount > 0);
+}
+
+function parseOtherSupportingStored(val) {
+  if (val == null) return [];
+  if (Array.isArray(val)) return val.filter((x) => typeof x === 'string');
+  if (Buffer.isBuffer(val)) {
+    try {
+      const j = JSON.parse(val.toString('utf8'));
+      return Array.isArray(j) ? j.filter((x) => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  }
+  if (typeof val === 'string') {
+    try {
+      const j = JSON.parse(val);
+      return Array.isArray(j) ? j.filter((x) => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
 /** Vendor: one row per month – aggregated LS attendance + submission workflow */
 const getVendorMonthlySummary = async (req, res) => {
   try {
@@ -129,12 +178,21 @@ const submitVendorMonthly = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid month or year.' });
     }
 
-    const { invoice_value } = req.body;
+    const { invoice_number, invoice_date, due_days, invoice_line_items, pph_amount: pphBody } = req.body;
     const files = req.files || {};
-    const bastFile = files.bast_file?.[0]?.filename || null;
+    const taxFile = files.tax_invoice_file?.[0]?.filename || null;
     const invoiceFile = files.invoice_file?.[0]?.filename || null;
-    const recapSalaryFile = files.recap_salary_file?.[0]?.filename || null;
-    const taxFile = files.tax_file?.[0]?.filename || null;
+    const receiptFile = files.receipt_file?.[0]?.filename || null;
+    const otherNew = (files.other_supporting_documents || []).map((f) => f.filename);
+
+    const lineItemsNorm = normalizeLineItems(invoice_line_items);
+    const subtotal = lineItemsNorm.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    const pphVal = parseIdrInput(pphBody);
+    const totalInvoice = Math.round((subtotal + pphVal) * 100) / 100;
+
+    const invNo = invoice_number != null ? String(invoice_number).trim() : null;
+    const invDate = invoice_date != null && String(invoice_date).trim() !== '' ? String(invoice_date).trim() : null;
+    const dueDaysStr = due_days != null && String(due_days).trim() !== '' ? String(due_days).trim() : null;
 
     const [existing] = await db.query(
       'SELECT * FROM vendor_monthly_submissions WHERE vendor_id = ? AND report_month = ? AND report_year = ?',
@@ -152,29 +210,66 @@ const submitVendorMonthly = async (req, res) => {
     }
 
     if (existing.length === 0) {
+      const otherStored = JSON.stringify(otherNew);
       await db.query(
         `INSERT INTO vendor_monthly_submissions
           (vendor_id, report_month, report_year, invoice_value,
-           bast_file, invoice_file, recap_salary_file, tax_file,
+           invoice_number, invoice_date, due_days, invoice_line_items, pph_amount,
+           tax_file, invoice_file, receipt_file, other_supporting_files,
            submitted_by, submitted_at, workflow_status)
-         VALUES (?,?,?,?,?,?,?,?,?,NOW(),'pending_ls_hr')`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),'pending_ls_hr')`,
         [
-          vendorId, month, year, invoice_value || null,
-          bastFile, invoiceFile, recapSalaryFile, taxFile, submittedBy,
+          vendorId,
+          month,
+          year,
+          totalInvoice,
+          invNo || null,
+          invDate || null,
+          dueDaysStr || null,
+          JSON.stringify(lineItemsNorm),
+          pphVal,
+          taxFile,
+          invoiceFile,
+          receiptFile,
+          otherStored,
+          submittedBy,
         ]
       );
     } else {
       const ex = existing[0];
-      const updates = [];
-      const params = [];
-      if (invoice_value !== undefined) {
-        updates.push('invoice_value=?');
-        params.push(invoice_value || null);
+      let otherCombined = parseOtherSupportingStored(ex.other_supporting_files);
+      if (otherNew.length) otherCombined = [...otherCombined, ...otherNew];
+
+      const updates = [
+        'invoice_value=?',
+        'invoice_number=?',
+        'invoice_date=?',
+        'due_days=?',
+        'invoice_line_items=?',
+        'pph_amount=?',
+        'other_supporting_files=?',
+      ];
+      const params = [
+        totalInvoice,
+        invNo || null,
+        invDate || null,
+        dueDaysStr || null,
+        JSON.stringify(lineItemsNorm),
+        pphVal,
+        JSON.stringify(otherCombined),
+      ];
+      if (taxFile) {
+        updates.push('tax_file=?');
+        params.push(taxFile);
       }
-      if (bastFile) { updates.push('bast_file=?'); params.push(bastFile); }
-      if (invoiceFile) { updates.push('invoice_file=?'); params.push(invoiceFile); }
-      if (recapSalaryFile) { updates.push('recap_salary_file=?'); params.push(recapSalaryFile); }
-      if (taxFile) { updates.push('tax_file=?'); params.push(taxFile); }
+      if (invoiceFile) {
+        updates.push('invoice_file=?');
+        params.push(invoiceFile);
+      }
+      if (receiptFile) {
+        updates.push('receipt_file=?');
+        params.push(receiptFile);
+      }
       updates.push("workflow_status='pending_ls_hr'");
       updates.push('submitted_by=?');
       updates.push('submitted_at=NOW()');
