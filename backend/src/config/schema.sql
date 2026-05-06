@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS attendance (
   rejection_note  TEXT         NULL,
   created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_user_date (user_id, attendance_date),
+  KEY idx_att_user_id (user_id),
   CONSTRAINT fk_att_user     FOREIGN KEY (user_id)     REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_att_employee FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE RESTRICT,
   CONSTRAINT fk_att_approver FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL

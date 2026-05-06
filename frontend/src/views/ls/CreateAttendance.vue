@@ -25,11 +25,11 @@
               <label class="form-label">Attendance Type</label>
               <select v-model="form.type" class="form-control" required>
                 <option value="">— Select Type —</option>
-                <option value="clock_in"  :disabled="!!todayRecord?.clock_in_time">
-                  🟢 Clock In {{ todayRecord?.clock_in_time ? '(Already recorded)' : '' }}
+                <option value="clock_in" :disabled="!canClockIn">
+                  🟢 Clock In {{ canClockIn ? '' : '(Complete latest Clock Out first)' }}
                 </option>
-                <option value="clock_out" :disabled="!todayRecord?.clock_in_time || !!todayRecord?.clock_out_time">
-                  🔴 Clock Out {{ todayRecord?.clock_out_time ? '(Already recorded)' : !todayRecord?.clock_in_time ? '(Clock in first)' : '' }}
+                <option value="clock_out" :disabled="!canClockOut">
+                  🔴 Clock Out {{ canClockOut ? '' : '(Clock In first)' }}
                 </option>
               </select>
             </div>
@@ -264,6 +264,7 @@ const otSuccessMsg = ref('');
 const otErrorMsg = ref('');
 const geoStatus = ref('idle'); // idle | loading | success | error
 const todayRecord = ref(null);
+const selectedDateRows = ref([]);
 
 const now = new Date();
 const nowTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -305,6 +306,13 @@ const canEditOvertime = computed(() => {
   const r = todayRecord.value;
   return !!(r?.clock_in_time && r?.status === 'pending');
 });
+
+const latestOpenPairRecord = computed(() => {
+  return selectedDateRows.value.find((r) => !!(r?.clock_in_time && !r?.clock_out_time)) || null;
+});
+
+const canClockOut = computed(() => !!latestOpenPairRecord.value);
+const canClockIn = computed(() => !latestOpenPairRecord.value);
 
 const fmtTimeHm = (t) => {
   if (t === undefined || t === null || t === '') return '—';
@@ -368,9 +376,16 @@ const loadRecordForSelectedDate = async () => {
     clampAttendanceDateToWindow();
     const d = form.attendance_date;
     const { data } = await api.get('/attendance/my', { params: { start_date: d, end_date: d } });
-    todayRecord.value = data.data?.[0] || null;
+    selectedDateRows.value = (Array.isArray(data.data) ? data.data : [])
+      .slice()
+      .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    todayRecord.value = selectedDateRows.value[0] || null;
     syncOtFormFromRecord();
-  } catch { /* silent */ } finally { loadingRecord.value = false; }
+  } catch {
+    selectedDateRows.value = [];
+    todayRecord.value = null;
+    syncOtFormFromRecord();
+  } finally { loadingRecord.value = false; }
 };
 
 const submitOvertime = async () => {
@@ -414,6 +429,14 @@ const submitAttendance = async () => {
   const max = attendanceDateMax.value;
   if (form.attendance_date < min || form.attendance_date > max) {
     errorMsg.value = 'Date must be within the last 10 calendar days through today.';
+    return;
+  }
+  if (form.type === 'clock_in' && !canClockIn.value) {
+    errorMsg.value = 'Please complete clock-out for the latest clock-in before creating a new pair.';
+    return;
+  }
+  if (form.type === 'clock_out' && !canClockOut.value) {
+    errorMsg.value = 'Please submit clock-in first for this date.';
     return;
   }
   loading.value = true;
