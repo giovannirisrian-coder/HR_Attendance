@@ -739,7 +739,7 @@ const uploadGlog = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: 'Data dimasukkan ke tabel staging (sementara). Jalankan proses agregasi harian.',
+      message: 'Data dimasukkan ke tabel log import. Jalankan proses agregasi.',
       data: {
         batch_id: batchId,
         staging_row_count: parsed.rows.length,
