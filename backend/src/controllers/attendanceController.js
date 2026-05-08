@@ -123,7 +123,7 @@ const saveMyOvertime = async (req, res) => {
   }
 };
 
-// LS: create or update today's attendance (clock in / clock out)
+// LS: create attendance request row with in/out pairing sequence
 const createAttendance = async (req, res) => {
   const conn = await db.getConnection();
   try {
@@ -180,6 +180,7 @@ const createAttendance = async (req, res) => {
       dateRows.filter((r) => r.source_type === 'correction' && r.status === 'pending')
     );
 
+    let affectedAttendanceId = null;
     if (type === 'clock_in') {
       if (pendingCorrection && pendingCorrection.clock_in_time) {
         return res
@@ -325,7 +326,7 @@ const getMyAttendance = async (req, res) => {
        JOIN users u ON a.user_id = u.id
        LEFT JOIN employees e ON e.id = a.employee_id
        ${where}
-       ORDER BY a.attendance_date DESC
+       ORDER BY a.attendance_date DESC, a.created_at DESC, a.id DESC
        LIMIT ? OFFSET ?`,
       [...params, parseInt(limit), offset]
     );
@@ -447,7 +448,7 @@ const getTeamAttendance = async (req, res) => {
        LEFT JOIN users sup ON u.supervisor_id = sup.id
        LEFT JOIN employees e ON e.id = a.employee_id
        ${where}
-       ORDER BY a.attendance_date DESC
+       ORDER BY a.attendance_date DESC, a.created_at DESC, a.id DESC
        LIMIT ? OFFSET ?`,
       [...params, parseInt(limit), offset]
     );
