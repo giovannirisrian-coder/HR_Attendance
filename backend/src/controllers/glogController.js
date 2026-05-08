@@ -361,7 +361,11 @@ async function upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnm
   const canonicalNik = String(employee.nik || '').trim().slice(0, 16);
 
   const [existing] = await conn.query(
-    'SELECT id, status, clock_in_time, clock_out_time FROM attendance WHERE user_id = ? AND attendance_date = ? LIMIT 1',
+    `SELECT id, status, source_type, is_effective, clock_in_time, clock_out_time
+     FROM attendance
+     WHERE user_id = ? AND attendance_date = ? AND is_effective = 1
+     ORDER BY id DESC
+     LIMIT 1`,
     [employee.user_id, attendanceDate]
   );
 
@@ -373,15 +377,15 @@ async function upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnm
          clock_in_lat, clock_in_lng, clock_in_address,
          clock_out_lat, clock_out_lng, clock_out_address,
          ot_start_time, ot_end_time, ot_summary,
-         status
-       ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'pending')`,
+         status, source_type, is_effective
+       ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'approved', 'machine', 1)`,
       [employee.user_id, employee.employee_id, canonicalNik, attendanceDate, clockIn, clockOut]
     );
     out.result = 'insert';
     return out;
   }
 
-  if (existing[0].status !== 'pending') {
+  if (existing[0].source_type !== 'machine' || Number(existing[0].is_effective) !== 1) {
     out.skipReason = 'non_pending';
     return out;
   }
@@ -397,9 +401,12 @@ async function upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnm
        nik = ?,
        clock_in_time = ?,
        clock_out_time = ?,
+       status = 'approved',
+       source_type = 'machine',
+       is_effective = 1,
        updated_at = CURRENT_TIMESTAMP
-     WHERE user_id = ? AND attendance_date = ? AND status = 'pending'`,
-    [employee.employee_id, canonicalNik, clockIn, clockOut, employee.user_id, attendanceDate]
+     WHERE id = ?`,
+    [employee.employee_id, canonicalNik, clockIn, clockOut, existing[0].id]
   );
   out.result = 'update';
   return out;

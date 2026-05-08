@@ -30,13 +30,6 @@ const normalizeNik = (raw) => {
   return s.length ? s : null;
 };
 
-const validateNikOrError = (normalizedNik) => {
-  if (!normalizedNik || normalizedNik.length !== 16) {
-    return 'NIK must be exactly 16 digits.';
-  }
-  return null;
-};
-
 const timeToMinutes = (t) => {
   if (t === undefined || t === null || t === '') return null;
   const s = String(t).slice(0, 8);
@@ -48,6 +41,15 @@ const normalizeOtSummary = (raw) => {
   if (raw === undefined || raw === null) return null;
   const s = String(raw).trim();
   return s.length ? s.slice(0, 4000) : null;
+};
+
+const pickLatestByUpdatedOrCreated = (rows) => {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  return rows.sort((a, b) => {
+    const aTs = Date.parse(a.updated_at || a.created_at || 0);
+    const bTs = Date.parse(b.updated_at || b.created_at || 0);
+    return bTs - aTs;
+  })[0];
 };
 
 // LS: save overtime range for a day (same row + same approval flow as attendance)
@@ -123,6 +125,7 @@ const saveMyOvertime = async (req, res) => {
 
 // LS: create or update today's attendance (clock in / clock out)
 const createAttendance = async (req, res) => {
+  const conn = await db.getConnection();
   try {
     const userId = req.user.id;
     const {
@@ -153,69 +156,127 @@ const createAttendance = async (req, res) => {
       return res.status(400).json({
         success: false,
         message:
-          'Profil karyawan dengan NIK belum ditemukan. Akun harus ditautkan ke master karyawan (employees). Hubungi HR.',
+          'Profil karyawan dengan NIK belum ditemukan. Akun harus ditautkan ke data karyawan. Hubungi HR.',
       });
     }
     const nikNorm = normalizeNik(emp.nik);
-    const nikErr = validateNikOrError(nikNorm);
-    if (nikErr) {
+    if (!nikNorm) {
       return res.status(400).json({
         success: false,
-        message: 'NIK pada master karyawan tidak valid (harus 16 digit). Hubungi HR.',
+        message: 'NIK pada master karyawan tidak valid. Hubungi HR.',
       });
     }
     const employeeId = emp.employee_id;
 
-    const [existing] = await db.query(
-      'SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?',
+    const [dateRows] = await conn.query(
+      `SELECT *
+       FROM attendance
+       WHERE user_id = ? AND attendance_date = ?
+       ORDER BY is_effective DESC, id DESC`,
       [userId, attendanceYmd]
+    );
+    const effectiveRow = dateRows.find((r) => Number(r.is_effective) === 1) || null;
+    const pendingCorrection = pickLatestByUpdatedOrCreated(
+      dateRows.filter((r) => r.source_type === 'correction' && r.status === 'pending')
     );
 
     if (type === 'clock_in') {
-      if (existing.length > 0 && existing[0].clock_in_time) {
-        return res.status(409).json({ success: false, message: 'Clock-in already recorded for this date.' });
+      if (pendingCorrection && pendingCorrection.clock_in_time) {
+        return res
+          .status(409)
+          .json({ success: false, message: 'Pending correction clock-in already recorded for this date.' });
       }
 
-      if (existing.length === 0) {
-        await db.query(
-          `INSERT INTO attendance
-            (user_id, employee_id, nik, attendance_date, clock_in_time, clock_in_lat, clock_in_lng, clock_in_address, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-          [userId, employeeId, nikNorm, attendanceYmd, time, latitude || null, longitude || null, address || null]
+      await conn.beginTransaction();
+
+      if (!pendingCorrection) {
+        await conn.query(
+          `INSERT INTO attendance (
+             user_id, employee_id, nik, attendance_date,
+             clock_in_time, clock_in_lat, clock_in_lng, clock_in_address,
+             status, source_type, is_effective
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'correction', 0)`,
+          [
+            userId,
+            employeeId,
+            nikNorm,
+            attendanceYmd,
+            time,
+            latitude || null,
+            longitude || null,
+            address || null,
+          ]
         );
       } else {
-        await db.query(
-          `UPDATE attendance SET employee_id=?, nik=?, clock_in_time=?, clock_in_lat=?, clock_in_lng=?, clock_in_address=?
-           WHERE user_id=? AND attendance_date=?`,
-          [employeeId, nikNorm, time, latitude || null, longitude || null, address || null, userId, attendanceYmd]
+        await conn.query(
+          `UPDATE attendance
+           SET employee_id = ?, nik = ?,
+               clock_in_time = ?, clock_in_lat = ?, clock_in_lng = ?, clock_in_address = ?,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND source_type = 'correction' AND status = 'pending'`,
+          [
+            employeeId,
+            nikNorm,
+            time,
+            latitude || null,
+            longitude || null,
+            address || null,
+            pendingCorrection.id,
+          ]
         );
       }
+      await conn.commit();
     } else if (type === 'clock_out') {
-      if (existing.length === 0) {
-        return res.status(400).json({ success: false, message: 'No clock-in found for this date.' });
+      if (!pendingCorrection || !pendingCorrection.clock_in_time) {
+        if (effectiveRow && effectiveRow.clock_in_time) {
+          return res.status(400).json({
+            success: false,
+            message: 'Create a correction clock-in first before submitting correction clock-out.',
+          });
+        }
+        return res.status(400).json({ success: false, message: 'No pending correction clock-in found for this date.' });
       }
-      if (existing[0].clock_out_time) {
-        return res.status(409).json({ success: false, message: 'Clock-out already recorded for this date.' });
+      if (pendingCorrection.clock_out_time) {
+        return res.status(409).json({ success: false, message: 'Pending correction clock-out already recorded for this date.' });
       }
 
-      await db.query(
-        `UPDATE attendance SET clock_out_time=?, clock_out_lat=?, clock_out_lng=?, clock_out_address=?, nik=?, employee_id=?
-         WHERE user_id=? AND attendance_date=?`,
-        [time, latitude || null, longitude || null, address || null, nikNorm, employeeId, userId, attendanceYmd]
+      await conn.query(
+        `UPDATE attendance
+         SET clock_out_time = ?, clock_out_lat = ?, clock_out_lng = ?, clock_out_address = ?, nik = ?, employee_id = ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND source_type = 'correction' AND status = 'pending'`,
+        [time, latitude || null, longitude || null, address || null, nikNorm, employeeId, pendingCorrection.id]
       );
     } else {
       return res.status(400).json({ success: false, message: "type must be 'clock_in' or 'clock_out'." });
     }
 
-    const [updated] = await db.query(
-      'SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?',
+    const [updated] = await conn.query(
+      `SELECT *
+       FROM attendance
+       WHERE user_id = ? AND attendance_date = ?
+       ORDER BY is_effective DESC, id DESC`,
       [userId, attendanceYmd]
     );
 
-    res.json({ success: true, message: `${type === 'clock_in' ? 'Clock-in' : 'Clock-out'} recorded.`, data: updated[0] });
+    const latestCorrection = pickLatestByUpdatedOrCreated(
+      updated.filter((r) => r.source_type === 'correction' && r.status === 'pending')
+    );
+    res.json({
+      success: true,
+      message: 'Correction submitted and awaiting supervisor approval.',
+      data: latestCorrection || updated[0],
+    });
   } catch (err) {
+    try {
+      await conn.rollback();
+    } catch (_) {
+      /* no-op */
+    }
     console.error('Create attendance error:', err);
     res.status(500).json({ success: false, message: 'Server error.' });
+  } finally {
+    conn.release();
   }
 };
 
@@ -409,6 +470,7 @@ const getTeamAttendance = async (req, res) => {
 
 // LS Supervisor: approve or reject
 const updateApproval = async (req, res) => {
+  const conn = await db.getConnection();
   try {
     const supervisorId = req.user.id;
     const { id } = req.params;
@@ -419,7 +481,7 @@ const updateApproval = async (req, res) => {
     }
 
     // Verify this record belongs to an LS under this supervisor
-    const [rows] = await db.query(
+    const [rows] = await conn.query(
       `SELECT a.* FROM attendance a
        JOIN users u ON a.user_id = u.id
        WHERE a.id = ? AND u.supervisor_id = ?`,
@@ -430,19 +492,75 @@ const updateApproval = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Attendance record not found or not under your supervision.' });
     }
 
-    const newStatus = action === 'approve' ? 'approved' : 'rejected';
+    const row = rows[0];
+    if (row.source_type !== 'correction') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only correction records can be approved/rejected from this endpoint.',
+      });
+    }
+    if (row.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only pending correction records can be processed.',
+      });
+    }
 
-    await db.query(
+    await conn.beginTransaction();
+    if (action === 'approve') {
+      const [originalRows] = await conn.query(
+        `SELECT id
+         FROM attendance
+         WHERE user_id = ? AND attendance_date = ? AND source_type = 'machine' AND is_effective = 1
+         ORDER BY id DESC
+         LIMIT 1
+         FOR UPDATE`,
+        [row.user_id, row.attendance_date]
+      );
+      if (originalRows.length === 0) {
+        await conn.rollback();
+        return res.status(400).json({
+          success: false,
+          message: 'Original machine attendance not found for this user and date.',
+        });
+      }
+
+      await conn.query(
+        `UPDATE attendance
+         SET status = 'superseded', is_effective = 0, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [originalRows[0].id]
+      );
+
+      await conn.query(
+        `UPDATE attendance
+         SET status = 'approved', is_effective = 1, approved_by = ?, approved_at = NOW(), rejection_note = NULL
+         WHERE id = ?`,
+        [supervisorId, id]
+      );
+      await conn.commit();
+      return res.json({ success: true, message: 'Correction approved and original machine record superseded.' });
+    }
+
+    await conn.query(
       `UPDATE attendance
-       SET status=?, approved_by=?, approved_at=NOW(), rejection_note=?
-       WHERE id=?`,
-      [newStatus, supervisorId, rejection_note || null, id]
+       SET status = 'rejected', approved_by = ?, approved_at = NOW(), rejection_note = ?, is_effective = 0
+       WHERE id = ?`,
+      [supervisorId, rejection_note || null, id]
     );
+    await conn.commit();
 
-    res.json({ success: true, message: `Attendance ${newStatus} successfully.` });
+    res.json({ success: true, message: 'Correction rejected. Original machine record remains effective.' });
   } catch (err) {
+    try {
+      await conn.rollback();
+    } catch (_) {
+      /* no-op */
+    }
     console.error('Approval error:', err);
     res.status(500).json({ success: false, message: 'Server error.' });
+  } finally {
+    conn.release();
   }
 };
 
@@ -482,7 +600,9 @@ const updateApprovalBulk = async (req, res) => {
     }
 
     const [pendingRows] = await conn.query(
-      `SELECT id FROM attendance WHERE id IN (${placeholders}) AND status = 'pending'`,
+      `SELECT id, user_id, attendance_date
+       FROM attendance
+       WHERE id IN (${placeholders}) AND status = 'pending' AND source_type = 'correction'`,
       ids
     );
     const pendingIds = pendingRows.map((r) => Number(r.id));
@@ -494,21 +614,50 @@ const updateApprovalBulk = async (req, res) => {
     }
 
     const pendingPlaceholders = pendingIds.map(() => '?').join(',');
-    const newStatus = action === 'approve' ? 'approved' : 'rejected';
-    const noteValue = action === 'reject' ? (rejection_note || null) : null;
-
     await conn.beginTransaction();
-    await conn.query(
-      `UPDATE attendance
-       SET status = ?, approved_by = ?, approved_at = NOW(), rejection_note = ?
-       WHERE id IN (${pendingPlaceholders})`,
-      [newStatus, supervisorId, noteValue, ...pendingIds]
-    );
+    if (action === 'approve') {
+      for (const corr of pendingRows) {
+        const [originalRows] = await conn.query(
+          `SELECT id
+           FROM attendance
+           WHERE user_id = ? AND attendance_date = ? AND source_type = 'machine' AND is_effective = 1
+           ORDER BY id DESC
+           LIMIT 1
+           FOR UPDATE`,
+          [corr.user_id, corr.attendance_date]
+        );
+        if (originalRows.length === 0) {
+          throw new Error(`Original machine attendance not found for correction id ${corr.id}.`);
+        }
+        await conn.query(
+          `UPDATE attendance
+           SET status = 'superseded', is_effective = 0, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?`,
+          [originalRows[0].id]
+        );
+        await conn.query(
+          `UPDATE attendance
+           SET status = 'approved', is_effective = 1, approved_by = ?, approved_at = NOW(), rejection_note = NULL
+           WHERE id = ?`,
+          [supervisorId, corr.id]
+        );
+      }
+    } else {
+      await conn.query(
+        `UPDATE attendance
+         SET status = 'rejected', approved_by = ?, approved_at = NOW(), rejection_note = ?, is_effective = 0
+         WHERE id IN (${pendingPlaceholders})`,
+        [supervisorId, rejection_note || null, ...pendingIds]
+      );
+    }
     await conn.commit();
 
     res.json({
       success: true,
-      message: `${pendingIds.length} attendance record(s) ${newStatus} successfully.`,
+      message:
+        action === 'approve'
+          ? `${pendingIds.length} correction record(s) approved and machine rows superseded successfully.`
+          : `${pendingIds.length} correction record(s) rejected successfully.`,
       data: {
         processed_ids: pendingIds,
         skipped_count: ids.length - pendingIds.length,
