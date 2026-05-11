@@ -2,6 +2,19 @@ import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import path from 'path'
 
+<<<<<<< HEAD
+export default defineConfig({
+  plugins: [vue()],
+  resolve: {
+    alias: { '@': path.resolve(__dirname, './src') },
+  },
+  server: {
+    port: 5173,
+    proxy: {
+      '/api': {
+        target: 'https://ls-attendance-api.it-smm.id/api',
+        changeOrigin: true,
+=======
 function devProxyTarget(apiBase) {
   const raw = (apiBase || '').trim() || 'http://127.0.0.1:3000'
   try {
@@ -30,6 +43,7 @@ export default defineConfig(({ mode }) => {
           target: proxyTarget,
           changeOrigin: true,
         },
+>>>>>>> 6d6af2d0fceba25586b09f0e16e211d944891e1f
       },
     },
   }
