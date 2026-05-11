@@ -68,6 +68,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import api from '../../utils/api';
+import { formatCalendarDateLocale } from '../../utils/calendarDate';
 
 const route = useRoute();
 const id = computed(() => route.params.id);
@@ -75,7 +76,7 @@ const loading = ref(true);
 const errorMsg = ref('');
 const record = ref(null);
 
-const formatDate = (d) => new Date(d).toLocaleDateString('en-ID', { day: '2-digit', month: 'short', year: 'numeric', weekday: 'long' });
+const formatDate = (d) => formatCalendarDateLocale(d, 'en-ID', { day: '2-digit', month: 'short', year: 'numeric', weekday: 'long' });
 
 const fmtHm = (t) => (t ? String(t).slice(0, 5) : '—');
 const otDuration = (rec) => {

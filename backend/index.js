@@ -14,11 +14,29 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+const { authenticate, authorize } = require('./src/middleware/auth');
+const attendanceController = require('./src/controllers/attendanceController');
+const leaveController = require('./src/controllers/leaveController');
+
+app.get(
+  '/api/leaves/team/month-stats',
+  authenticate,
+  authorize('ls_supervisor'),
+  leaveController.getTeamLeavesMonthStats
+);
+app.get(
+  '/api/leaves/team/employees-overview',
+  authenticate,
+  authorize('ls_supervisor'),
+  leaveController.getTeamLeavesEmployeesOverview
+);
+
 app.use('/api/auth',       require('./src/routes/auth'));
 app.use('/api/attendance', require('./src/routes/attendance'));
 app.use('/api/leaves',     require('./src/routes/leaves'));
 app.use('/api/reports',    require('./src/routes/reports'));
 app.use('/api/users',      require('./src/routes/users'));
+app.use('/api/glog',       require('./src/routes/glog'));
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString(), service: 'Berau Coal Attendance API' });

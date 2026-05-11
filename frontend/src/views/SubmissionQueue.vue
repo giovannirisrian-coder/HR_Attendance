@@ -203,7 +203,22 @@ const statusBadgeClass = (r) => {
   return 'badge-draft';
 };
 
-const hasAnyFile = (r) => !!(r.bast_file || r.invoice_file || r.recap_salary_file || r.tax_file);
+const hasSupportingList = (r) => {
+  const o = r.other_supporting_files;
+  if (o == null) return false;
+  if (Array.isArray(o)) return o.length > 0;
+  if (typeof o === 'string') {
+    try {
+      const j = JSON.parse(o);
+      return Array.isArray(j) && j.length > 0;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+};
+
+const hasAnyFile = (r) => !!(r.bast_file || r.invoice_file || r.recap_salary_file || r.tax_file || r.receipt_file) || hasSupportingList(r);
 
 const canApproveReject = (r) => {
   if (isHr.value) return r.workflow_status === 'pending_ls_hr';

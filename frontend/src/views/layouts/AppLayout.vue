@@ -44,17 +44,51 @@
         </template>
 
         <template v-if="user?.role === 'ls_supervisor'">
-          <router-link to="/supervisor/approvals" class="nav-item" active-class="active">
+          <router-link
+            to="/supervisor/approvals"
+            class="nav-item nav-item--supervisor-approvals"
+            active-class="active"
+            :title="sidebarCollapsed && supervisorPendingTotal > 0 ? `${supervisorPendingTotal} pending attendance approval(s)` : undefined"
+          >
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"/></svg>
-            <span v-if="!sidebarCollapsed">Approval List</span>
+            <span v-if="!sidebarCollapsed" class="nav-item-label-with-chip">
+              <span class="nav-item-label-text">Approval List</span>
+              <span
+                v-if="supervisorPendingTotal > 0"
+                class="nav-pending-chip"
+                :aria-label="`${supervisorPendingTotal} pending`"
+              >{{ supervisorPendingChipText }}</span>
+            </span>
+            <span
+              v-else-if="supervisorPendingTotal > 0"
+              class="nav-pending-chip nav-pending-chip--collapsed"
+              :aria-label="`${supervisorPendingTotal} pending`"
+            >{{ supervisorPendingChipText }}</span>
           </router-link>
           <router-link to="/supervisor/monthly-recap" class="nav-item" active-class="active">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4M16 2v4M3 10h18M5 6h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2z"/><path d="M8 14h3M8 18h8M15 14h1"/></svg>
             <span v-if="!sidebarCollapsed">Monthly Attendance Recap</span>
           </router-link>
-          <router-link to="/supervisor/leave" class="nav-item" active-class="active" title="Leave approvals">
+          <router-link
+            to="/supervisor/leave"
+            class="nav-item nav-item--supervisor-leave"
+            active-class="active"
+            :title="sidebarCollapsed && supervisorLeavePendingTotal > 0 ? `${supervisorLeavePendingTotal} pending leave approval(s)` : 'Leave approvals'"
+          >
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 7V3m8 4V3M5 11h14M5 21h14M5 11a2 2 0 012-2h10a2 2 0 012 2v10a2 2 0 01-2 2H7a2 2 0 01-2-2V11z"/></svg>
-            <span v-if="!sidebarCollapsed">Leave</span>
+            <span v-if="!sidebarCollapsed" class="nav-item-label-with-chip">
+              <span class="nav-item-label-text">Leave</span>
+              <span
+                v-if="supervisorLeavePendingTotal > 0"
+                class="nav-pending-chip"
+                :aria-label="`${supervisorLeavePendingTotal} pending leave request(s)`"
+              >{{ supervisorLeavePendingChipText }}</span>
+            </span>
+            <span
+              v-else-if="supervisorLeavePendingTotal > 0"
+              class="nav-pending-chip nav-pending-chip--collapsed"
+              :aria-label="`${supervisorLeavePendingTotal} pending leave request(s)`"
+            >{{ supervisorLeavePendingChipText }}</span>
           </router-link>
         </template>
 
@@ -69,6 +103,10 @@
           <router-link to="/ls-hr/approvals" class="nav-item" active-class="active">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4m5 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
             <span v-if="!sidebarCollapsed">Approval List</span>
+          </router-link>
+          <router-link to="/ls-hr/glog-upload" class="nav-item" active-class="active" title="Upload log mesin (.csv / .txt)">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M8 8l4-4 4 4M4 20h16"/></svg>
+            <span v-if="!sidebarCollapsed">Upload Attendance Log</span>
           </router-link>
         </template>
 
@@ -120,14 +158,85 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getUser, clearAuth } from '../../utils/auth';
+import api from '../../utils/api';
 
 const router = useRouter();
 const route  = useRoute();
 const sidebarCollapsed = ref(false);
 const user = getUser();
+
+/** Team-wide pending attendance count (all LS under this supervisor); same /attendance/team source as Approval List. */
+const supervisorPendingTotal = ref(0);
+
+/** Pending cuti / izin / sakit for supervised LS; same /leaves/team + status=pending as Leave dashboard. */
+const supervisorLeavePendingTotal = ref(0);
+
+const supervisorPendingChipText = computed(() => {
+  const n = supervisorPendingTotal.value;
+  return n > 99 ? '99+' : String(n);
+});
+
+const supervisorLeavePendingChipText = computed(() => {
+  const n = supervisorLeavePendingTotal.value;
+  return n > 99 ? '99+' : String(n);
+});
+
+const fetchSupervisorPendingTotal = async () => {
+  if (user?.role !== 'ls_supervisor') return;
+  try {
+    const { data } = await api.get('/attendance/team', {
+      params: { status: 'pending', page: 1, limit: 1 },
+    });
+    const total = data?.pagination?.total;
+    supervisorPendingTotal.value = Number.isFinite(Number(total)) ? Number(total) : 0;
+  } catch {
+    /* keep previous value */
+  }
+};
+
+const fetchSupervisorLeavePendingTotal = async () => {
+  if (user?.role !== 'ls_supervisor') return;
+  try {
+    const { data } = await api.get('/leaves/team', {
+      params: { status: 'pending', page: 1, limit: 1 },
+    });
+    const total = data?.pagination?.total;
+    supervisorLeavePendingTotal.value = Number.isFinite(Number(total)) ? Number(total) : 0;
+  } catch {
+    /* keep previous value */
+  }
+};
+
+const refreshSupervisorNavBadges = () => {
+  if (user?.role !== 'ls_supervisor') return;
+  void fetchSupervisorPendingTotal();
+  void fetchSupervisorLeavePendingTotal();
+};
+
+const onVisibilityChange = () => {
+  if (document.visibilityState === 'visible') refreshSupervisorNavBadges();
+};
+
+onMounted(() => {
+  if (user?.role === 'ls_supervisor') {
+    refreshSupervisorNavBadges();
+    window.addEventListener('visibilitychange', onVisibilityChange);
+  }
+});
+
+onUnmounted(() => {
+  window.removeEventListener('visibilitychange', onVisibilityChange);
+});
+
+watch(
+  () => route.path,
+  () => {
+    refreshSupervisorNavBadges();
+  }
+);
 
 const userInitials = computed(() => {
   if (!user?.name) return 'U';
@@ -152,6 +261,7 @@ const pageTitle = computed(() => {
   if (path.match(/\/ls\/attendance\/\d+$/)) return 'Attendance Detail';
   if (path.includes('approvals'))         return 'Approval List';
   if (path.includes('/supervisor/monthly-recap')) return 'Monthly Attendance Recap';
+  if (path.includes('/glog-upload')) return 'Upload Glog';
   if (path.includes('/vendor/reports') && path.includes('detail')) return 'Report Detail';
   if (path.includes('/vendor/reports')) return 'Report List';
   if (path.includes('/ls-hr/approvals')) return 'LS HR Approvals';
@@ -279,9 +389,80 @@ const handleLogout = () => {
 }
 .nav-item:hover { background: rgba(255,255,255,.08); color: white; }
 .nav-item.active { background: var(--bc-green-600); color: white; font-weight: 700; box-shadow: 0 2px 8px rgba(34,153,74,.35); }
+.nav-item__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.nav-badge {
+  flex-shrink: 0;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #fbbf24;
+  color: #78350f;
+  font-size: 11px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.nav-item.active .nav-badge {
+  background: rgba(255,255,255,.25);
+  color: white;
+}
 .nav-item--sub { padding-left: 14px; font-size: 13px; }
 .nav-item--sub .nav-icon { width: 16px; height: 16px; opacity: .9; }
 .nav-icon { width: 18px; height: 18px; flex-shrink: 0; }
+
+.nav-item--supervisor-approvals,
+.nav-item--supervisor-leave {
+  position: relative;
+}
+
+.nav-item-label-with-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.nav-item-label-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nav-pending-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+  border-radius: 999px;
+  color: #b45309;
+  background: rgba(254, 243, 199, 0.95);
+  border: 1px solid var(--bc-pending, #f59e0b);
+  box-shadow: 0 1px 2px rgba(180, 83, 9, 0.12);
+}
+
+.nav-item.active .nav-pending-chip {
+  color: #92400e;
+  background: rgba(255, 251, 235, 0.98);
+  border-color: rgba(245, 158, 11, 0.85);
+}
+
+.nav-pending-chip--collapsed {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  font-size: 10px;
+}
 
 .sidebar-footer {
   padding: 8px;

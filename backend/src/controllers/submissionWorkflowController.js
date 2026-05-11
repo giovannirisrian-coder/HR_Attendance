@@ -3,21 +3,15 @@ const path = require('path');
 const fs = require('fs');
 const archiver = require('archiver');
 const { buildVendorMonthlyTimesheetPdf } = require('../services/pdfService');
+const {
+  fetchVendorMonthlyPdfData,
+  fetchVendorAttendanceRowsForMonthlyPdf,
+} = require('../services/vendorMonthlyPdfData');
 
 const DOCS_DIR = path.join(__dirname, '../../uploads/documents');
 
 async function fetchVendorAttendanceRows(vendorId, month, year) {
-  const [rows] = await db.query(
-    `SELECT a.attendance_date, a.clock_in_time, a.clock_out_time, a.status,
-            u.name AS employee_name, u.employee_id
-     FROM attendance a
-     JOIN users u ON a.user_id = u.id
-     WHERE u.vendor_id = ? AND u.role = 'ls'
-       AND MONTH(a.attendance_date) = ? AND YEAR(a.attendance_date) = ?
-     ORDER BY u.name, a.attendance_date`,
-    [vendorId, month, year]
-  );
-  return rows;
+  return fetchVendorAttendanceRowsForMonthlyPdf(vendorId, month, year);
 }
 
 async function getSubmissionById(id) {
@@ -38,12 +32,17 @@ const downloadSubmissionPdf = async (req, res) => {
     const sub = await getSubmissionById(id);
     if (!sub) return res.status(404).json({ success: false, message: 'Submission not found.' });
 
-    const rows = await fetchVendorAttendanceRows(sub.vendor_id, sub.report_month, sub.report_year);
+    const { rows, leaveRows } = await fetchVendorMonthlyPdfData(
+      sub.vendor_id,
+      sub.report_month,
+      sub.report_year
+    );
     const doc = buildVendorMonthlyTimesheetPdf({
       vendor: { name: sub.vendor_name, code: sub.vendor_code },
       month: sub.report_month,
       year: sub.report_year,
       rows,
+      leaveRows,
     });
 
     res.setHeader('Content-Type', 'application/pdf');
@@ -66,11 +65,34 @@ const downloadSubmissionAttachments = async (req, res) => {
     const sub = await getSubmissionById(id);
     if (!sub) return res.status(404).json({ success: false, message: 'Submission not found.' });
 
+    const parseOtherSupporting = (val) => {
+      if (val == null) return [];
+      if (Array.isArray(val)) return val.filter((x) => typeof x === 'string');
+      if (Buffer.isBuffer(val)) {
+        try {
+          const j = JSON.parse(val.toString('utf8'));
+          return Array.isArray(j) ? j.filter((x) => typeof x === 'string') : [];
+        } catch {
+          return [];
+        }
+      }
+      if (typeof val === 'string') {
+        try {
+          const j = JSON.parse(val);
+          return Array.isArray(j) ? j.filter((x) => typeof x === 'string') : [];
+        } catch {
+          return [];
+        }
+      }
+      return [];
+    };
+
     const files = [
       { field: 'bast_file', label: 'BAST' },
       { field: 'invoice_file', label: 'Invoice' },
       { field: 'recap_salary_file', label: 'Recap_Salary' },
-      { field: 'tax_file', label: 'Tax' },
+      { field: 'tax_file', label: 'Tax_Invoice' },
+      { field: 'receipt_file', label: 'Receipt' },
     ];
 
     const archive = archiver('zip', { zlib: { level: 9 } });
@@ -90,6 +112,15 @@ const downloadSubmissionAttachments = async (req, res) => {
         archive.file(abs, { name: `${f.label}${ext}` });
       }
     }
+
+    const others = parseOtherSupporting(sub.other_supporting_files);
+    others.forEach((name, i) => {
+      const abs = path.join(DOCS_DIR, name);
+      if (fs.existsSync(abs)) {
+        const ext = path.extname(name) || '.bin';
+        archive.file(abs, { name: `Other_Supporting_${i + 1}${ext}` });
+      }
+    });
 
     archive.on('error', (e) => {
       console.error('Zip error:', e);
