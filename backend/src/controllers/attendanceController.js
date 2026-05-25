@@ -86,18 +86,23 @@ const saveMyOvertime = async (req, res) => {
 
     const summary = normalizeOtSummary(ot_summary);
 
-    const [existing] = await db.query(
-      'SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?',
+    const [latestRows] = await db.query(
+      `SELECT *
+       FROM attendance
+       WHERE user_id = ? AND attendance_date = ?
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
       [userId, attendanceYmd]
     );
+    const latestRecord = latestRows[0] || null;
 
-    if (existing.length === 0 || !existing[0].clock_in_time) {
+    if (!latestRecord || !latestRecord.clock_in_time) {
       return res.status(400).json({
         success: false,
         message: 'Clock in is required before overtime can be saved for this date.',
       });
     }
-    if (existing[0].status !== 'pending') {
+    if (latestRecord.status !== 'pending') {
       return res.status(400).json({
         success: false,
         message: 'Overtime can only be changed while the attendance record is pending.',
@@ -107,14 +112,11 @@ const saveMyOvertime = async (req, res) => {
     await db.query(
       `UPDATE attendance
        SET ot_start_time = ?, ot_end_time = ?, ot_summary = ?
-       WHERE user_id = ? AND attendance_date = ?`,
-      [ot_start_time, ot_end_time, summary, userId, attendanceYmd]
+       WHERE id = ?`,
+      [ot_start_time, ot_end_time, summary, latestRecord.id]
     );
 
-    const [updated] = await db.query(
-      'SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?',
-      [userId, attendanceYmd]
-    );
+    const [updated] = await db.query('SELECT * FROM attendance WHERE id = ?', [latestRecord.id]);
 
     res.json({ success: true, message: 'Overtime saved.', data: updated[0] });
   } catch (err) {
