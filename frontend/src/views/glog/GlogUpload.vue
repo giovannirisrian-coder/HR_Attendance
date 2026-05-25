@@ -38,7 +38,7 @@
             @change="onFile"
           />
           <button class="btn btn-primary" :disabled="!selectedFile || uploading" @click="doUpload">
-            {{ uploading ? 'Mengunggah…' : 'Preview & Upload' }}
+            {{ uploading ? 'On Progress...' : 'Preview & Upload' }}
           </button>
         </div>
         <p v-if="uploadMessage" class="alert-inline" :class="uploadOk ? 'ok' : 'err'">{{ uploadMessage }}</p>
@@ -52,7 +52,7 @@
               :disabled="processing || !lastBatch.batch_id"
               @click="doProcess(lastBatch.batch_id)"
             >
-              {{ processing ? 'Memproses…' : 'Proses & Sinkronisasi' }}
+              {{ processing ? 'On Progress...' : 'Proses & Sinkronisasi' }}
             </button>
             <button
               class="btn btn-primary btn-sm"
@@ -70,7 +70,7 @@
           <div v-if="lastProcessStats.staging_duplicate_event_rows != null">
             Data Sesuai : <strong>{{ lastProcessStats.staging_ok_rows }}</strong> /
             <strong>{{ lastProcessStats.staging_distinct_nik_date_time_rows }}</strong>
-            · Duplikat Data: <strong>{{ lastProcessStats.staging_duplicate_event_rows }}</strong>
+            · Duplikasi Data: <strong>{{ lastProcessStats.staging_duplicate_event_rows }}</strong>
           </div>
           <div>Data Baru: <strong>{{ lastProcessStats.attendance_inserted }}</strong></div>
           <div>Data Diupdate (hanya status pending): <strong>{{ lastProcessStats.attendance_updated_pending }}</strong></div>
@@ -134,8 +134,8 @@
               <th>Line</th>
               <th>NIK</th>
               <th>Nama</th>
-              <th>Tanggal raw</th>
-              <th>Jam raw</th>
+              <th>Tanggal</th>
+              <th>Jam</th>
               <th>Error</th>
             </tr>
           </thead>
@@ -236,7 +236,7 @@ async function doProcess(batchId) {
       return;
     }
     uploadOk.value = true;
-    uploadMessage.value = data.message || 'Proses dimulai di background.';
+    uploadMessage.value = data.message || 'Proses dimulai.';
     await pollProcessJob(jobId, batchId);
   } catch (err) {
     uploadOk.value = false;
@@ -270,10 +270,10 @@ async function pollProcessJob(jobId, batchId, kind = 'process') {
     if (job.status === 'done') {
       uploadOk.value = true;
       if (kind === 'patch') {
-        uploadMessage.value = 'Submit attendance selesai di background.';
+        uploadMessage.value = 'Submit attendance selesai.';
         lastPatchStats.value = job.result || null;
       } else {
-        uploadMessage.value = 'Proses selesai di background.';
+        uploadMessage.value = 'Proses selesai.';
         lastProcessStats.value = job.result || null;
         lastPatchStats.value = null;
       }
@@ -285,7 +285,7 @@ async function pollProcessJob(jobId, batchId, kind = 'process') {
     if (job.status === 'error') {
       uploadOk.value = false;
       uploadMessage.value =
-        job.error || (kind === 'patch' ? 'Submit attendance background gagal.' : 'Proses background gagal.');
+        job.error || (kind === 'patch' ? 'Submit attendance gagal.' : 'Proses gagal.');
       clearProcessPollTimer();
       return;
     }
@@ -293,12 +293,12 @@ async function pollProcessJob(jobId, batchId, kind = 'process') {
     uploadOk.value = true;
     uploadMessage.value =
       total > 0
-        ? `${kind === 'patch' ? 'Submit attendance' : 'Proses'} background berjalan: ${processed}/${total} (${percent}%).`
-        : `${kind === 'patch' ? 'Submit attendance' : 'Proses'} background berjalan (${job.status}).`;
+        ? `${kind === 'patch' ? 'Submit attendance' : 'Proses'} berjalan: ${processed}/${total} (${percent}%).`
+        : `${kind === 'patch' ? 'Submit attendance' : 'Proses'} berjalan (${job.status}).`;
 
     if (Date.now() - startedAt >= maxWaitMs) {
       uploadOk.value = false;
-      uploadMessage.value = 'Waktu tunggu status proses habis. Cek kembali beberapa saat lagi.';
+      uploadMessage.value = 'Waktu tunggu status proses habis. Silakan cek kembali beberapa saat lagi.';
       clearProcessPollTimer();
       return;
     }
@@ -307,7 +307,7 @@ async function pollProcessJob(jobId, batchId, kind = 'process') {
         await tick();
       } catch (err) {
         uploadOk.value = false;
-        uploadMessage.value = err.response?.data?.message || err.message || 'Gagal memantau proses background.';
+        uploadMessage.value = err.response?.data?.message || err.message || 'Gagal memantau proses.';
         clearProcessPollTimer();
       }
     }, 1500);
@@ -325,21 +325,21 @@ async function doPatchAttendance(batchId) {
     const { data } = await api.post(`/glog/batches/${batchId}/patch-attendance`, {}, { timeout: 15000 });
     if (!data.success) {
       uploadOk.value = false;
-      uploadMessage.value = data.message || 'Patch gagal.';
+      uploadMessage.value = data.message || 'Submit attendance gagal.';
       return;
     }
     const jobId = data.data?.job_id;
     if (!jobId) {
       uploadOk.value = false;
-      uploadMessage.value = 'Job submit attendance tidak ditemukan.';
+      uploadMessage.value = 'Job submit attendance tidak ditemukan. Silakan cek kembali beberapa saat lagi.';
       return;
     }
     uploadOk.value = true;
-    uploadMessage.value = data.message || 'Submit attendance dimulai di background.';
+    uploadMessage.value = data.message || 'Submit attendance dimulai.';
     await pollProcessJob(jobId, batchId, 'patch');
   } catch (err) {
     uploadOk.value = false;
-    uploadMessage.value = err.response?.data?.message || err.message || 'Patch gagal.';
+    uploadMessage.value = err.response?.data?.message || err.message || 'Submit attendance gagal.';
   } finally {
     patching.value = false;
   }
