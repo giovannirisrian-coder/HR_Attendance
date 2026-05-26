@@ -27,6 +27,8 @@
       <div class="card-body">
         <EmployeeForm
           submit-label="Save"
+          :submitting="submitting"
+          :error-message="errorMsg"
           @submit="onSubmit"
           @cancel="onCancel"
         />
@@ -38,16 +40,32 @@
 <script setup>
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
+import api from '../../utils/api';
 import EmployeeForm from './EmployeeForm.vue';
 
 const router = useRouter();
 const toast = ref('');
+const errorMsg = ref('');
+const submitting = ref(false);
 
-const onSubmit = (data) => {
-  toast.value = `Employee "${data.employee_name || 'New User'}" created successfully (mockup).`;
-  setTimeout(() => {
-    router.push('/ls-hr/employees');
-  }, 900);
+const onSubmit = async (data) => {
+  if (submitting.value) return;
+  submitting.value = true;
+  errorMsg.value = '';
+  try {
+    const { data: res } = await api.post('/employees', data);
+    const name = res?.data?.employee_name || data.employee_name || 'New User';
+    toast.value = `Employee "${name}" created successfully.`;
+    setTimeout(() => {
+      router.push('/ls-hr/employees');
+    }, 900);
+  } catch (err) {
+    errorMsg.value =
+      err?.response?.data?.message ||
+      'Failed to create employee. Please check the form and try again.';
+  } finally {
+    submitting.value = false;
+  }
 };
 
 const onCancel = () => {

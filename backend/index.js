@@ -37,6 +37,7 @@ app.use('/api/leaves',     require('./src/routes/leaves'));
 app.use('/api/reports',    require('./src/routes/reports'));
 app.use('/api/users',      require('./src/routes/users'));
 app.use('/api/glog',       require('./src/routes/glog'));
+app.use('/api/employees',  require('./src/routes/hrEmployees'));
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString(), service: 'Berau Coal Attendance API' });

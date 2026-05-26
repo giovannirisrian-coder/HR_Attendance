@@ -8,6 +8,10 @@
         </p>
       </div>
       <div class="flex items-center gap-2">
+        <button type="button" class="btn btn-outline btn-sm" :disabled="loading" @click="fetchData">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+          Refresh
+        </button>
         <router-link to="/ls-hr/employees/create" class="btn btn-primary">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
           Create
@@ -15,26 +19,30 @@
       </div>
     </div>
 
+    <div v-if="errorMsg" class="alert alert-error" style="margin-bottom: 16px;">
+      <span>⚠️</span> {{ errorMsg }}
+    </div>
+
     <!-- Stats -->
     <div class="stat-grid">
       <div class="stat-card">
         <div class="stat-card-label">Total Employees</div>
-        <div class="stat-card-value">{{ employees.length }}</div>
+        <div class="stat-card-value">{{ summary.total }}</div>
         <div class="stat-card-sub">All vendors</div>
       </div>
       <div class="stat-card">
         <div class="stat-card-label">Active</div>
-        <div class="stat-card-value" style="color: var(--bc-green-500)">{{ activeCount }}</div>
+        <div class="stat-card-value" style="color: var(--bc-green-500)">{{ summary.active }}</div>
         <div class="stat-card-sub">Currently working</div>
       </div>
       <div class="stat-card">
         <div class="stat-card-label">Deactive</div>
-        <div class="stat-card-value" style="color: var(--bc-rejected)">{{ deactiveCount }}</div>
+        <div class="stat-card-value" style="color: var(--bc-rejected)">{{ summary.deactive }}</div>
         <div class="stat-card-sub">Not active</div>
       </div>
       <div class="stat-card">
         <div class="stat-card-label">Vendors</div>
-        <div class="stat-card-value" style="color: var(--bc-gray-700)">{{ vendorCount }}</div>
+        <div class="stat-card-value" style="color: var(--bc-gray-700)">{{ summary.vendors }}</div>
         <div class="stat-card-sub">Registered vendors</div>
       </div>
     </div>
@@ -42,7 +50,9 @@
     <div class="card">
       <div class="card-header">
         <span class="card-title">Personnel Master Data</span>
-        <span class="text-sm text-muted">{{ filteredEmployees.length }} of {{ employees.length }} shown</span>
+        <span class="text-sm text-muted">
+          {{ pagination.total }} total · page {{ pagination.page }} of {{ totalPages }}
+        </span>
       </div>
       <div class="card-body" style="padding-bottom: 0;">
         <!-- Filter bar -->
@@ -54,8 +64,9 @@
             <input
               v-model="filters.search"
               class="form-control"
-              placeholder="Search Employee Name or NIK…"
+              placeholder="Search Employee Name or NPK…"
               style="max-width: 260px;"
+              @input="debouncedFetch"
             />
           </div>
           <input
@@ -63,16 +74,17 @@
             class="form-control"
             placeholder="Supervisor Name…"
             style="max-width: 200px;"
+            @input="debouncedFetch"
           />
-          <select v-model="filters.site" class="form-control" style="max-width: 180px;">
+          <select v-model="filters.site" class="form-control" style="max-width: 180px;" @change="resetAndFetch">
             <option value="">All Sites</option>
             <option v-for="s in siteOptions" :key="s" :value="s">{{ s }}</option>
           </select>
-          <select v-model="filters.vendor" class="form-control" style="max-width: 220px;">
+          <select v-model="filters.vendor" class="form-control" style="max-width: 220px;" @change="resetAndFetch">
             <option value="">All Vendors</option>
             <option v-for="v in vendorOptions" :key="v" :value="v">{{ v }}</option>
           </select>
-          <select v-model="filters.status" class="form-control" style="max-width: 160px;">
+          <select v-model="filters.status" class="form-control" style="max-width: 160px;" @change="resetAndFetch">
             <option value="">All Status</option>
             <option value="Active">Active</option>
             <option value="Deactive">Deactive</option>
@@ -83,7 +95,8 @@
 
       <!-- Table -->
       <div class="table-wrapper employee-table-wrapper" style="border:none; border-radius:0; border-top:1px solid var(--bc-gray-200);">
-        <table class="employee-table">
+        <div v-if="loading" class="loading-overlay"><span class="spinner"></span> Loading…</div>
+        <table v-else class="employee-table">
           <thead>
             <tr>
               <th class="col-no">No</th>
@@ -110,7 +123,7 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-if="filteredEmployees.length === 0">
+            <tr v-if="employees.length === 0">
               <td :colspan="21">
                 <div class="empty-state">
                   <div class="empty-state-icon">👥</div>
@@ -119,8 +132,8 @@
                 </div>
               </td>
             </tr>
-            <tr v-for="(emp, idx) in filteredEmployees" :key="emp.id">
-              <td class="col-no font-bold">{{ idx + 1 }}</td>
+            <tr v-for="(emp, idx) in employees" :key="emp.id">
+              <td class="col-no font-bold">{{ rowNumber(idx) }}</td>
               <td><span class="text-sm font-mono">{{ emp.vendor_number }}</span></td>
               <td>{{ emp.user_department }}</td>
               <td>{{ emp.department_title }}</td>
@@ -131,7 +144,7 @@
               <td class="text-sm">{{ formatDate(emp.po_period_2) }}</td>
               <td>{{ emp.dic_hro }}</td>
               <td><span class="text-sm font-mono">{{ emp.cost_center }}</span></td>
-              <td><span class="text-sm font-mono">{{ emp.employee_id }}</span></td>
+              <td><span class="text-sm font-mono">{{ emp.npk }}</span></td>
               <td class="font-bold">{{ emp.employee_name }}</td>
               <td>{{ emp.position }}</td>
               <td>{{ emp.position_group }}</td>
@@ -163,18 +176,36 @@
           </tbody>
         </table>
       </div>
+
+      <!-- Pagination -->
+      <div v-if="pagination.total > 0" class="card-body" style="padding-top:12px; border-top:1px solid var(--bc-gray-100);">
+        <div class="pagination">
+          <span class="pagination-info">
+            Showing {{ rangeStart }}–{{ rangeEnd }} of {{ pagination.total }}
+          </span>
+          <button class="btn btn-ghost btn-sm" :disabled="pagination.page <= 1" @click="changePage(pagination.page - 1)">‹ Prev</button>
+          <button class="btn btn-ghost btn-sm" :disabled="pagination.page * pagination.limit >= pagination.total" @click="changePage(pagination.page + 1)">Next ›</button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { MOCK_EMPLOYEES } from './mockEmployees';
+import api from '../../utils/api';
 
 const router = useRouter();
 
-const employees = ref([...MOCK_EMPLOYEES]);
+const loading = ref(false);
+const errorMsg = ref('');
+const employees = ref([]);
+const siteOptions = ref([]);
+const vendorOptions = ref([]);
+
+const pagination = reactive({ total: 0, page: 1, limit: 25 });
+const summary = reactive({ total: 0, active: 0, deactive: 0, vendors: 0 });
 
 const filters = reactive({
   search: '',
@@ -184,37 +215,59 @@ const filters = reactive({
   status: '',
 });
 
-const siteOptions = computed(() => {
-  const set = new Set(employees.value.map((e) => e.site).filter(Boolean));
-  return Array.from(set).sort();
-});
+const totalPages = computed(() => Math.max(1, Math.ceil(pagination.total / pagination.limit)));
+const rangeStart = computed(() => (pagination.total === 0 ? 0 : (pagination.page - 1) * pagination.limit + 1));
+const rangeEnd = computed(() => Math.min(pagination.page * pagination.limit, pagination.total));
 
-const vendorOptions = computed(() => {
-  const set = new Set(employees.value.map((e) => e.vendor_name).filter(Boolean));
-  return Array.from(set).sort();
-});
+const rowNumber = (idx) => (pagination.page - 1) * pagination.limit + idx + 1;
 
-const filteredEmployees = computed(() => {
-  const search = filters.search.trim().toLowerCase();
-  const supervisor = filters.supervisor.trim().toLowerCase();
+let debounceTimer;
+const debouncedFetch = () => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => {
+    pagination.page = 1;
+    fetchData();
+  }, 400);
+};
 
-  return employees.value.filter((emp) => {
-    if (search) {
-      const matchName = emp.employee_name.toLowerCase().includes(search);
-      const matchNik = String(emp.employee_id).toLowerCase().includes(search);
-      if (!matchName && !matchNik) return false;
-    }
-    if (supervisor && !emp.supervisor_name.toLowerCase().includes(supervisor)) return false;
-    if (filters.site && emp.site !== filters.site) return false;
-    if (filters.vendor && emp.vendor_name !== filters.vendor) return false;
-    if (filters.status && emp.user_status !== filters.status) return false;
-    return true;
-  });
-});
+const resetAndFetch = () => {
+  pagination.page = 1;
+  fetchData();
+};
 
-const activeCount = computed(() => employees.value.filter((e) => e.user_status === 'Active').length);
-const deactiveCount = computed(() => employees.value.filter((e) => e.user_status === 'Deactive').length);
-const vendorCount = computed(() => new Set(employees.value.map((e) => e.vendor_name)).size);
+const fetchData = async () => {
+  loading.value = true;
+  errorMsg.value = '';
+  try {
+    const params = { page: pagination.page, limit: pagination.limit };
+    if (filters.search.trim()) params.search = filters.search.trim();
+    if (filters.supervisor.trim()) params.supervisor = filters.supervisor.trim();
+    if (filters.site) params.site = filters.site;
+    if (filters.vendor) params.vendor = filters.vendor;
+    if (filters.status) params.status = filters.status;
+
+    const { data } = await api.get('/employees', { params });
+    employees.value = Array.isArray(data?.data) ? data.data : [];
+    Object.assign(pagination, data?.pagination || { total: 0, page: 1, limit: pagination.limit });
+
+    siteOptions.value = data?.meta?.sites || [];
+    vendorOptions.value = data?.meta?.vendors || [];
+    Object.assign(summary, data?.meta?.summary || { total: 0, active: 0, deactive: 0, vendors: 0 });
+  } catch (err) {
+    employees.value = [];
+    errorMsg.value =
+      err?.response?.data?.message ||
+      'Failed to load employees. Please try again.';
+  } finally {
+    loading.value = false;
+  }
+};
+
+const changePage = (p) => {
+  if (p < 1) return;
+  pagination.page = p;
+  fetchData();
+};
 
 const resetFilters = () => {
   filters.search = '';
@@ -222,6 +275,8 @@ const resetFilters = () => {
   filters.site = '';
   filters.vendor = '';
   filters.status = '';
+  pagination.page = 1;
+  fetchData();
 };
 
 const goEdit = (id) => {
@@ -230,15 +285,23 @@ const goEdit = (id) => {
 
 const formatDate = (d) => {
   if (!d) return '—';
-  const date = new Date(d);
-  if (Number.isNaN(date.getTime())) return d;
-  return date.toLocaleDateString('en-ID', { day: '2-digit', month: 'short', year: 'numeric' });
+  const s = String(d).slice(0, 10);
+  const [y, m, day] = s.split('-');
+  if (!y || !m || !day) return s;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const mi = parseInt(m, 10) - 1;
+  if (mi < 0 || mi > 11) return s;
+  return `${parseInt(day, 10).toString().padStart(2, '0')} ${months[mi]} ${y}`;
 };
+
+onMounted(fetchData);
 </script>
 
 <style scoped>
 .employee-table-wrapper {
   overflow-x: auto;
+  position: relative;
+  min-height: 120px;
 }
 
 .employee-table {

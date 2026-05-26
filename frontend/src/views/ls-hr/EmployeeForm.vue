@@ -1,6 +1,7 @@
 <template>
   <form class="employee-form" @submit.prevent="onSubmit">
-    <div v-if="successMsg" class="alert alert-success"><span>✅</span> {{ successMsg }}</div>
+    <div v-if="errorMessage" class="alert alert-error"><span>⚠️</span> {{ errorMessage }}</div>
+    <div v-if="successMessage" class="alert alert-success"><span>✅</span> {{ successMessage }}</div>
 
     <!-- ── Section: Vendor & Contract ─────────────────────────── -->
     <section class="form-section">
@@ -76,7 +77,7 @@
       <div class="form-grid">
         <div class="form-group">
           <label class="form-label">Employee ID (NPK) <span class="required">*</span></label>
-          <input v-model="form.employee_id" type="text" class="form-control" placeholder="e.g. NPK-100245" required />
+          <input v-model="form.npk" type="text" class="form-control" placeholder="e.g. NPK-100245" required />
         </div>
         <div class="form-group">
           <label class="form-label">Employee Name <span class="required">*</span></label>
@@ -139,7 +140,7 @@
 
     <!-- ── Actions ────────────────────────────────────────────── -->
     <div class="form-actions">
-      <button type="button" class="btn btn-outline" @click="onCancel">Cancel</button>
+      <button type="button" class="btn btn-outline" :disabled="submitting" @click="onCancel">Cancel</button>
       <button type="submit" class="btn btn-primary" :disabled="submitting">
         <span v-if="submitting" class="spinner" style="width:16px;height:16px;border-width:2px;"></span>
         {{ submitting ? 'Saving…' : submitLabel }}
@@ -149,7 +150,7 @@
 </template>
 
 <script setup>
-import { reactive, ref, watch } from 'vue';
+import { reactive, watch } from 'vue';
 import {
   EMPTY_EMPLOYEE,
   EMPLOYMENT_STATUS_OPTIONS,
@@ -169,6 +170,14 @@ const props = defineProps({
     type: String,
     default: '',
   },
+  errorMessage: {
+    type: String,
+    default: '',
+  },
+  submitting: {
+    type: Boolean,
+    default: false,
+  },
 });
 
 const emit = defineEmits(['submit', 'cancel']);
@@ -176,9 +185,7 @@ const emit = defineEmits(['submit', 'cancel']);
 const employmentStatusOptions = EMPLOYMENT_STATUS_OPTIONS;
 const userStatusOptions = USER_STATUS_OPTIONS;
 
-const form = reactive({ ...EMPTY_EMPLOYEE, ...props.initialData });
-const submitting = ref(false);
-const successMsg = ref('');
+const form = reactive({ ...EMPTY_EMPLOYEE, ...(props.initialData || {}) });
 
 watch(
   () => props.initialData,
@@ -187,21 +194,9 @@ watch(
   }
 );
 
-watch(
-  () => props.successMessage,
-  (val) => {
-    successMsg.value = val || '';
-  }
-);
-
 const onSubmit = () => {
-  if (submitting.value) return;
-  submitting.value = true;
-  successMsg.value = '';
-  setTimeout(() => {
-    submitting.value = false;
-    emit('submit', { ...form });
-  }, 400);
+  if (props.submitting) return;
+  emit('submit', { ...form });
 };
 
 const onCancel = () => {
