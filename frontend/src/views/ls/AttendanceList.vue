@@ -136,7 +136,7 @@
                 </div>
                 <span v-else class="text-muted">—</span>
               </td>
-              <td><span class="badge" :class="`badge-${r.status}`">{{ r.status }}</span></td>
+              <td><span class="badge" :class="`badge-${r.status}`">{{ toPascalCase(r.status) }}</span></td>
               <td>
                 <div class="row-actions">
                   <router-link :to="`/ls/attendance/${r.id}`" class="btn btn-outline btn-sm">Detail</router-link>
@@ -292,6 +292,15 @@ const formatOvertimeHours = (h) => {
 };
 
 const leaveTypeLabel = (t) => ({ cuti: 'Cuti', izin: 'Izin', sakit: 'Sakit' }[t] || t);
+
+const toPascalCase = (s) => {
+  if (s == null || s === '') return '';
+  return String(s)
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join('');
+};
 
 const openLifecycleConfirm = (record, action) => {
   lifecycleModal.id = record.id;

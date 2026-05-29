@@ -148,7 +148,7 @@
                     </div>
                     <span v-else class="text-muted">—</span>
                   </td>
-                  <td><span class="badge" :class="`badge-${r.status}`">{{ r.status }}</span></td>
+                  <td><span class="badge" :class="`badge-${r.status}`">{{ toPascalCase(r.status) }}</span></td>
                   <td>
                     <button class="btn btn-outline btn-sm" @click="openDetail(r)" title="View Detail">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -194,7 +194,7 @@
                 <div class="dl-row"><span>Date</span><strong>{{ formatDate(detailModal.record.attendance_date) }}</strong></div>
                 <div class="dl-row"><span>Clock In</span><strong class="text-green">{{ detailModal.record.clock_in_time || '—' }}</strong></div>
                 <div class="dl-row"><span>Clock Out</span><strong class="text-red">{{ detailModal.record.clock_out_time || '—' }}</strong></div>
-                <div class="dl-row"><span>Status</span><span class="badge" :class="`badge-${detailModal.record.status}`">{{ detailModal.record.status }}</span></div>
+                <div class="dl-row"><span>Status</span><span class="badge" :class="`badge-${detailModal.record.status}`">{{ toPascalCase(detailModal.record.status) }}</span></div>
               </div>
             </div>
             <div class="detail-section" v-if="detailModal.record.ot_start_time && detailModal.record.ot_end_time">
@@ -632,6 +632,15 @@ const calcDuration = (inT, outT) => {
   const [oh,om] = outT.split(':').map(Number);
   const mins = (oh*60+om)-(ih*60+im);
   return mins<0?'—':`${Math.floor(mins/60)}h ${mins%60}m`;
+};
+
+const toPascalCase = (s) => {
+  if (s == null || s === '') return '';
+  return String(s)
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join('');
 };
 
 onMounted(async () => {
