@@ -76,10 +76,24 @@ const getVendorMonthlySummary = async (req, res) => {
 
     const data = [];
     for (let m = 1; m <= maxMonth; m++) {
+      // `approved_rows` is the count of LATEST APPROVED attendance rows per
+      // (user_id, attendance_date) so multiple correction attempts do not
+      // double-count toward invoice / BAST. Cancelled / withdrawn rows are
+      // excluded by `a.status = 'approved'`. `attendance_rows` excludes
+      // those terminal cancellations from the headline figure too.
       const [[agg]] = await db.query(
         `SELECT
-           COUNT(a.id) AS attendance_rows,
-           SUM(CASE WHEN a.status = 'approved' THEN 1 ELSE 0 END) AS approved_rows
+           SUM(CASE WHEN a.status IN ('pending','approved','rejected') THEN 1 ELSE 0 END) AS attendance_rows,
+           SUM(CASE
+                 WHEN a.status = 'approved'
+                  AND a.id = (
+                    SELECT MAX(a2.id) FROM attendance a2
+                    WHERE a2.user_id = a.user_id
+                      AND a2.attendance_date = a.attendance_date
+                      AND a2.status = 'approved'
+                  )
+                 THEN 1 ELSE 0
+               END) AS approved_rows
          FROM attendance a
          JOIN users u ON a.user_id = u.id
          WHERE u.vendor_id = ? AND u.role = 'ls'
@@ -135,9 +149,29 @@ const getVendorMonthlyDetail = async (req, res) => {
 
     const employeesOut = [];
     for (const emp of employees) {
+      // Show one timeline line per (employee, date): the LATEST APPROVED row
+      // if one exists, otherwise the freshest pending / rejected row so the
+      // vendor can still see what's outstanding. Cancelled / withdrawn rows
+      // are intentionally suppressed.
       const [att] = await db.query(
         `SELECT a.* FROM attendance a
          WHERE a.user_id = ? AND MONTH(a.attendance_date) = ? AND YEAR(a.attendance_date) = ?
+           AND a.status NOT IN ('cancelled', 'withdrawn', 'superseded')
+           AND a.id = (
+             SELECT MAX(a2.id) FROM attendance a2
+             WHERE a2.user_id = a.user_id
+               AND a2.attendance_date = a.attendance_date
+               AND a2.status NOT IN ('cancelled', 'withdrawn', 'superseded')
+               AND (
+                 a2.status = 'approved'
+                 OR NOT EXISTS (
+                   SELECT 1 FROM attendance a3
+                   WHERE a3.user_id = a.user_id
+                     AND a3.attendance_date = a.attendance_date
+                     AND a3.status = 'approved'
+                 )
+               )
+           )
          ORDER BY a.attendance_date`,
         [emp.id, month, year]
       );

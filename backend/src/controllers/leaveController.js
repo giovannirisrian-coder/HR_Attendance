@@ -151,6 +151,9 @@ const getTeamLeavesMonthStats = async (req, res) => {
     const supervisorId = req.user.id;
     const { year, month, startStr, endStr } = resolveCalendarMonth(req);
 
+    // Cancelled / withdrawn rows are intentionally excluded — those are
+    // requests the LS has pulled back and should not feed Supervisor alerts
+    // or recap stats.
     const [[row]] = await db.query(
       `SELECT
          COUNT(*) AS total,
@@ -160,6 +163,7 @@ const getTeamLeavesMonthStats = async (req, res) => {
        FROM leave_requests lr
        JOIN users u ON lr.user_id = u.id
        WHERE u.supervisor_id = ?
+         AND lr.status NOT IN ('cancelled', 'withdrawn')
          AND lr.start_date <= ?
          AND lr.end_date >= ?`,
       [supervisorId, endStr, startStr]
@@ -212,6 +216,7 @@ const getTeamLeavesEmployeesOverview = async (req, res) => {
        LEFT JOIN employees e ON e.user_id = u.id
        LEFT JOIN leave_requests lr
          ON lr.user_id = u.id
+        AND lr.status NOT IN ('cancelled', 'withdrawn')
         AND lr.start_date <= ?
         AND lr.end_date >= ?
        ${userWhere}
@@ -255,6 +260,14 @@ const getTeamLeaves = async (req, res) => {
     if (request_type) {
       where += ' AND lr.request_type = ?';
       params.push(request_type);
+    }
+
+    if (status && ['cancelled', 'withdrawn'].includes(status)) {
+      // explicit filter wins → no implicit exclude needed
+    } else if (!status) {
+      // Managerial Review queue: hide requests the LS has already pulled
+      // back. They remain queryable via an explicit `status` filter.
+      where += " AND lr.status NOT IN ('cancelled', 'withdrawn')";
     }
 
     const uid = parseInt(user_id, 10);
@@ -465,6 +478,75 @@ const updateLeaveApprovalBulk = async (req, res) => {
   }
 };
 
+// LS: cancel a pending leave request OR withdraw an already approved one.
+//
+// Cancel  (pending  → cancelled): row simply drops out of the Supervisor queue.
+// Withdraw(approved → withdrawn): the leave stops counting in Monthly Recap,
+//                                 BAST and other vendor / LS HR / SSU
+//                                 analytics. The approval workflow itself
+//                                 (LS → Supervisor → Vendor → LS HR → SSU)
+//                                 is intentionally not modified.
+const cancelOrWithdrawLeave = async (req, res) => {
+  const action = req.body?.action === 'withdraw' ? 'withdraw' : 'cancel';
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+
+    const [rows] = await db.query(
+      'SELECT * FROM leave_requests WHERE id = ? AND user_id = ?',
+      [id, userId]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Leave request not found or does not belong to you.',
+      });
+    }
+    const row = rows[0];
+
+    if (action === 'cancel') {
+      if (row.status !== 'pending') {
+        return res.status(400).json({
+          success: false,
+          message: 'Only pending leave requests can be cancelled.',
+        });
+      }
+      await db.query(
+        `UPDATE leave_requests
+         SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [id]
+      );
+      return res.json({
+        success: true,
+        message: 'Leave request cancelled.',
+        data: { id: Number(id), status: 'cancelled' },
+      });
+    }
+
+    if (row.status !== 'approved') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only approved leave requests can be withdrawn.',
+      });
+    }
+    await db.query(
+      `UPDATE leave_requests
+       SET status = 'withdrawn', updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [id]
+    );
+    res.json({
+      success: true,
+      message: 'Leave request withdrawn. Monthly Recap will no longer count this leave.',
+      data: { id: Number(id), status: 'withdrawn' },
+    });
+  } catch (err) {
+    console.error('Cancel/withdraw leave error:', err);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
 module.exports = {
   createLeave,
   getMyLeaves,
@@ -473,4 +555,5 @@ module.exports = {
   getTeamLeavesEmployeesOverview,
   updateLeaveApproval,
   updateLeaveApprovalBulk,
+  cancelOrWithdrawLeave,
 };

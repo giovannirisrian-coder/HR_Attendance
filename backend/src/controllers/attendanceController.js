@@ -222,6 +222,9 @@ const getMyAttendance = async (req, res) => {
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
+    // `lr.status = 'approved'` already filters out cancelled / withdrawn
+    // requests — those rows must never colour an attendance day as cuti /
+    // izin / sakit in the LS summary or vendor recap.
     const leaveDayTypeExpr = `CASE
       WHEN EXISTS (
         SELECT 1 FROM leave_requests lr
@@ -262,6 +265,11 @@ const getMyAttendance = async (req, res) => {
       params
     );
 
+    // Overtime hours are summed only from the LATEST APPROVED attendance
+    // row per (user_id, attendance_date). This protects payroll / invoice
+    // accuracy when an LS has multiple approved correction attempts on the
+    // same day and prevents cancelled / withdrawn rows from inflating
+    // totals.
     const [[summaryRow]] = await db.query(
       `SELECT
          COALESCE(SUM(
@@ -292,7 +300,14 @@ const getMyAttendance = async (req, res) => {
        FROM attendance a
        JOIN users u ON a.user_id = u.id
        LEFT JOIN employees e ON e.id = a.employee_id
-       ${where}`,
+       ${where}
+         AND a.status = 'approved'
+         AND a.id = (
+           SELECT MAX(a2.id) FROM attendance a2
+           WHERE a2.user_id = a.user_id
+             AND a2.attendance_date = a.attendance_date
+             AND a2.status = 'approved'
+         )`,
       params
     );
 
@@ -356,7 +371,15 @@ const getTeamAttendance = async (req, res) => {
       const t = `%${search}%`;
       params.push(t, t, t);
     }
-    if (status) { where += ' AND a.status = ?'; params.push(status); }
+    if (status) {
+      where += ' AND a.status = ?';
+      params.push(status);
+    } else {
+      // Managerial Review must not surface requests the LS already pulled
+      // back; cancelled / withdrawn rows are hidden from the default
+      // Supervisor queue but stay queryable via explicit `status`.
+      where += " AND a.status NOT IN ('cancelled', 'withdrawn')";
+    }
     if (start_date) { where += ' AND a.attendance_date >= ?'; params.push(start_date); }
     if (end_date)   { where += ' AND a.attendance_date <= ?'; params.push(end_date); }
 
@@ -612,15 +635,28 @@ const getMonthlyAttendanceRecap = async (req, res) => {
       return res.status(400).json({ success: false, message: 'year is out of allowed range.' });
     }
 
-    // Attendance aggregates only from `attendance`; leave rows in a separate subquery so joins
-    // do not duplicate attendance rows and inflate counts.
+    // Counting rules (data-integrity guarantee for Monthly Recap / BAST):
+    //
+    //  • `approved_attendance` and `total_clock_in_days` ignore cancelled /
+    //    withdrawn / superseded rows, and de-duplicate to the LATEST
+    //    APPROVED record per (user_id, attendance_date) so a day cannot be
+    //    counted twice when an LS submitted multiple correction attempts.
+    //  • `pending_attendance` mirrors the Supervisor inbox so cancelled /
+    //    withdrawn rows do NOT inflate the alert badge.
+    //  • `rejected_attendance` keeps reporting visibility on rejections only.
+    //  • `total_attendance_records` is now the sum of the actionable buckets
+    //    so the cancelled / withdrawn rows are excluded from the headline.
+    //  • `leave_*` counts approved leave requests overlapping the month and
+    //    intentionally skips cancelled / withdrawn rows.
     const [rows] = await db.query(
       `SELECT
          u.id AS user_id,
          u.employee_id,
          u.name AS employee_name,
          e.nik,
-         COALESCE(att.total_attendance_records, 0) AS total_attendance_records,
+         (COALESCE(att.approved_attendance, 0)
+            + COALESCE(att.pending_attendance, 0)
+            + COALESCE(att.rejected_attendance, 0)) AS total_attendance_records,
          COALESCE(att.approved_attendance, 0) AS approved_attendance,
          COALESCE(att.pending_attendance, 0) AS pending_attendance,
          COALESCE(att.rejected_attendance, 0) AS rejected_attendance,
@@ -632,15 +668,38 @@ const getMonthlyAttendanceRecap = async (req, res) => {
        LEFT JOIN employees e ON e.user_id = u.id
        LEFT JOIN (
          SELECT
-           user_id,
-           COUNT(*) AS total_attendance_records,
-           SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved_attendance,
-           SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_attendance,
-           SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) AS rejected_attendance,
-           SUM(CASE WHEN clock_in_time IS NOT NULL THEN 1 ELSE 0 END) AS total_clock_in_days
-         FROM attendance
-         WHERE YEAR(attendance_date) = ? AND MONTH(attendance_date) = ?
-         GROUP BY user_id
+           latest.user_id,
+           SUM(CASE WHEN latest.status = 'approved' THEN 1 ELSE 0 END) AS approved_attendance,
+           SUM(CASE WHEN latest.status = 'approved' AND latest.clock_in_time IS NOT NULL THEN 1 ELSE 0 END) AS total_clock_in_days,
+           COALESCE(pend.pending_attendance, 0) AS pending_attendance,
+           COALESCE(rej.rejected_attendance, 0) AS rejected_attendance
+         FROM (
+           SELECT a.user_id, a.attendance_date, a.status, a.clock_in_time
+           FROM attendance a
+           WHERE YEAR(a.attendance_date) = ? AND MONTH(a.attendance_date) = ?
+             AND a.status = 'approved'
+             AND a.id = (
+               SELECT MAX(a2.id) FROM attendance a2
+               WHERE a2.user_id = a.user_id
+                 AND a2.attendance_date = a.attendance_date
+                 AND a2.status = 'approved'
+             )
+         ) latest
+         LEFT JOIN (
+           SELECT user_id, COUNT(*) AS pending_attendance
+           FROM attendance
+           WHERE YEAR(attendance_date) = ? AND MONTH(attendance_date) = ?
+             AND status = 'pending'
+           GROUP BY user_id
+         ) pend ON pend.user_id = latest.user_id
+         LEFT JOIN (
+           SELECT user_id, COUNT(*) AS rejected_attendance
+           FROM attendance
+           WHERE YEAR(attendance_date) = ? AND MONTH(attendance_date) = ?
+             AND status = 'rejected'
+           GROUP BY user_id
+         ) rej ON rej.user_id = latest.user_id
+         GROUP BY latest.user_id, pend.pending_attendance, rej.rejected_attendance
        ) att ON att.user_id = u.id
        LEFT JOIN (
          SELECT
@@ -657,13 +716,16 @@ const getMonthlyAttendanceRecap = async (req, res) => {
        ) lv ON lv.user_id = u.id
        WHERE u.supervisor_id = ? AND u.role = 'ls'
        ORDER BY u.name ASC`,
-      [year, month, year, month, supervisorId]
+      [year, month, year, month, year, month, year, month, supervisorId]
     );
 
     const firstDay = `${year}-${String(month).padStart(2, '0')}-01`;
     const lastDayNum = new Date(year, month, 0).getDate();
     const lastDay = `${year}-${String(month).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
 
+    // Cancelled / withdrawn leave rows are LS-driven retractions and must
+    // not appear in the Supervisor's Monthly Recap drill-down either —
+    // keeping them would visually contradict the headline counts above.
     const [leaveDetailRows] = await db.query(
       `SELECT
          lr.id,
@@ -679,6 +741,7 @@ const getMonthlyAttendanceRecap = async (req, res) => {
        FROM leave_requests lr
        JOIN users u ON lr.user_id = u.id
        WHERE u.supervisor_id = ? AND u.role = 'ls'
+         AND lr.status NOT IN ('cancelled', 'withdrawn')
          AND lr.start_date <= ?
          AND lr.end_date >= ?
        ORDER BY lr.user_id ASC, lr.start_date ASC, lr.id ASC`,
@@ -714,6 +777,104 @@ const getMonthlyAttendanceRecap = async (req, res) => {
   } catch (err) {
     console.error('Monthly attendance recap error:', err);
     res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
+// LS: cancel an own pending attendance correction OR withdraw an own approved correction.
+//
+// Cancel  (status pending  → cancelled)  : nothing else to do; the row simply
+//                                          drops out of the Supervisor review queue.
+// Withdraw(status approved → withdrawn)  : the row stops being is_effective; if the
+//                                          approval had superseded a machine record
+//                                          we revive that machine row so the day still
+//                                          has the original biometric snapshot. The
+//                                          underlying approval workflow is untouched.
+const cancelOrWithdrawAttendance = async (req, res) => {
+  const action = req.body?.action === 'withdraw' ? 'withdraw' : 'cancel';
+  const conn = await db.getConnection();
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+
+    const [rows] = await conn.query(
+      'SELECT * FROM attendance WHERE id = ? AND user_id = ?',
+      [id, userId]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Attendance record not found or does not belong to you.',
+      });
+    }
+    const row = rows[0];
+
+    if (action === 'cancel') {
+      if (row.status !== 'pending') {
+        return res.status(400).json({
+          success: false,
+          message: 'Only pending requests can be cancelled.',
+        });
+      }
+      await conn.query(
+        `UPDATE attendance
+         SET status = 'cancelled', is_effective = 0, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [id]
+      );
+      return res.json({
+        success: true,
+        message: 'Attendance request cancelled.',
+        data: { id: Number(id), status: 'cancelled' },
+      });
+    }
+
+    if (row.status !== 'approved') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only approved requests can be withdrawn.',
+      });
+    }
+
+    await conn.beginTransaction();
+    await conn.query(
+      `UPDATE attendance
+       SET status = 'withdrawn', is_effective = 0, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [id]
+    );
+    if (row.source_type === 'correction') {
+      const [supersededRows] = await conn.query(
+        `SELECT id FROM attendance
+         WHERE user_id = ? AND attendance_date = ?
+           AND source_type = 'machine' AND status = 'superseded'
+         ORDER BY id DESC
+         LIMIT 1
+         FOR UPDATE`,
+        [row.user_id, row.attendance_date]
+      );
+      if (supersededRows.length > 0) {
+        await conn.query(
+          `UPDATE attendance
+           SET status = 'approved', is_effective = 1, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?`,
+          [supersededRows[0].id]
+        );
+      }
+    }
+    await conn.commit();
+
+    res.json({
+      success: true,
+      message:
+        'Attendance request withdrawn. The original biometric record (if any) is now effective again.',
+      data: { id: Number(id), status: 'withdrawn' },
+    });
+  } catch (err) {
+    try { await conn.rollback(); } catch (_) { /* no-op */ }
+    console.error('Cancel/withdraw attendance error:', err);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  } finally {
+    conn.release();
   }
 };
 
@@ -785,4 +946,5 @@ module.exports = {
   updateApprovalBulk,
   getMonthlyAttendanceRecap,
   getAttendanceDetail,
+  cancelOrWithdrawAttendance,
 };

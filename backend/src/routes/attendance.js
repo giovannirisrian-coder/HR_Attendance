@@ -9,6 +9,7 @@ const {
   updateApprovalBulk,
   getMonthlyAttendanceRecap,
   getAttendanceDetail,
+  cancelOrWithdrawAttendance,
 } = require('../controllers/attendanceController');
 const { authenticate, authorize } = require('../middleware/auth');
 
@@ -17,6 +18,8 @@ const { authenticate, authorize } = require('../middleware/auth');
 // Overtime workflow shipped. Use POST /api/overtimes instead.
 router.post('/', authenticate, authorize('ls'), createAttendance);
 router.get('/my', authenticate, authorize('ls'), getMyAttendance);
+// Cancel (pending → cancelled) / Withdraw (approved → withdrawn) own request.
+router.put('/:id/cancel-withdraw', authenticate, authorize('ls'), cancelOrWithdrawAttendance);
 
 // Supervisor routes
 router.get('/team/members', authenticate, authorize('ls_supervisor'), getTeamLsMembers);

@@ -122,7 +122,7 @@ const getMyOvertimes = async (req, res) => {
     let where = 'WHERE o.user_id = ?';
     const params = [userId];
 
-    if (status && ['pending', 'approved', 'rejected'].includes(status)) {
+    if (status && ['pending', 'approved', 'rejected', 'cancelled', 'withdrawn'].includes(status)) {
       where += ' AND o.status = ?';
       params.push(status);
     }
@@ -180,9 +180,15 @@ const getTeamOvertimes = async (req, res) => {
       where += ' AND o.user_id = ?';
       params.push(uid);
     }
-    if (status && ['pending', 'approved', 'rejected'].includes(status)) {
+    if (status && ['pending', 'approved', 'rejected', 'cancelled', 'withdrawn'].includes(status)) {
       where += ' AND o.status = ?';
       params.push(status);
+    } else if (!status) {
+      // Managerial Review must never surface rows the LS has already
+      // pulled back. Cancelled / withdrawn rows are intentionally hidden
+      // from the default Supervisor queue, but stay queryable via an
+      // explicit status filter.
+      where += " AND o.status NOT IN ('cancelled', 'withdrawn')";
     }
     if (start_date) {
       where += ' AND o.request_date >= ?';
@@ -352,9 +358,99 @@ const updateOvertimeApproval = async (req, res) => {
   }
 };
 
+// LS: cancel a pending overtime request OR withdraw an already approved one.
+//
+// Cancel  (pending  → cancelled): row simply leaves the Supervisor queue.
+// Withdraw(approved → withdrawn): unlink from the attendance row it had
+//                                 populated and clear ot_start_time /
+//                                 ot_end_time / ot_summary on that row so
+//                                 the Vendor / LS HR / SSU analytics
+//                                 (Monthly Sheet, BAST, OT hour summary)
+//                                 stop counting this overtime — the
+//                                 approval sequence itself stays untouched.
+const cancelOrWithdrawOvertime = async (req, res) => {
+  const action = req.body?.action === 'withdraw' ? 'withdraw' : 'cancel';
+  const conn = await db.getConnection();
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+
+    const [rows] = await conn.query(
+      'SELECT * FROM overtime_requests WHERE id = ? AND user_id = ?',
+      [id, userId]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Overtime request not found or does not belong to you.',
+      });
+    }
+    const row = rows[0];
+
+    if (action === 'cancel') {
+      if (row.status !== 'pending') {
+        return res.status(400).json({
+          success: false,
+          message: 'Only pending overtime requests can be cancelled.',
+        });
+      }
+      await conn.query(
+        `UPDATE overtime_requests
+         SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [id]
+      );
+      return res.json({
+        success: true,
+        message: 'Overtime request cancelled.',
+        data: { id: Number(id), status: 'cancelled' },
+      });
+    }
+
+    if (row.status !== 'approved') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only approved overtime requests can be withdrawn.',
+      });
+    }
+
+    await conn.beginTransaction();
+    if (row.linked_attendance_id) {
+      await conn.query(
+        `UPDATE attendance
+         SET ot_start_time = NULL, ot_end_time = NULL, ot_summary = NULL,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [row.linked_attendance_id]
+      );
+    }
+    await conn.query(
+      `UPDATE overtime_requests
+       SET status = 'withdrawn', linked_attendance_id = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [id]
+    );
+    await conn.commit();
+
+    res.json({
+      success: true,
+      message: 'Overtime request withdrawn. Monthly Sheet / BAST will no longer count this overtime.',
+      data: { id: Number(id), status: 'withdrawn' },
+    });
+  } catch (err) {
+    try { await conn.rollback(); } catch (_) { /* no-op */ }
+    console.error('Cancel/withdraw overtime error:', err);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  } finally {
+    conn.release();
+  }
+};
+
 module.exports = {
   createOvertime,
   getMyOvertimes,
   getTeamOvertimes,
   updateOvertimeApproval,
+  cancelOrWithdrawOvertime,
 };

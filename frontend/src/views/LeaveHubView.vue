@@ -74,12 +74,22 @@
                 <option value="pending">Pending</option>
                 <option value="approved">Approved</option>
                 <option value="rejected">Rejected</option>
+                <option value="cancelled">Cancelled</option>
+                <option value="withdrawn">Withdrawn</option>
               </select>
             </div>
           </div>
-          <div class="table-wrapper" style="border:none;border-radius:0;border-top:1px solid var(--bc-gray-200);">
+          <div class="table-wrapper leave-ls-table" style="border:none;border-radius:0;border-top:1px solid var(--bc-gray-200);">
             <div v-if="loading" class="loading-overlay"><span class="spinner"></span> Loading…</div>
             <table v-else>
+              <colgroup>
+                <col style="width:84px;" />
+                <col style="width:230px;" />
+                <col style="width:64px;" />
+                <col />
+                <col style="width:140px;" />
+                <col style="width:170px;" />
+              </colgroup>
               <thead>
                 <tr>
                   <th>Type</th>
@@ -87,11 +97,12 @@
                   <th>Days</th>
                   <th>Remarks</th>
                   <th>Approval Status</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-if="records.length === 0">
-                  <td colspan="5">
+                  <td colspan="6">
                     <div class="empty-state">
                       <div class="empty-state-icon">📋</div>
                       <h3>No requests yet</h3>
@@ -108,6 +119,27 @@
                   <td>{{ countDays(r.start_date, r.end_date) }}</td>
                   <td><span class="cell-reason">{{ r.reason || '—' }}</span></td>
                   <td><span class="badge" :class="`badge-${r.status}`">{{ statusLabel(r.status) }}</span></td>
+                  <td>
+                    <div class="row-actions">
+                      <button
+                        v-if="r.status === 'pending'"
+                        type="button"
+                        class="btn btn-outline btn-sm btn-cancel"
+                        :disabled="lifecycleId === r.id"
+                        title="Cancel this pending leave request"
+                        @click="openLifecycleConfirm(r, 'cancel')"
+                      >Cancel</button>
+                      <button
+                        v-else-if="r.status === 'approved'"
+                        type="button"
+                        class="btn btn-outline btn-sm btn-withdraw"
+                        :disabled="lifecycleId === r.id"
+                        title="Withdraw this approved leave"
+                        @click="openLifecycleConfirm(r, 'withdraw')"
+                      >Withdraw</button>
+                      <span v-else class="text-muted text-sm">—</span>
+                    </div>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -526,6 +558,43 @@
         </div>
       </div>
     </template>
+
+    <!-- LS: Cancel / Withdraw confirmation -->
+    <div v-if="lifecycleModal.show" class="modal-backdrop" @click.self="lifecycleModal.show = false">
+      <div class="modal" style="max-width:420px;">
+        <div class="modal-header">
+          <span class="modal-title">
+            {{ lifecycleModal.action === 'cancel' ? 'Cancel Leave Request' : 'Withdraw Leave Request' }}
+          </span>
+          <button type="button" class="modal-close" @click="lifecycleModal.show = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <p class="text-sm" style="margin-bottom:10px;">
+            <template v-if="lifecycleModal.action === 'cancel'">
+              Mark this <strong>pending</strong> leave request as <strong>Cancelled</strong>?
+              It will leave the Supervisor review queue and no longer count toward your recap.
+            </template>
+            <template v-else>
+              Withdraw this <strong>approved</strong> leave?
+              The days will stop counting toward Monthly Recap, BAST and other payroll analytics.
+            </template>
+          </p>
+          <p class="text-sm text-muted" v-if="lifecycleModal.label">{{ lifecycleModal.label }}</p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" @click="lifecycleModal.show = false">Back</button>
+          <button
+            type="button"
+            class="btn"
+            :class="lifecycleModal.action === 'cancel' ? 'btn-danger' : 'btn-primary'"
+            :disabled="lifecycleId === lifecycleModal.id"
+            @click="confirmLifecycle"
+          >
+            {{ lifecycleModal.action === 'cancel' ? 'Confirm Cancel' : 'Confirm Withdraw' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -542,7 +611,13 @@ const isSupervisor = computed(() => user?.role === 'ls_supervisor');
 const SUPERVISOR_TEAM_FETCH_LIMIT = 500;
 
 const typeLabel = (t) => ({ cuti: 'Cuti', izin: 'Izin', sakit: 'Sakit' }[t] || t);
-const statusLabel = (s) => ({ pending: 'Pending', approved: 'Approved', rejected: 'Rejected' }[s] || s);
+const statusLabel = (s) => ({
+  pending: 'Pending',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  cancelled: 'Cancelled',
+  withdrawn: 'Withdrawn',
+}[s] || s);
 
 const form = reactive({
   request_type: 'cuti',
@@ -561,6 +636,8 @@ const filterRequestType = ref('');
 const filters = reactive({ search: '', status: '', start_date: '', end_date: '' });
 const rejectModal = reactive({ show: false, id: null, note: '' });
 const actionId = ref(null);
+const lifecycleId = ref(null);
+const lifecycleModal = reactive({ show: false, id: null, action: 'cancel', label: '' });
 
 const sidebarSearch = ref('');
 const selectedUserId = ref(null);
@@ -775,6 +852,33 @@ const confirmReject = async () => {
   }
 };
 
+const openLifecycleConfirm = (record, action) => {
+  lifecycleModal.id = record.id;
+  lifecycleModal.action = action;
+  lifecycleModal.label = `${typeLabel(record.request_type)} · ${fmtRange(record.start_date, record.end_date)}`;
+  lifecycleModal.show = true;
+};
+
+const confirmLifecycle = async () => {
+  if (!lifecycleModal.id) return;
+  lifecycleId.value = lifecycleModal.id;
+  try {
+    const { data } = await api.put(
+      `/leaves/${lifecycleModal.id}/cancel-withdraw`,
+      { action: lifecycleModal.action }
+    );
+    if (data?.success === false) {
+      window.alert(data.message || 'Operation failed.');
+    }
+    lifecycleModal.show = false;
+    await fetchList();
+  } catch (err) {
+    window.alert(err?.response?.data?.message || 'Operation failed.');
+  } finally {
+    lifecycleId.value = null;
+  }
+};
+
 watch(
   [filteredSidebarEmployees, loading, records],
   () => {
@@ -811,6 +915,8 @@ onMounted(() => {
 .leave-hub--supervisor-split {
   max-width: 1400px;
 }
+/* LS employee view: use full page width so the request list mirrors AttendanceList */
+.leave-hub--single { max-width: none; }
 
 .leave-supervisor-split {
   display: flex;
@@ -1025,12 +1131,25 @@ onMounted(() => {
 
 .leave-grid {
   display: grid;
-  grid-template-columns: minmax(280px, 360px) 1fr;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
   gap: 24px;
   align-items: start;
 }
 .leave-new-card { box-shadow: var(--shadow-sm); }
-.leave-list-card { box-shadow: var(--shadow-sm); }
+.leave-list-card { box-shadow: var(--shadow-sm); min-width: 0; }
+
+/* LS list: let Remarks breathe across the full available width */
+.leave-ls-table table { table-layout: fixed; }
+.leave-ls-table .cell-reason {
+  display: -webkit-box;
+  max-width: 100%;
+  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.4;
+}
 .toolbar-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .toolbar-select { max-width: 140px; font-size: 13px; padding: 6px 10px; }
 
@@ -1055,6 +1174,28 @@ onMounted(() => {
 .req { color: var(--bc-rejected); }
 
 .action-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.btn-cancel {
+  color: var(--bc-rejected);
+  border-color: #fecaca;
+}
+.btn-cancel:hover:not(:disabled) {
+  background: #fee2e2;
+  border-color: var(--bc-rejected);
+}
+.btn-withdraw {
+  color: #b45309;
+  border-color: #fde68a;
+}
+.btn-withdraw:hover:not(:disabled) {
+  background: #fef3c7;
+  border-color: #f59e0b;
+}
 
 .bulk-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .sheet-toolbar { margin-bottom: 12px; }

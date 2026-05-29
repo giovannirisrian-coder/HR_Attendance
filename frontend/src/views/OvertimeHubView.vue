@@ -71,6 +71,8 @@
                 <option value="pending">Pending</option>
                 <option value="approved">Approved</option>
                 <option value="rejected">Rejected</option>
+                <option value="cancelled">Cancelled</option>
+                <option value="withdrawn">Withdrawn</option>
               </select>
               <input
                 v-model="filterStartDate"
@@ -89,9 +91,17 @@
               <button type="button" class="btn btn-outline btn-sm" @click="resetLsFilters">Reset</button>
             </div>
           </div>
-          <div class="table-wrapper" style="border:none;border-radius:0;border-top:1px solid var(--bc-gray-200);">
+          <div class="table-wrapper ot-ls-table" style="border:none;border-radius:0;border-top:1px solid var(--bc-gray-200);">
             <div v-if="loading" class="loading-overlay"><span class="spinner"></span> Loading…</div>
             <table v-else>
+              <colgroup>
+                <col style="width:140px;" />
+                <col style="width:150px;" />
+                <col style="width:96px;" />
+                <col />
+                <col style="width:160px;" />
+                <col style="width:170px;" />
+              </colgroup>
               <thead>
                 <tr>
                   <th>Date</th>
@@ -99,11 +109,12 @@
                   <th>Duration</th>
                   <th>Remarks</th>
                   <th>Approval Status</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-if="records.length === 0">
-                  <td colspan="5">
+                  <td colspan="6">
                     <div class="empty-state">
                       <div class="empty-state-icon">⏱️</div>
                       <h3>No overtime yet</h3>
@@ -125,6 +136,27 @@
                     <span class="badge" :class="`badge-${r.status}`">{{ statusLabel(r.status) }}</span>
                     <div v-if="r.status === 'rejected' && r.rejection_note" class="text-xs text-muted" style="margin-top:4px;max-width:200px;">
                       {{ r.rejection_note }}
+                    </div>
+                  </td>
+                  <td>
+                    <div class="row-actions">
+                      <button
+                        v-if="r.status === 'pending'"
+                        type="button"
+                        class="btn btn-outline btn-sm btn-cancel"
+                        :disabled="lifecycleId === r.id"
+                        title="Cancel this pending overtime request"
+                        @click="openLifecycleConfirm(r, 'cancel')"
+                      >Cancel</button>
+                      <button
+                        v-else-if="r.status === 'approved'"
+                        type="button"
+                        class="btn btn-outline btn-sm btn-withdraw"
+                        :disabled="lifecycleId === r.id"
+                        title="Withdraw this approved overtime"
+                        @click="openLifecycleConfirm(r, 'withdraw')"
+                      >Withdraw</button>
+                      <span v-else class="text-muted text-sm">—</span>
                     </div>
                   </td>
                 </tr>
@@ -320,6 +352,43 @@
         </div>
       </div>
     </template>
+
+    <!-- LS: Cancel / Withdraw confirmation -->
+    <div v-if="lifecycleModal.show" class="modal-backdrop" @click.self="lifecycleModal.show = false">
+      <div class="modal" style="max-width:420px;">
+        <div class="modal-header">
+          <span class="modal-title">
+            {{ lifecycleModal.action === 'cancel' ? 'Cancel Overtime' : 'Withdraw Overtime' }}
+          </span>
+          <button type="button" class="modal-close" @click="lifecycleModal.show = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <p class="text-sm" style="margin-bottom:10px;">
+            <template v-if="lifecycleModal.action === 'cancel'">
+              Mark this <strong>pending</strong> overtime request as <strong>Cancelled</strong>?
+              It will leave the Supervisor review queue and stop counting toward your recap.
+            </template>
+            <template v-else>
+              Withdraw this <strong>approved</strong> overtime?
+              The hours will be removed from the Vendor Monthly Sheet / BAST aggregation.
+            </template>
+          </p>
+          <p class="text-sm text-muted" v-if="lifecycleModal.label">{{ lifecycleModal.label }}</p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" @click="lifecycleModal.show = false">Back</button>
+          <button
+            type="button"
+            class="btn"
+            :class="lifecycleModal.action === 'cancel' ? 'btn-danger' : 'btn-primary'"
+            :disabled="lifecycleId === lifecycleModal.id"
+            @click="confirmLifecycle"
+          >
+            {{ lifecycleModal.action === 'cancel' ? 'Confirm Cancel' : 'Confirm Withdraw' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -333,7 +402,13 @@ const user = getUser();
 const isLs = computed(() => user?.role === 'ls');
 const isSupervisor = computed(() => user?.role === 'ls_supervisor');
 
-const statusLabel = (s) => ({ pending: 'Pending', approved: 'Approved', rejected: 'Rejected' }[s] || s);
+const statusLabel = (s) => ({
+  pending: 'Pending',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  cancelled: 'Cancelled',
+  withdrawn: 'Withdrawn',
+}[s] || s);
 
 const fmtDate = (d) => formatCalendarDateLocale(d, 'en-ID', { day: '2-digit', month: 'short', year: 'numeric' });
 const fmtDayName = (d) => formatCalendarDateLocale(d, 'en-ID', { weekday: 'long' });
@@ -382,6 +457,10 @@ const pagination = reactive({ total: 0, page: 1, limit: 20 });
 const filterStatus = ref('');
 const filterStartDate = ref('');
 const filterEndDate = ref('');
+
+// ─── LS cancel/withdraw state ───
+const lifecycleId = ref(null);
+const lifecycleModal = reactive({ show: false, id: null, action: 'cancel', label: '' });
 
 // ─── Supervisor state ───
 const lsMembers = ref([]);
@@ -444,6 +523,34 @@ const changePage = (p) => {
   pagination.page = p;
   if (isLs.value) fetchLsList();
   else if (isSupervisor.value) fetchSupervisorList();
+};
+
+// ─── LS cancel / withdraw ───
+const openLifecycleConfirm = (record, action) => {
+  lifecycleModal.id = record.id;
+  lifecycleModal.action = action;
+  lifecycleModal.label = `${fmtDate(record.request_date)} · ${fmtHm(record.start_time)}–${fmtHm(record.end_time)}`;
+  lifecycleModal.show = true;
+};
+
+const confirmLifecycle = async () => {
+  if (!lifecycleModal.id) return;
+  lifecycleId.value = lifecycleModal.id;
+  try {
+    const { data } = await api.put(
+      `/overtimes/${lifecycleModal.id}/cancel-withdraw`,
+      { action: lifecycleModal.action }
+    );
+    if (data?.success === false) {
+      window.alert(data.message || 'Operation failed.');
+    }
+    lifecycleModal.show = false;
+    await fetchLsList();
+  } catch (err) {
+    window.alert(err?.response?.data?.message || 'Operation failed.');
+  } finally {
+    lifecycleId.value = null;
+  }
 };
 
 // ─── LS submit ───
@@ -615,6 +722,8 @@ onMounted(async () => {
 <style scoped>
 .ot-hub { max-width: 1120px; }
 .ot-hub--supervisor-split { max-width: 1400px; }
+/* LS employee view: use full page width so the request list mirrors AttendanceList */
+.ot-hub--single { max-width: none; }
 
 .ot-obj-header {
   display: flex;
@@ -628,12 +737,25 @@ onMounted(async () => {
 
 .ot-grid {
   display: grid;
-  grid-template-columns: minmax(280px, 360px) 1fr;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
   gap: 24px;
   align-items: start;
 }
 .ot-new-card { box-shadow: var(--shadow-sm); }
-.ot-list-card { box-shadow: var(--shadow-sm); }
+.ot-list-card { box-shadow: var(--shadow-sm); min-width: 0; }
+
+/* LS list: let Remarks breathe across the full available width */
+.ot-ls-table table { table-layout: fixed; }
+.ot-ls-table .cell-reason {
+  display: -webkit-box;
+  max-width: 100%;
+  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.4;
+}
 
 .form-row {
   display: grid;
@@ -672,6 +794,28 @@ onMounted(async () => {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.btn-cancel {
+  color: var(--bc-rejected);
+  border-color: #fecaca;
+}
+.btn-cancel:hover:not(:disabled) {
+  background: #fee2e2;
+  border-color: var(--bc-rejected);
+}
+.btn-withdraw {
+  color: #b45309;
+  border-color: #fde68a;
+}
+.btn-withdraw:hover:not(:disabled) {
+  background: #fef3c7;
+  border-color: #f59e0b;
 }
 .icon-btn {
   width: 32px;

@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS overtime_requests (
   start_time           TIME         NOT NULL,
   end_time             TIME         NOT NULL,
   remarks              TEXT         NULL,
-  status               ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+  status               ENUM('pending','approved','rejected','cancelled','withdrawn') NOT NULL DEFAULT 'pending',
   approved_by          INT          NULL,
   approved_at          TIMESTAMP    NULL,
   rejection_note       TEXT         NULL,

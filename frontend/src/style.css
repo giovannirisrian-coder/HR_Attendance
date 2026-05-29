@@ -224,6 +224,12 @@ tbody tr:last-child td { border-bottom: none; }
 .badge-approved::before { background: #22994a; }
 .badge-rejected { background: #fee2e2; color: #991b1b; }
 .badge-rejected::before { background: #ef4444; }
+.badge-cancelled { background: var(--bc-gray-200); color: var(--bc-gray-700); }
+.badge-cancelled::before { background: var(--bc-gray-500); }
+.badge-withdrawn { background: #ede9fe; color: #5b21b6; }
+.badge-withdrawn::before { background: #7c3aed; }
+.badge-superseded { background: var(--bc-gray-100); color: var(--bc-gray-500); }
+.badge-superseded::before { background: var(--bc-gray-400); }
 .badge-submitted { background: #dbeafe; color: #1e40af; }
 .badge-submitted::before { background: #3b82f6; }
 .badge-invoice-process { background: #e0e7ff; color: #3730a3; }
