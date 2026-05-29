@@ -12,9 +12,10 @@ const login = async (req, res) => {
     }
 
     const [rows] = await db.query(
-      `SELECT u.*, v.name AS vendor_name, v.code AS vendor_code
+      `SELECT u.*, v.name AS vendor_name, v.code AS vendor_code, e.nik AS nik
        FROM users u
-       LEFT JOIN vendors v ON u.vendor_id = v.id
+       LEFT JOIN vendors v  ON u.vendor_id = v.id
+       LEFT JOIN employees e ON e.user_id  = u.id
        WHERE u.email = ? AND u.is_active = 1`,
       [email]
     );
@@ -53,6 +54,7 @@ const login = async (req, res) => {
         email: user.email,
         role: user.role,
         employee_id: user.employee_id,
+        nik: user.nik || null,
         vendor_id: user.vendor_id,
         vendor_name: user.vendor_name,
         supervisor_id: user.supervisor_id,
@@ -68,9 +70,11 @@ const getProfile = async (req, res) => {
   try {
     const [rows] = await db.query(
       `SELECT u.id, u.name, u.email, u.role, u.employee_id, u.vendor_id, u.supervisor_id,
-              v.name AS vendor_name
+              v.name AS vendor_name,
+              e.nik  AS nik
        FROM users u
-       LEFT JOIN vendors v ON u.vendor_id = v.id
+       LEFT JOIN vendors  v ON u.vendor_id = v.id
+       LEFT JOIN employees e ON e.user_id  = u.id
        WHERE u.id = ?`,
       [req.user.id]
     );

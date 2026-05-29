@@ -7,6 +7,16 @@ export const setAuth = (token, user) => {
   localStorage.setItem('bc_token', token);
   localStorage.setItem('bc_user', JSON.stringify(user));
 };
+/**
+ * Merge a partial profile (e.g. freshly fetched NIK) into the cached user
+ * without disturbing the auth token. Returns the merged user object.
+ */
+export const updateCachedUser = (patch) => {
+  const current = getUser() || {};
+  const merged = { ...current, ...(patch || {}) };
+  localStorage.setItem('bc_user', JSON.stringify(merged));
+  return merged;
+};
 export const clearAuth = () => {
   localStorage.removeItem('bc_token');
   localStorage.removeItem('bc_user');
