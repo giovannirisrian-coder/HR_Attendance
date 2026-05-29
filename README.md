@@ -137,4 +137,24 @@ DB_NAME=beraucoal_attendance
 JWT_SECRET=change_this_to_a_strong_secret
 JWT_EXPIRES_IN=24h
 FRONTEND_URL=http://localhost:5173
+
+# FTM — SQL Server (data_access + employee)
+FTM_DB_HOST=localhost
+FTM_DB_PORT=1433
+FTM_DB_USER=sa
+FTM_DB_PASSWORD=your_password
+FTM_DB_NAME=ftm
+FTM_DB_ENCRYPT=false
+FTM_DB_TRUST_CERT=true
 ```
+
+### Glog — dua sumber data
+
+| Metode | Keterangan |
+|--------|------------|
+| **Upload file** | `POST /api/glog/upload` — CSV/TXT seperti sebelumnya |
+| **Sync database FTM** | `POST /api/glog/sync-ftm` — baca `data_access` INNER JOIN `employee`, agregasi per NIK/hari, upsert ke `attendance` |
+
+Body sync FTM (JSON): `date_from`, `date_to` (YYYY-MM-DD, maks. 31 hari), opsional `create_employees: true` untuk buat user LS placeholder jika NIK belum ada.
+
+Status job: `GET /api/glog/jobs/:jobId` (sama seperti proses batch upload).
