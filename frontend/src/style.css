@@ -325,6 +325,47 @@ tbody tr:last-child td { border-bottom: none; }
 .alert-success { background: #d1fae5; color: #065f46; border: 1px solid var(--bc-green-300); }
 .alert-info    { background: #dbeafe; color: #1e40af; border: 1px solid #93c5fd; }
 
+/* Berau Coal branded validation block — used when a workflow rule (e.g.
+   an approved overtime / leave already exists for the date) requires the
+   LS to take a different action (Withdraw first) rather than indicating
+   a true system error. */
+.alert-warning {
+  background: #ffffff;
+  color: var(--bc-green-900);
+  border: 1px solid var(--bc-green-200);
+  border-left: 4px solid var(--bc-green-500);
+  align-items: flex-start;
+  box-shadow: var(--shadow-sm);
+}
+.alert-warning .alert-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--bc-green-50);
+  color: var(--bc-green-700);
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.alert-warning .alert-title {
+  display: block;
+  font-weight: 700;
+  color: var(--bc-green-800);
+  margin-bottom: 2px;
+}
+.alert-warning .alert-body {
+  display: block;
+  color: var(--bc-gray-700);
+  line-height: 1.5;
+}
+.alert-warning .alert-body strong {
+  color: var(--bc-green-700);
+}
+
 /* ── Pagination ─────────────────────────────────────────── */
 .pagination {
   display: flex;

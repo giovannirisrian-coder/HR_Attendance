@@ -22,6 +22,13 @@
           </div>
           <div class="card-body">
             <div v-if="formSuccess" class="alert alert-success"><span>✅</span> {{ formSuccess }}</div>
+            <div v-if="formWarning" class="alert alert-warning" role="alert">
+              <span class="alert-icon" aria-hidden="true">!</span>
+              <span>
+                <span class="alert-title">Approved request already exists for this date</span>
+                <span class="alert-body">{{ formWarning }}</span>
+              </span>
+            </div>
             <div v-if="formError" class="alert alert-error"><span>⚠️</span> {{ formError }}</div>
             <form @submit.prevent="submitOvertime">
               <div class="form-group">
@@ -439,6 +446,7 @@ const form = reactive({
 });
 const formSuccess = ref('');
 const formError = ref('');
+const formWarning = ref('');
 const submitting = ref(false);
 
 const durationLabel = computed(() => {
@@ -557,6 +565,7 @@ const confirmLifecycle = async () => {
 const submitOvertime = async () => {
   formSuccess.value = '';
   formError.value = '';
+  formWarning.value = '';
   if ((rangeMinutes(form.start_time, form.end_time) || 0) <= 0) {
     formError.value = 'End time must be after start time.';
     return;
@@ -577,7 +586,16 @@ const submitOvertime = async () => {
       await fetchLsList();
     }
   } catch (err) {
-    formError.value = err.response?.data?.message || 'Submission failed.';
+    const resp = err.response?.data;
+    const msg = resp?.message || 'Submission failed.';
+    if (
+      err.response?.status === 409 &&
+      (resp?.code === 'OVERTIME_APPROVED_EXISTS' || /approved request already exists/i.test(msg))
+    ) {
+      formWarning.value = msg;
+    } else {
+      formError.value = msg;
+    }
   } finally {
     submitting.value = false;
   }

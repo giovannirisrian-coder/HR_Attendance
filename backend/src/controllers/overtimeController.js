@@ -87,6 +87,27 @@ const createOvertime = async (req, res) => {
 
     const remarksNorm = normalizeRemarks(remarks);
 
+    // ── Submission guard: block a new request when an Approved row already
+    // exists for this LS on this date. The Withdraw workflow flips an
+    // approved row to `withdrawn`, which intentionally clears this guard
+    // so the LS can resubmit a corrected version. Pending / rejected /
+    // cancelled rows never block a new submission.
+    const [dupRows] = await db.query(
+      `SELECT id
+       FROM overtime_requests
+       WHERE user_id = ? AND request_date = ? AND status = 'approved'
+       LIMIT 1`,
+      [userId, dateYmd]
+    );
+    if (dupRows.length > 0) {
+      return res.status(409).json({
+        success: false,
+        code: 'OVERTIME_APPROVED_EXISTS',
+        message:
+          "An approved request already exists for this date. If you need to make a revision, please 'Withdraw' the existing approved request first before submitting a new one.",
+      });
+    }
+
     const [ins] = await db.query(
       `INSERT INTO overtime_requests (user_id, request_date, start_time, end_time, remarks, status)
        VALUES (?, ?, ?, ?, ?, 'pending')`,
