@@ -30,19 +30,6 @@ const normalizeNik = (raw) => {
   return s.length ? s : null;
 };
 
-const timeToMinutes = (t) => {
-  if (t === undefined || t === null || t === '') return null;
-  const s = String(t).slice(0, 8);
-  const [h, m, sec] = s.split(':').map((x) => parseInt(x, 10) || 0);
-  return h * 60 + m + sec / 60;
-};
-
-const normalizeOtSummary = (raw) => {
-  if (raw === undefined || raw === null) return null;
-  const s = String(raw).trim();
-  return s.length ? s.slice(0, 4000) : null;
-};
-
 const pickLatestByUpdatedOrCreated = (rows) => {
   if (!Array.isArray(rows) || rows.length === 0) return null;
   return rows.sort((a, b) => {
@@ -52,78 +39,11 @@ const pickLatestByUpdatedOrCreated = (rows) => {
   })[0];
 };
 
-// LS: save overtime range for a day (same row + same approval flow as attendance)
-const saveMyOvertime = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { attendance_date, ot_start_time, ot_end_time, ot_summary } = req.body;
-
-    if (!attendance_date || !ot_start_time || !ot_end_time) {
-      return res.status(400).json({
-        success: false,
-        message: 'attendance_date, ot_start_time and ot_end_time are required.',
-      });
-    }
-
-    const normDate = normalizeCalendarYmdFromBody(attendance_date);
-    if (!normDate.ok) {
-      return res.status(400).json({ success: false, message: normDate.error });
-    }
-    const attendanceYmd = normDate.ymd;
-    const dateErr = assertAttendanceDateInLsWindow(attendanceYmd);
-    if (dateErr) {
-      return res.status(400).json({ success: false, message: dateErr });
-    }
-
-    const startM = timeToMinutes(ot_start_time);
-    const endM = timeToMinutes(ot_end_time);
-    if (startM === null || endM === null) {
-      return res.status(400).json({ success: false, message: 'Invalid overtime times.' });
-    }
-    if (endM <= startM) {
-      return res.status(400).json({ success: false, message: 'Overtime end time must be after start time.' });
-    }
-
-    const summary = normalizeOtSummary(ot_summary);
-
-    const [latestRows] = await db.query(
-      `SELECT *
-       FROM attendance
-       WHERE user_id = ? AND attendance_date = ?
-       ORDER BY created_at DESC, id DESC
-       LIMIT 1`,
-      [userId, attendanceYmd]
-    );
-    const latestRecord = latestRows[0] || null;
-
-    if (!latestRecord || !latestRecord.clock_in_time) {
-      return res.status(400).json({
-        success: false,
-        message: 'Clock in is required before overtime can be saved for this date.',
-      });
-    }
-    if (latestRecord.status !== 'pending') {
-      return res.status(400).json({
-        success: false,
-        message: 'Overtime can only be changed while the attendance record is pending.',
-      });
-    }
-
-    await db.query(
-      `UPDATE attendance
-       SET ot_start_time = ?, ot_end_time = ?, ot_summary = ?
-       WHERE id = ?`,
-      [ot_start_time, ot_end_time, summary, latestRecord.id]
-    );
-
-    const [updated] = await db.query('SELECT * FROM attendance WHERE id = ?', [latestRecord.id]);
-
-    res.json({ success: true, message: 'Overtime saved.', data: updated[0] });
-  } catch (err) {
-    console.error('Save overtime error:', err);
-    res.status(500).json({ success: false, message: 'Server error.' });
-  }
-};
+// NOTE: legacy LS overtime endpoint was removed; the dedicated Overtime menu
+// (overtimeController + /api/overtimes) is now the single submission path.
+// `attendance.ot_start_time/ot_end_time/ot_summary` are populated by the
+// Supervisor approval flow in overtimeController so existing analytics
+// (Monthly Sheet, BAST, OT hour summaries) keep working untouched.
 
 // LS: create attendance request row with in/out pairing sequence
 const createAttendance = async (req, res) => {
@@ -858,7 +778,6 @@ const getAttendanceDetail = async (req, res) => {
 
 module.exports = {
   createAttendance,
-  saveMyOvertime,
   getMyAttendance,
   getTeamLsMembers,
   getTeamAttendance,

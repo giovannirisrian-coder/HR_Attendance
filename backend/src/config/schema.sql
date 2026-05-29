@@ -111,6 +111,35 @@ CREATE TABLE IF NOT EXISTS leave_requests (
 ) ENGINE=InnoDB;
 
 -- ──────────────────────────────────────────────
+-- 4b. OVERTIME REQUESTS (decoupled from attendance) — LS → LS Supervisor
+-- On Supervisor approval the row is linked to the latest approved
+-- attendance for that LS+date, and ot_start_time / ot_end_time /
+-- ot_summary on that attendance row are populated so the existing
+-- Monthly Sheet / BAST analytics keep aggregating correctly.
+-- ──────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS overtime_requests (
+  id                   INT AUTO_INCREMENT PRIMARY KEY,
+  user_id              INT          NOT NULL,
+  request_date         DATE         NOT NULL,
+  start_time           TIME         NOT NULL,
+  end_time             TIME         NOT NULL,
+  remarks              TEXT         NULL,
+  status               ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+  approved_by          INT          NULL,
+  approved_at          TIMESTAMP    NULL,
+  rejection_note       TEXT         NULL,
+  linked_attendance_id INT          NULL,
+  created_at           TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at           TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_or_user_date (user_id, request_date),
+  KEY idx_or_status (status),
+  KEY idx_or_linked (linked_attendance_id),
+  CONSTRAINT fk_or_user       FOREIGN KEY (user_id)              REFERENCES users(id)      ON DELETE CASCADE,
+  CONSTRAINT fk_or_approver   FOREIGN KEY (approved_by)          REFERENCES users(id)      ON DELETE SET NULL,
+  CONSTRAINT fk_or_attendance FOREIGN KEY (linked_attendance_id) REFERENCES attendance(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- ──────────────────────────────────────────────
 -- 5. VENDOR MONTHLY SUBMISSIONS (Vendor → LS HR → SSU)
 -- ──────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS vendor_monthly_submissions (

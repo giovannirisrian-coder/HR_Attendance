@@ -37,6 +37,10 @@
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
             <span v-if="!sidebarCollapsed">Attendance List</span>
           </router-link>
+          <router-link to="/ls/overtime" class="nav-item" active-class="active" title="Overtime requests">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            <span v-if="!sidebarCollapsed">Overtime</span>
+          </router-link>
           <router-link to="/ls/leave" class="nav-item" active-class="active" title="Cuti / Izin / Sakit">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 7V3m8 4V3M5 11h14M5 21h14M5 11a2 2 0 012-2h10a2 2 0 012 2v10a2 2 0 01-2 2H7a2 2 0 01-2-2V11z"/></svg>
             <span v-if="!sidebarCollapsed">Leave</span>
@@ -68,6 +72,27 @@
           <router-link to="/supervisor/monthly-recap" class="nav-item" active-class="active">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4M16 2v4M3 10h18M5 6h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2z"/><path d="M8 14h3M8 18h8M15 14h1"/></svg>
             <span v-if="!sidebarCollapsed">Monthly Attendance Recap</span>
+          </router-link>
+          <router-link
+            to="/supervisor/overtime"
+            class="nav-item nav-item--supervisor-overtime"
+            active-class="active"
+            :title="sidebarCollapsed && supervisorOvertimePendingTotal > 0 ? `${supervisorOvertimePendingTotal} pending overtime request(s)` : 'Overtime approvals'"
+          >
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            <span v-if="!sidebarCollapsed" class="nav-item-label-with-chip">
+              <span class="nav-item-label-text">Overtime</span>
+              <span
+                v-if="supervisorOvertimePendingTotal > 0"
+                class="nav-pending-chip"
+                :aria-label="`${supervisorOvertimePendingTotal} pending overtime request(s)`"
+              >{{ supervisorOvertimePendingChipText }}</span>
+            </span>
+            <span
+              v-else-if="supervisorOvertimePendingTotal > 0"
+              class="nav-pending-chip nav-pending-chip--collapsed"
+              :aria-label="`${supervisorOvertimePendingTotal} pending overtime request(s)`"
+            >{{ supervisorOvertimePendingChipText }}</span>
           </router-link>
           <router-link
             to="/supervisor/leave"
@@ -178,6 +203,9 @@ const supervisorPendingTotal = ref(0);
 /** Pending cuti / izin / sakit for supervised LS; same /leaves/team + status=pending as Leave dashboard. */
 const supervisorLeavePendingTotal = ref(0);
 
+/** Pending Overtime requests for supervised LS; mirrors the same /overtimes/team + status=pending pattern as Leave so the chip stays in sync after every approval. */
+const supervisorOvertimePendingTotal = ref(0);
+
 const supervisorPendingChipText = computed(() => {
   const n = supervisorPendingTotal.value;
   return n > 99 ? '99+' : String(n);
@@ -185,6 +213,11 @@ const supervisorPendingChipText = computed(() => {
 
 const supervisorLeavePendingChipText = computed(() => {
   const n = supervisorLeavePendingTotal.value;
+  return n > 99 ? '99+' : String(n);
+});
+
+const supervisorOvertimePendingChipText = computed(() => {
+  const n = supervisorOvertimePendingTotal.value;
   return n > 99 ? '99+' : String(n);
 });
 
@@ -214,10 +247,24 @@ const fetchSupervisorLeavePendingTotal = async () => {
   }
 };
 
+const fetchSupervisorOvertimePendingTotal = async () => {
+  if (user?.role !== 'ls_supervisor') return;
+  try {
+    const { data } = await api.get('/overtimes/team', {
+      params: { status: 'pending', page: 1, limit: 1 },
+    });
+    const total = data?.pagination?.total;
+    supervisorOvertimePendingTotal.value = Number.isFinite(Number(total)) ? Number(total) : 0;
+  } catch {
+    /* keep previous value */
+  }
+};
+
 const refreshSupervisorNavBadges = () => {
   if (user?.role !== 'ls_supervisor') return;
   void fetchSupervisorPendingTotal();
   void fetchSupervisorLeavePendingTotal();
+  void fetchSupervisorOvertimePendingTotal();
 };
 
 const onVisibilityChange = () => {
@@ -275,6 +322,9 @@ const pageTitle = computed(() => {
   if (path.includes('/ssu/approvals')) return 'SSU Approvals';
   if (path.match(/\/(ls|supervisor)\/leave$/)) {
     return path.includes('/supervisor/') ? 'Leave — Approvals' : 'Leave';
+  }
+  if (path.match(/\/(ls|supervisor)\/overtime$/)) {
+    return path.includes('/supervisor/') ? 'Overtime — Approvals' : 'Overtime';
   }
   return 'Dashboard';
 });
@@ -420,7 +470,8 @@ const handleLogout = () => {
 .nav-icon { width: 18px; height: 18px; flex-shrink: 0; }
 
 .nav-item--supervisor-approvals,
-.nav-item--supervisor-leave {
+.nav-item--supervisor-leave,
+.nav-item--supervisor-overtime {
   position: relative;
 }
 

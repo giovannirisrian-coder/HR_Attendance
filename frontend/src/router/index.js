@@ -24,6 +24,7 @@ const routes = [
     children: [
       { path: 'attendance/create', component: () => import('../views/ls/CreateAttendance.vue') },
       { path: 'attendance/list', component: () => import('../views/ls/AttendanceList.vue') },
+      { path: 'overtime', component: () => import('../views/OvertimeHubView.vue') },
       { path: 'attendance/:id', component: () => import('../views/ls/AttendanceDetail.vue') },
       { path: 'leave', component: () => import('../views/LeaveHubView.vue') },
     ],
@@ -36,6 +37,7 @@ const routes = [
     children: [
       { path: 'approvals', component: () => import('../views/supervisor/ApprovalList.vue') },
       { path: 'monthly-recap', component: () => import('../views/supervisor/MonthlyAttendanceRecap.vue') },
+      { path: 'overtime', component: () => import('../views/OvertimeHubView.vue') },
       { path: 'glog-upload', component: () => import('../views/glog/GlogUpload.vue') },
       { path: 'leave', component: () => import('../views/LeaveHubView.vue') },
     ],
