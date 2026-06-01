@@ -15,7 +15,38 @@ const C = {
   border: '#cbd5e1',
   headerBg: '#ecfdf5',
   rowAlt: '#f8fafc',
+  pending: '#b45309',
+  rejected: '#b91c1c',
+  cancelled: '#64748b',
+  withdrawn: '#6d28d9',
 };
+
+/** PascalCase status label used everywhere in the audit-trail PDF. */
+const STATUS_LABELS = {
+  approved: 'Approved',
+  pending: 'Pending',
+  rejected: 'Rejected',
+  cancelled: 'Cancelled',
+  withdrawn: 'Withdrawn',
+  superseded: 'Superseded',
+};
+
+function statusLabel(raw) {
+  const s = String(raw || '').toLowerCase();
+  if (STATUS_LABELS[s]) return STATUS_LABELS[s];
+  if (!s) return '—';
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function statusColor(raw) {
+  const s = String(raw || '').toLowerCase();
+  if (s === 'approved') return C.accent;
+  if (s === 'pending') return C.pending;
+  if (s === 'rejected') return C.rejected;
+  if (s === 'cancelled') return C.cancelled;
+  if (s === 'withdrawn') return C.withdrawn;
+  return C.muted;
+}
 
 const PAGE = { w: 595.28, h: 841.89, margin: 48, bottomReserve: 56 };
 const usableW = () => PAGE.w - PAGE.margin * 2;
@@ -86,6 +117,8 @@ function mergeLeaveOnlyGroups(groups, leaveRows) {
         approved: 0,
         pending: 0,
         rejected: 0,
+        cancelled: 0,
+        withdrawn: 0,
         totalMins: 0,
         total_present_days: 0,
         leave_cuti: 0,
@@ -127,6 +160,8 @@ function aggregateByEmployee(rows) {
         approved: 0,
         pending: 0,
         rejected: 0,
+        cancelled: 0,
+        withdrawn: 0,
         totalMins: 0,
         total_present_days: 0,
         leave_cuti: Number(r.leave_cuti) || 0,
@@ -140,7 +175,14 @@ function aggregateByEmployee(rows) {
     if (st === 'approved') g.approved++;
     else if (st === 'pending') g.pending++;
     else if (st === 'rejected') g.rejected++;
-    if (r.clock_in_time != null) g.total_present_days++;
+    else if (st === 'cancelled') g.cancelled++;
+    else if (st === 'withdrawn') g.withdrawn++;
+    // `total_present_days` and `totalMins` stay APPROVED-only on purpose:
+    // they feed the payroll-facing "Masuk" and "Sum of approved working
+    // time" totals. Pending / Rejected / Cancelled / Withdrawn rows are
+    // listed in the audit table and counted in their own pills, but they
+    // must not pad the billable totals.
+    if (st === 'approved' && r.clock_in_time != null) g.total_present_days++;
     const mins = rowWorkingMins(r.clock_in_time, r.clock_out_time);
     if (mins != null && st === 'approved') g.totalMins += mins;
   }
@@ -187,7 +229,7 @@ function drawAttendanceSummaryTable(doc, yStart, groups) {
   };
 
   doc.font('Helvetica-Bold').fontSize(10).fillColor(C.ink);
-  doc.text('Attendance summary by LS', x0, y);
+  doc.text('Attendance Summary by LS (Approved Only)', x0, y);
   y += 14;
 
   if (y + rowH > maxY) {
@@ -206,7 +248,7 @@ function drawAttendanceSummaryTable(doc, yStart, groups) {
       doc.y = PAGE.margin;
       y = doc.y;
       doc.font('Helvetica-Bold').fontSize(9).fillColor(C.brandMid);
-      doc.text('Attendance summary by LS (continued)', x0, y);
+      doc.text('Attendance Summary by LS (continued)', x0, y);
       y += 14;
       drawHeader(y);
       y += rowH;
@@ -289,44 +331,45 @@ function drawSummaryPanel(doc, yStart, groups, rows) {
   const w = usableW();
   let y = yStart;
 
+  // Audit-trail counters: every status visible in the PDF table has its
+  // own pill so PIC LS and SSU can see the full submission volume — not
+  // just what made it through approval.
   const totalRows = rows.length;
   const empCount = groups.length;
-  let appr = 0;
-  let pend = 0;
-  let rej = 0;
+  const counts = { approved: 0, pending: 0, rejected: 0, cancelled: 0, withdrawn: 0 };
   for (const r of rows) {
     const st = String(r.status || '').toLowerCase();
-    if (st === 'approved') appr++;
-    else if (st === 'pending') pend++;
-    else if (st === 'rejected') rej++;
+    if (counts[st] != null) counts[st] += 1;
   }
 
   doc.font('Helvetica-Bold').fontSize(10).fillColor(C.ink);
-  doc.text('Period summary', x0, y);
+  doc.text('Period Summary', x0, y);
   y += 14;
 
-  const panelH = 42;
+  const panelH = 48;
   doc.save();
   doc.roundedRect(x0, y, w, panelH, 3);
   doc.fill(C.headerBg);
   doc.strokeColor(C.border).lineWidth(0.7).stroke();
   doc.restore();
 
-  const labels = [
-    ['LS employees', String(empCount)],
-    ['Attendance lines', String(totalRows)],
-    ['Approved', String(appr)],
-    ['Pending', String(pend)],
-    ['Rejected', String(rej)],
+  const cells = [
+    { label: 'LS Employees',     value: String(empCount),         color: C.brandMid },
+    { label: 'Attendance Lines', value: String(totalRows),        color: C.brandMid },
+    { label: 'Approved',         value: String(counts.approved),  color: C.accent },
+    { label: 'Pending',          value: String(counts.pending),   color: C.pending },
+    { label: 'Rejected',         value: String(counts.rejected),  color: C.rejected },
+    { label: 'Cancelled',        value: String(counts.cancelled), color: C.cancelled },
+    { label: 'Withdrawn',        value: String(counts.withdrawn), color: C.withdrawn },
   ];
-  const cellW = (w - 24) / 5;
+  const cellW = (w - 24) / cells.length;
   let cx = x0 + 12;
-  const textY = y + 10;
-  for (const [label, val] of labels) {
+  const textY = y + 12;
+  for (const c of cells) {
     doc.font('Helvetica').fontSize(7.5).fillColor(C.muted);
-    doc.text(label, cx, textY, { width: cellW - 6, lineBreak: false });
-    doc.font('Helvetica-Bold').fontSize(10).fillColor(C.brandMid);
-    doc.text(val, cx, textY + 12, { width: cellW - 6 });
+    doc.text(c.label, cx, textY, { width: cellW - 6, lineBreak: false });
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(c.color);
+    doc.text(c.value, cx, textY + 12, { width: cellW - 6 });
     cx += cellW;
   }
 
@@ -352,10 +395,13 @@ function tableTotalWidth(colW) {
   return colW.date + colW.day + colW.in + colW.out + colW.hours + colW.overtime + colW.status;
 }
 
-/** Approved attendance only: show overtime duration from OT range. */
+/**
+ * Show overtime range duration for any row that has both OT times set.
+ * Pending / Rejected rows still display the OT cell so auditors can see
+ * what was requested; only Approved OT contributes to billable totals
+ * (handled separately in the employee footer's `totalMins`).
+ */
 function formatOvertimeCell(r) {
-  const st = String(r.status || '').toLowerCase();
-  if (st !== 'approved') return '—';
   const mins = rowWorkingMins(r.ot_start_time, r.ot_end_time);
   if (mins == null || mins <= 0) return '—';
   return formatDurationMins(mins);
@@ -367,6 +413,12 @@ function absenceTypeLabel(type) {
   if (t === 'izin') return 'Izin';
   if (t === 'sakit') return 'Sakit';
   return t ? t.charAt(0).toUpperCase() + t.slice(1) : '—';
+}
+
+/** Status pill colour used by the attendance data row. */
+function paintStatusCell(doc, raw, x, ty, width) {
+  doc.font('Helvetica-Bold').fontSize(7).fillColor(statusColor(raw));
+  doc.text(statusLabel(raw), x, ty, { width });
 }
 
 function formatLeaveDateRange(start, end) {
@@ -419,14 +471,8 @@ function drawAbsenceSection(doc, x0, yStart, tw, leaveItems, groupLabel) {
     x += colAbs.date;
     doc.text(absenceTypeLabel(lr.request_type), x, ty, { width: colAbs.type - 4 });
     x += colAbs.type;
-    const st = String(lr.status || '');
-    const stLower = st.toLowerCase();
-    doc.font('Helvetica-Bold').fontSize(7.5);
-    if (stLower === 'approved') doc.fillColor(C.accent);
-    else if (stLower === 'pending') doc.fillColor('#b45309');
-    else if (stLower === 'rejected') doc.fillColor('#b91c1c');
-    else doc.fillColor(C.muted);
-    doc.text(st ? st.toUpperCase() : '—', x, ty, { width: colAbs.status - 6 });
+    doc.font('Helvetica-Bold').fontSize(7.5).fillColor(statusColor(lr.status));
+    doc.text(statusLabel(lr.status), x, ty, { width: colAbs.status - 6 });
     return rowH;
   };
 
@@ -442,16 +488,19 @@ function drawAbsenceSection(doc, x0, yStart, tw, leaveItems, groupLabel) {
   }
 
   doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink);
-  doc.text('Absences — Cuti, Izin, Sakit', x0, y);
+  doc.text('Absences — Cuti, Izin, Sakit (Full Audit Trail)', x0, y);
   y += 14;
 
   y += drawAbsHeader(y);
 
   if (!leaveItems.length) {
     doc.font('Helvetica').fontSize(8).fillColor(C.muted);
-    doc.text('No Cuti, Izin, or Sakit records overlap this reporting month.', x0 + 6, y + 4, {
-      width: tw - 12,
-    });
+    doc.text(
+      'No Cuti, Izin, or Sakit submissions (any status) overlap this reporting month.',
+      x0 + 6,
+      y + 4,
+      { width: tw - 12 }
+    );
     return y + rowH + 6;
   }
 
@@ -509,11 +558,8 @@ function drawDataRow(doc, x0, y, colW, r, alt) {
   }
   doc.rect(x0, y, tw, h).strokeColor(C.border).lineWidth(0.35).stroke();
 
-  const st = String(r.status || '');
-  const stLower = st.toLowerCase();
   const mins = rowWorkingMins(r.clock_in_time, r.clock_out_time);
-  const dur =
-    mins != null ? formatDurationMins(mins) : '—';
+  const dur = mins != null ? formatDurationMins(mins) : '—';
 
   let x = x0 + 6;
   const ty = y + 5;
@@ -534,25 +580,26 @@ function drawDataRow(doc, x0, y, colW, r, alt) {
   doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.ink);
   doc.text(formatOvertimeCell(r), x, ty, { width: colW.overtime - 4 });
   x += colW.overtime;
-  doc.font('Helvetica-Bold').fontSize(7);
-  if (stLower === 'approved') doc.fillColor(C.accent);
-  else if (stLower === 'pending') doc.fillColor('#b45309');
-  else if (stLower === 'rejected') doc.fillColor('#b91c1c');
-  else doc.fillColor(C.muted);
-  doc.text(st ? st.toUpperCase() : '—', x, ty, { width: colW.status - 8 });
+  paintStatusCell(doc, r.status, x, ty, colW.status - 8);
   return h;
 }
 
 function drawEmployeeFooter(doc, x0, y, w, g) {
-  const h = 26;
+  const h = 34;
   doc.save();
   doc.roundedRect(x0, y, w, h, 2);
   doc.fill('#f1f5f9');
   doc.strokeColor(C.border).lineWidth(0.5).stroke();
   doc.restore();
   doc.font('Helvetica').fontSize(7.5).fillColor(C.muted);
-  const line = `Subtotal — Rows: ${g.rows.length}  ·  Approved: ${g.approved}  ·  Pending: ${g.pending}  ·  Rejected: ${g.rejected}  ·  Sum of approved working time: ${formatDurationMins(g.totalMins)}`;
-  doc.text(line, x0 + 10, y + 8, { width: w - 20 });
+  // Counter fields render every status so the auditor can see at a
+  // glance how many submissions are still in-flight (Pending) or were
+  // refused (Rejected / Cancelled / Withdrawn). The "Sum of Approved
+  // working time" remains strictly Approved-only to protect billing.
+  const line1 = `Subtotal — Rows: ${g.rows.length}  ·  Approved: ${g.approved}  ·  Pending: ${g.pending}  ·  Rejected: ${g.rejected}  ·  Cancelled: ${g.cancelled}  ·  Withdrawn: ${g.withdrawn}`;
+  const line2 = `Sum of Approved working time: ${formatDurationMins(g.totalMins)}`;
+  doc.text(line1, x0 + 10, y + 6, { width: w - 20 });
+  doc.text(line2, x0 + 10, y + 18, { width: w - 20 });
   return h;
 }
 
@@ -674,7 +721,7 @@ function buildVendorMonthlyTimesheetPdf(opts) {
   ensureSpace(doc, 36);
   doc.font('Helvetica').fontSize(7.5).fillColor(C.light);
   doc.text(
-    'System-generated consolidation of attendance for the stated period. Official payroll and disputes are governed by HR records and policy.',
+    'System-generated audit-trail consolidation of attendance for the stated period. Pending, Rejected, Cancelled and Withdrawn submissions are listed for transparency; only Approved entries contribute to billable payroll totals. Official payroll and disputes are governed by HR records and policy.',
     PAGE.margin,
     doc.y,
     { width: usableW(), align: 'justify', lineGap: 2 }
