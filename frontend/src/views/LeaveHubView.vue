@@ -175,10 +175,10 @@
             </div>
           </div>
           <div class="leave-master__scroll">
-            <div v-if="loading" class="leave-master__loading"><span class="spinner"></span> Loading…</div>
+            <div v-if="membersLoading" class="leave-master__loading"><span class="spinner"></span> Loading…</div>
             <template v-else>
               <p v-if="filteredSidebarEmployees.length === 0" class="leave-master__empty text-muted text-sm">
-                {{ uniqueEmployees.length === 0 ? 'No team requests match this filter yet.' : 'No matching employees.' }}
+                {{ lsMembers.length === 0 ? 'No LS employees are assigned to your supervision.' : 'No matching employees.' }}
               </p>
               <ul v-else class="leave-master__list" role="listbox" :aria-activedescendant="selectedUserId ? `ls-item-${selectedUserId}` : undefined">
                 <li
@@ -189,7 +189,7 @@
                   :aria-selected="selectedUserId == emp.user_id"
                   class="leave-master__item"
                   :class="{ 'leave-master__item--active': selectedUserId == emp.user_id }"
-                  @click="selectedUserId = emp.user_id"
+                  @click="selectMember(emp.user_id)"
                 >
                   <div class="leave-master__item-name">{{ emp.employee_name }}</div>
                   <div class="leave-master__item-nik" title="NIK">{{ emp.nik || '—' }}</div>
@@ -239,10 +239,13 @@
               </div>
             </template>
             <template v-else>
-              <div v-if="sortedLeavesForSelectedUser.length === 0" class="empty-state leave-detail__placeholder">
+              <div v-if="loading" class="loading-overlay"><span class="spinner"></span> Loading…</div>
+              <div v-else-if="sortedLeavesForSelectedUser.length === 0" class="empty-state leave-detail__placeholder">
                 <div class="empty-state-icon">📋</div>
-                <h3>No requests</h3>
-                <p class="text-muted text-sm">No Cuti, Izin, or Sakit for this employee with the current filters.</p>
+                <h3>No leave requests found for this period</h3>
+                <p class="text-muted text-sm">
+                  This employee has no Cuti, Izin, or Sakit records matching the current filters.
+                </p>
               </div>
               <div v-else class="table-wrapper leave-detail__table-wrap">
                 <table>
@@ -649,33 +652,14 @@ const lifecycleModal = reactive({ show: false, id: null, action: 'cancel', label
 
 const sidebarSearch = ref('');
 const selectedUserId = ref(null);
-
-const uniqueEmployees = computed(() => {
-  const map = new Map();
-  for (const r of records.value) {
-    const uid = r.user_id;
-    if (uid == null) continue;
-    if (!map.has(uid)) {
-      map.set(uid, {
-        user_id: uid,
-        employee_name: r.employee_name,
-        employee_id: r.employee_id,
-        nik: r.nik || null,
-      });
-    } else if (r.nik) {
-      const cur = map.get(uid);
-      if (!cur.nik) cur.nik = r.nik;
-    }
-  }
-  return [...map.values()].sort((a, b) =>
-    String(a.employee_name || '').localeCompare(String(b.employee_name || ''), 'id', { sensitivity: 'base' })
-  );
-});
+const lsMembers = ref([]);
+const membersLoading = ref(false);
 
 const filteredSidebarEmployees = computed(() => {
   const q = sidebarSearch.value.trim().toLowerCase();
-  if (!q) return uniqueEmployees.value;
-  return uniqueEmployees.value.filter(
+  const list = lsMembers.value;
+  if (!q) return list;
+  return list.filter(
     (e) =>
       String(e.employee_name || '').toLowerCase().includes(q) ||
       String(e.nik || '').toLowerCase().includes(q) ||
@@ -699,7 +683,7 @@ const sortedLeavesForSelectedUser = computed(() =>
 );
 
 const selectedEmployeeLabel = computed(() => {
-  const emp = uniqueEmployees.value.find((e) => e.user_id == selectedUserId.value);
+  const emp = lsMembers.value.find((e) => e.user_id == selectedUserId.value);
   if (!emp) return '';
   return `${emp.employee_name} · NIK ${emp.nik || '—'}`;
 });
@@ -795,6 +779,39 @@ const fetchList = async () => {
   } finally {
     loading.value = false;
   }
+};
+
+// Supervisor: fetch the full roster of LS employees assigned to this supervisor
+// so the Master sidebar lists everyone regardless of whether they have leave
+// requests yet (mirrors Overtime + Approval List behavior).
+const fetchSupervisorMembers = async () => {
+  membersLoading.value = true;
+  try {
+    const { data } = await api.get('/attendance/team/members');
+    const rows = data?.data || [];
+    lsMembers.value = rows
+      .map((m) => ({
+        user_id: m.id,
+        employee_name: m.name,
+        employee_id: m.employee_id,
+        nik: m.nik || null,
+      }))
+      .sort((a, b) =>
+        String(a.employee_name || '').localeCompare(
+          String(b.employee_name || ''),
+          'id',
+          { sensitivity: 'base' }
+        )
+      );
+  } catch {
+    lsMembers.value = [];
+  } finally {
+    membersLoading.value = false;
+  }
+};
+
+const selectMember = (userId) => {
+  selectedUserId.value = userId;
 };
 
 const changePage = (p) => {
@@ -898,10 +915,10 @@ const confirmLifecycle = async () => {
 };
 
 watch(
-  [filteredSidebarEmployees, loading, records],
+  [filteredSidebarEmployees, membersLoading],
   () => {
     if (!isSupervisor.value) return;
-    if (loading.value) return;
+    if (membersLoading.value) return;
     const list = filteredSidebarEmployees.value;
     if (list.length === 0) {
       selectedUserId.value = null;
@@ -920,7 +937,9 @@ onMounted(() => {
   if (isLs.value) {
     fetchList();
   } else if (isSupervisor.value) {
-    fetchList();
+    // Load full team roster first so the sidebar always shows every assigned
+    // LS employee, then load their leave records to populate the detail panel.
+    fetchSupervisorMembers().then(() => fetchList());
   } else {
     fetchLeaveMonthStats();
     fetchTeamEmployeesOverview();
