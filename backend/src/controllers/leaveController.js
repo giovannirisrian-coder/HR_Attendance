@@ -75,27 +75,46 @@ const createLeave = async (req, res) => {
 
     const reasonTrim = reason === undefined || reason === null ? null : String(reason).trim() || null;
 
-    // ── Submission guard: block a new request when an Approved row already
-    // covers any day in the requested range. The Withdraw workflow flips
-    // an approved row to `withdrawn`, which intentionally clears this guard
-    // so the LS can resubmit a corrected version. Pending / rejected /
-    // cancelled rows never block a new submission.
+    // ── Submission guard: only one active leave row may cover any day
+    // in the requested range. An "active" row is one currently moving
+    // through the Managerial Review chain — i.e. status is either
+    // `pending` (awaiting Supervisor review) or `approved` (already
+    // finalized).
+    //
+    // Rejected / cancelled / withdrawn rows are intentionally NOT active:
+    //   • Cancel   flips a pending row to `cancelled`  → resubmission allowed
+    //   • Withdraw flips an approved row to `withdrawn` → resubmission allowed
+    //   • Reject   flips a pending row to `rejected`  → resubmission allowed
+    //
+    // Two date ranges overlap iff existing.start_date <= new.end_date
+    // AND existing.end_date >= new.start_date — that's the same overlap
+    // predicate Managerial Review uses for the team alert queue.
+    //
+    // The sequential approval chain (LS → Supervisor → Vendor → LS HR →
+    // SSU) is intentionally not modified — this is purely a submission
+    // gate at the LS entry point.
     const [dupRows] = await db.query(
-      `SELECT id, start_date, end_date
+      `SELECT id, start_date, end_date, status
        FROM leave_requests
        WHERE user_id = ?
-         AND status = 'approved'
+         AND status IN ('pending', 'approved')
          AND start_date <= ?
          AND end_date >= ?
+       ORDER BY FIELD(status, 'approved', 'pending'), id DESC
        LIMIT 1`,
       [userId, endYmd, startYmd]
     );
     if (dupRows.length > 0) {
+      const existingStatus = dupRows[0].status;
+      const message =
+        existingStatus === 'approved'
+          ? "A request for this date has already been Approved. You cannot submit a new request for this date. If you need to revise it, please 'Withdraw' the approved request first."
+          : "A request for this date is already Pending Supervisor review. You cannot submit a new request for this date. If you need to revise it, please 'Cancel' the pending request first.";
       return res.status(409).json({
         success: false,
-        code: 'LEAVE_APPROVED_EXISTS',
-        message:
-          "An approved request already exists for this date. If you need to make a revision, please 'Withdraw' the existing approved request first before submitting a new one.",
+        code: 'LEAVE_ACTIVE_EXISTS',
+        existing_status: existingStatus,
+        message,
       });
     }
 

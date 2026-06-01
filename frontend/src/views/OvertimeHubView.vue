@@ -25,7 +25,7 @@
             <div v-if="formWarning" class="alert alert-warning" role="alert">
               <span class="alert-icon" aria-hidden="true">!</span>
               <span>
-                <span class="alert-title">Approved request already exists for this date</span>
+                <span class="alert-title">{{ formWarningTitle }}</span>
                 <span class="alert-body">{{ formWarning }}</span>
               </span>
             </div>
@@ -447,6 +447,7 @@ const form = reactive({
 const formSuccess = ref('');
 const formError = ref('');
 const formWarning = ref('');
+const formWarningTitle = ref('');
 const submitting = ref(false);
 
 const durationLabel = computed(() => {
@@ -562,10 +563,13 @@ const confirmLifecycle = async () => {
 };
 
 // ─── LS submit ───
+const OVERTIME_DUP_CODES = new Set(['OVERTIME_ACTIVE_EXISTS', 'OVERTIME_APPROVED_EXISTS']);
+
 const submitOvertime = async () => {
   formSuccess.value = '';
   formError.value = '';
   formWarning.value = '';
+  formWarningTitle.value = '';
   if ((rangeMinutes(form.start_time, form.end_time) || 0) <= 0) {
     formError.value = 'End time must be after start time.';
     return;
@@ -588,11 +592,16 @@ const submitOvertime = async () => {
   } catch (err) {
     const resp = err.response?.data;
     const msg = resp?.message || 'Submission failed.';
-    if (
+    const code = resp?.code;
+    const isDup =
       err.response?.status === 409 &&
-      (resp?.code === 'OVERTIME_APPROVED_EXISTS' || /approved request already exists/i.test(msg))
-    ) {
+      (OVERTIME_DUP_CODES.has(code) || /pending|approved/i.test(msg));
+    if (isDup) {
       formWarning.value = msg;
+      formWarningTitle.value =
+        resp?.existing_status === 'pending'
+          ? 'Pending request already exists for this date'
+          : 'Approved request already exists for this date';
     } else {
       formError.value = msg;
     }

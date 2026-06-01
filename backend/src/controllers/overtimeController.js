@@ -87,24 +87,40 @@ const createOvertime = async (req, res) => {
 
     const remarksNorm = normalizeRemarks(remarks);
 
-    // ── Submission guard: block a new request when an Approved row already
-    // exists for this LS on this date. The Withdraw workflow flips an
-    // approved row to `withdrawn`, which intentionally clears this guard
-    // so the LS can resubmit a corrected version. Pending / rejected /
-    // cancelled rows never block a new submission.
+    // ── Submission guard: only one active overtime row per LS+date is
+    // allowed. An "active" row is one currently moving through the
+    // Managerial Review chain — i.e. status is either `pending`
+    // (awaiting Supervisor review) or `approved` (already finalized).
+    //
+    // Rejected / cancelled / withdrawn rows are intentionally NOT active:
+    //   • Cancel  flips a pending row to `cancelled`  → resubmission allowed
+    //   • Withdraw flips an approved row to `withdrawn` → resubmission allowed
+    //   • Reject  flips a pending row to `rejected`  → resubmission allowed
+    //
+    // The sequential approval chain (LS → Supervisor → Vendor → LS HR →
+    // SSU) is intentionally not modified — this is purely a submission
+    // gate at the LS entry point.
     const [dupRows] = await db.query(
-      `SELECT id
+      `SELECT id, status
        FROM overtime_requests
-       WHERE user_id = ? AND request_date = ? AND status = 'approved'
+       WHERE user_id = ?
+         AND request_date = ?
+         AND status IN ('pending', 'approved')
+       ORDER BY FIELD(status, 'approved', 'pending'), id DESC
        LIMIT 1`,
       [userId, dateYmd]
     );
     if (dupRows.length > 0) {
+      const existingStatus = dupRows[0].status;
+      const message =
+        existingStatus === 'approved'
+          ? "A request for this date has already been Approved. You cannot submit a new request for this date. If you need to revise it, please 'Withdraw' the approved request first."
+          : "A request for this date is already Pending Supervisor review. You cannot submit a new request for this date. If you need to revise it, please 'Cancel' the pending request first.";
       return res.status(409).json({
         success: false,
-        code: 'OVERTIME_APPROVED_EXISTS',
-        message:
-          "An approved request already exists for this date. If you need to make a revision, please 'Withdraw' the existing approved request first before submitting a new one.",
+        code: 'OVERTIME_ACTIVE_EXISTS',
+        existing_status: existingStatus,
+        message,
       });
     }
 
