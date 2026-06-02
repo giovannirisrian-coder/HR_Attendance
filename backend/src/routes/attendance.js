@@ -2,7 +2,6 @@ const express = require('express');
 const router = express.Router();
 const {
   createAttendance,
-  saveMyOvertime,
   getMyAttendance,
   getTeamLsMembers,
   getTeamAttendance,
@@ -10,13 +9,17 @@ const {
   updateApprovalBulk,
   getMonthlyAttendanceRecap,
   getAttendanceDetail,
+  cancelOrWithdrawAttendance,
 } = require('../controllers/attendanceController');
 const { authenticate, authorize } = require('../middleware/auth');
 
 // LS routes
-router.post('/overtime', authenticate, authorize('ls'), saveMyOvertime);
+// NOTE: legacy POST /api/attendance/overtime was removed when the dedicated
+// Overtime workflow shipped. Use POST /api/overtimes instead.
 router.post('/', authenticate, authorize('ls'), createAttendance);
 router.get('/my', authenticate, authorize('ls'), getMyAttendance);
+// Cancel (pending → cancelled) / Withdraw (approved → withdrawn) own request.
+router.put('/:id/cancel-withdraw', authenticate, authorize('ls'), cancelOrWithdrawAttendance);
 
 // Supervisor routes
 router.get('/team/members', authenticate, authorize('ls_supervisor'), getTeamLsMembers);

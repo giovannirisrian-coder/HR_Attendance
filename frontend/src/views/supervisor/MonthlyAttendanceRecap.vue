@@ -104,7 +104,7 @@
                               <td><span class="badge badge-type">{{ leaveTypeLabel(lr.request_type) }}</span></td>
                               <td>{{ fmtRange(lr.start_date, lr.end_date) }}</td>
                               <td>{{ countLeaveDays(lr.start_date, lr.end_date) }}</td>
-                              <td><span class="badge" :class="`badge-${lr.status}`">{{ lr.status }}</span></td>
+                              <td><span class="badge" :class="`badge-${lr.status}`">{{ toPascalCase(lr.status) }}</span></td>
                               <td class="cell-reason-wrap">{{ lr.reason || '—' }}</td>
                               <td class="cell-reason-wrap">{{ lr.rejection_note || '—' }}</td>
                             </tr>
@@ -154,6 +154,15 @@ const monthOptions = [
 const toNumber = (v) => Number.parseInt(v, 10) || 0;
 
 const leaveTypeLabel = (t) => ({ cuti: 'Cuti', izin: 'Izin', sakit: 'Sakit' }[t] || t);
+
+const toPascalCase = (s) => {
+  if (s == null || s === '') return '';
+  return String(s)
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join('');
+};
 
 const fmtShort = (d) => new Date(d).toLocaleDateString('en-ID', { day: '2-digit', month: 'short', year: 'numeric' });
 const fmtRange = (s, e) => {

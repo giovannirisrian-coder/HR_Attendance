@@ -87,7 +87,7 @@
               <th>Absence</th>
               <th>Location (In)</th>
               <th>Status</th>
-              <th style="width:120px;">Actions</th>
+              <th style="width:220px;">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -136,9 +136,27 @@
                 </div>
                 <span v-else class="text-muted">—</span>
               </td>
-              <td><span class="badge" :class="`badge-${r.status}`">{{ r.status }}</span></td>
+              <td><span class="badge" :class="`badge-${r.status}`">{{ toPascalCase(r.status) }}</span></td>
               <td>
-                <router-link :to="`/ls/attendance/${r.id}`" class="btn btn-outline btn-sm">Detail</router-link>
+                <div class="row-actions">
+                  <router-link :to="`/ls/attendance/${r.id}`" class="btn btn-outline btn-sm">Detail</router-link>
+                  <button
+                    v-if="r.status === 'pending'"
+                    type="button"
+                    class="btn btn-outline btn-sm btn-cancel"
+                    :disabled="actionId === r.id"
+                    title="Cancel this pending request"
+                    @click="openLifecycleConfirm(r, 'cancel')"
+                  >Cancel</button>
+                  <button
+                    v-else-if="r.status === 'approved'"
+                    type="button"
+                    class="btn btn-outline btn-sm btn-withdraw"
+                    :disabled="actionId === r.id"
+                    title="Withdraw this approved request"
+                    @click="openLifecycleConfirm(r, 'withdraw')"
+                  >Withdraw</button>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -156,6 +174,44 @@
         </div>
       </div>
     </div>
+
+    <!-- Cancel / Withdraw confirmation -->
+    <div v-if="lifecycleModal.show" class="modal-backdrop" @click.self="lifecycleModal.show = false">
+      <div class="modal" style="max-width:420px;">
+        <div class="modal-header">
+          <span class="modal-title">
+            {{ lifecycleModal.action === 'cancel' ? 'Cancel Request' : 'Withdraw Request' }}
+          </span>
+          <button type="button" class="modal-close" @click="lifecycleModal.show = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <p class="text-sm" style="margin-bottom:10px;">
+            <template v-if="lifecycleModal.action === 'cancel'">
+              Mark this <strong>pending</strong> attendance request as <strong>Cancelled</strong>?
+              It will leave the Supervisor review queue and no longer count toward your recap.
+            </template>
+            <template v-else>
+              Withdraw this <strong>approved</strong> attendance request?
+              The day will revert to the original biometric record (if any) and stop counting
+              toward payroll / BAST.
+            </template>
+          </p>
+          <p class="text-sm text-muted" v-if="lifecycleModal.label">{{ lifecycleModal.label }}</p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" @click="lifecycleModal.show = false">Back</button>
+          <button
+            type="button"
+            class="btn"
+            :class="lifecycleModal.action === 'cancel' ? 'btn-danger' : 'btn-primary'"
+            :disabled="actionId === lifecycleModal.id"
+            @click="confirmLifecycle"
+          >
+            {{ lifecycleModal.action === 'cancel' ? 'Confirm Cancel' : 'Confirm Withdraw' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -169,6 +225,8 @@ const records = ref([]);
 const pagination = reactive({ total: 0, page: 1, limit: 15 });
 const filters = reactive({ search: '', start_date: '', end_date: '' });
 const summary = reactive({ overtime_hours: 0, cuti_days: 0, izin_days: 0, sakit_days: 0 });
+const actionId = ref(null);
+const lifecycleModal = reactive({ show: false, id: null, action: 'cancel', label: '' });
 
 const stats = computed(() => ({
   approved: records.value.filter(r => r.status === 'approved').length,
@@ -235,6 +293,42 @@ const formatOvertimeHours = (h) => {
 
 const leaveTypeLabel = (t) => ({ cuti: 'Cuti', izin: 'Izin', sakit: 'Sakit' }[t] || t);
 
+const toPascalCase = (s) => {
+  if (s == null || s === '') return '';
+  return String(s)
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join('');
+};
+
+const openLifecycleConfirm = (record, action) => {
+  lifecycleModal.id = record.id;
+  lifecycleModal.action = action;
+  lifecycleModal.label = `${formatDate(record.attendance_date)} · ${getDayName(record.attendance_date)}`;
+  lifecycleModal.show = true;
+};
+
+const confirmLifecycle = async () => {
+  if (!lifecycleModal.id) return;
+  actionId.value = lifecycleModal.id;
+  try {
+    const { data } = await api.put(
+      `/attendance/${lifecycleModal.id}/cancel-withdraw`,
+      { action: lifecycleModal.action }
+    );
+    if (data?.success === false) {
+      window.alert(data.message || 'Operation failed.');
+    }
+    lifecycleModal.show = false;
+    await fetchData();
+  } catch (err) {
+    window.alert(err?.response?.data?.message || 'Operation failed.');
+  } finally {
+    actionId.value = null;
+  }
+};
+
 onMounted(fetchData);
 </script>
 
@@ -255,4 +349,27 @@ onMounted(fetchData);
 .leave-pill--cuti { background: var(--bc-green-100); color: var(--bc-green-800); }
 .leave-pill--izin { background: #dbeafe; color: #1e40af; }
 .leave-pill--sakit { background: #fef3c7; color: #92400e; }
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.btn-cancel {
+  color: var(--bc-rejected);
+  border-color: #fecaca;
+}
+.btn-cancel:hover:not(:disabled) {
+  background: #fee2e2;
+  border-color: var(--bc-rejected);
+}
+.btn-withdraw {
+  color: #b45309;
+  border-color: #fde68a;
+}
+.btn-withdraw:hover:not(:disabled) {
+  background: #fef3c7;
+  border-color: #f59e0b;
+}
 </style>

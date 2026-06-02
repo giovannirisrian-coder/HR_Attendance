@@ -2,8 +2,8 @@
   <div class="leave-hub" :class="isSupervisor ? 'leave-hub--supervisor-split' : 'leave-hub--single'">
     <div class="leave-obj-header">
       <div class="leave-obj-header__titles">
-        <h1 class="page-title">{{ isLs ? 'Leave' : 'Leave approvals' }}</h1>
-        <p class="page-subtitle">Cuti, izin, dan sakit</p>
+        <h1 class="page-title">{{ isLs ? 'Leave Request' : 'Leave Approvals' }}</h1>
+        <p class="page-subtitle">Cuti, Izin, and Sakit</p>
       </div>
     </div>
 
@@ -11,14 +11,21 @@
       <div class="leave-grid">
         <div class="card leave-new-card">
           <div class="card-header">
-            <span class="card-title">Pengajuan Baru</span>
+            <span class="card-title">New Request</span>
           </div>
           <div class="card-body">
             <div v-if="formSuccess" class="alert alert-success"><span>✅</span> {{ formSuccess }}</div>
+            <div v-if="formWarning" class="alert alert-warning" role="alert">
+              <span class="alert-icon" aria-hidden="true">!</span>
+              <span>
+                <span class="alert-title">{{ formWarningTitle }}</span>
+                <span class="alert-body">{{ formWarning }}</span>
+              </span>
+            </div>
             <div v-if="formError" class="alert alert-error"><span>⚠️</span> {{ formError }}</div>
             <form @submit.prevent="submitLeave">
               <div class="form-group">
-                <label class="form-label">Jenis Pengajuan</label>
+                <label class="form-label">Request Type</label>
                 <select v-model="form.request_type" class="form-control" required>
                   <option value="cuti">Cuti</option>
                   <option value="izin">Izin</option>
@@ -26,18 +33,18 @@
                 </select>
               </div>
               <div class="form-group">
-                <label class="form-label">Tanggal Mulai</label>
+                <label class="form-label">Start Date</label>
                 <input v-model="form.start_date" type="date" class="form-control" required />
               </div>
               <div class="form-group">
-                <label class="form-label">Tanggal Selesai</label>
+                <label class="form-label">End Date</label>
                 <input v-model="form.end_date" type="date" class="form-control" required />
               </div>
               <div class="form-group">
                 <label class="form-label">
-                  Alasan Pengajuan
+                  Remarks
                   <span v-if="reasonRequired" class="req">*</span>
-                  <span v-else class="text-muted text-sm">(opsional)</span>
+                  <span v-else class="text-muted text-sm">(optional)</span>
                 </label>
                 <textarea
                   v-model="form.reason"
@@ -49,11 +56,11 @@
                 />
               </div>
               <p v-if="dayCount !== null" class="text-sm text-muted" style="margin-bottom:12px;">
-                Durasi: <strong>{{ dayCount }}</strong> hari
+                Duration: <strong>{{ dayCount }}</strong> day(s)
               </p>
               <button type="submit" class="btn btn-primary w-full" :disabled="submitting">
                 <span v-if="submitting" class="spinner" style="width:16px;height:16px;border-width:2px;"></span>
-                {{ submitting ? 'Mengirim…' : 'Kirim Pengajuan' }}
+                {{ submitting ? 'Submitting…' : 'Submit Request' }}
               </button>
             </form>
           </div>
@@ -61,41 +68,52 @@
 
         <div class="card leave-list-card">
           <div class="card-header">
-            <span class="card-title">Riwayat Pengajuan</span>
+            <span class="card-title">Request List</span>
             <div class="toolbar-filters">
               <select v-model="filterRequestType" class="form-control toolbar-select" @change="onFilterChange">
-                <option value="">Semua Jenis</option>
+                <option value="">All Types</option>
                 <option value="cuti">Cuti</option>
                 <option value="izin">Izin</option>
                 <option value="sakit">Sakit</option>
               </select>
               <select v-model="filterStatus" class="form-control toolbar-select" @change="onFilterChange">
-                <option value="">Semua Status</option>
+                <option value="">All Statuses</option>
                 <option value="pending">Pending</option>
-                <option value="approved">Disetujui</option>
-                <option value="rejected">Ditolak</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+                <option value="cancelled">Cancelled</option>
+                <option value="withdrawn">Withdrawn</option>
               </select>
             </div>
           </div>
-          <div class="table-wrapper" style="border:none;border-radius:0;border-top:1px solid var(--bc-gray-200);">
+          <div class="table-wrapper leave-ls-table" style="border:none;border-radius:0;border-top:1px solid var(--bc-gray-200);">
             <div v-if="loading" class="loading-overlay"><span class="spinner"></span> Loading…</div>
             <table v-else>
+              <colgroup>
+                <col style="width:84px;" />
+                <col style="width:230px;" />
+                <col style="width:64px;" />
+                <col />
+                <col style="width:140px;" />
+                <col style="width:170px;" />
+              </colgroup>
               <thead>
                 <tr>
-                  <th>Jenis</th>
-                  <th>Periode</th>
-                  <th>Hari</th>
-                  <th>Alasan</th>
-                  <th>Status</th>
+                  <th>Type</th>
+                  <th>Period</th>
+                  <th>Days</th>
+                  <th>Remarks</th>
+                  <th>Approval Status</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-if="records.length === 0">
-                  <td colspan="5">
+                  <td colspan="6">
                     <div class="empty-state">
                       <div class="empty-state-icon">📋</div>
-                      <h3>Belum ada pengajuan</h3>
-                      <p>Gunakan formulir di kiri atau ubah filter.</p>
+                      <h3>No requests yet</h3>
+                      <p>Use the form on the left or adjust the filter.</p>
                     </div>
                   </td>
                 </tr>
@@ -107,7 +125,28 @@
                   </td>
                   <td>{{ countDays(r.start_date, r.end_date) }}</td>
                   <td><span class="cell-reason">{{ r.reason || '—' }}</span></td>
-                  <td><span class="badge" :class="`badge-${r.status}`">{{ r.status }}</span></td>
+                  <td><span class="badge" :class="`badge-${r.status}`">{{ statusLabel(r.status) }}</span></td>
+                  <td>
+                    <div class="row-actions">
+                      <button
+                        v-if="r.status === 'pending'"
+                        type="button"
+                        class="btn btn-outline btn-sm btn-cancel"
+                        :disabled="lifecycleId === r.id"
+                        title="Cancel this pending leave request"
+                        @click="openLifecycleConfirm(r, 'cancel')"
+                      >Cancel</button>
+                      <button
+                        v-else-if="r.status === 'approved'"
+                        type="button"
+                        class="btn btn-outline btn-sm btn-withdraw"
+                        :disabled="lifecycleId === r.id"
+                        title="Withdraw this approved leave"
+                        @click="openLifecycleConfirm(r, 'withdraw')"
+                      >Withdraw</button>
+                      <span v-else class="text-muted text-sm">—</span>
+                    </div>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -115,7 +154,7 @@
           <div v-if="pagination.total > 0" class="card-body" style="padding-top:12px;border-top:1px solid var(--bc-gray-100);">
             <div class="pagination">
               <span class="pagination-info">
-                {{ ((pagination.page - 1) * pagination.limit) + 1 }}–{{ Math.min(pagination.page * pagination.limit, pagination.total) }} dari {{ pagination.total }}
+                {{ ((pagination.page - 1) * pagination.limit) + 1 }}–{{ Math.min(pagination.page * pagination.limit, pagination.total) }} of {{ pagination.total }}
               </span>
               <button class="btn btn-ghost btn-sm" :disabled="pagination.page <= 1" @click="changePage(pagination.page - 1)">‹ Prev</button>
               <button class="btn btn-ghost btn-sm" :disabled="pagination.page * pagination.limit >= pagination.total" @click="changePage(pagination.page + 1)">Next ›</button>
@@ -127,19 +166,19 @@
 
     <template v-else-if="isSupervisor">
       <div class="leave-supervisor-split">
-        <aside class="leave-master card" aria-label="Daftar karyawan LS">
+        <aside class="leave-master card" aria-label="LS employee list">
           <div class="leave-master__head">
-            <span class="card-title leave-master__title">Karyawan LS</span>
+            <span class="card-title leave-master__title">LS Employees</span>
             <div class="search-wrap leave-master__search">
               <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-              <input v-model="sidebarSearch" class="form-control" type="search" placeholder="Cari nama atau NIK…" autocomplete="off" />
+              <input v-model="sidebarSearch" class="form-control" type="search" placeholder="Search by name or NIK…" autocomplete="off" />
             </div>
           </div>
           <div class="leave-master__scroll">
-            <div v-if="loading" class="leave-master__loading"><span class="spinner"></span> Memuat…</div>
+            <div v-if="membersLoading" class="leave-master__loading"><span class="spinner"></span> Loading…</div>
             <template v-else>
               <p v-if="filteredSidebarEmployees.length === 0" class="leave-master__empty text-muted text-sm">
-                {{ uniqueEmployees.length === 0 ? 'Belum ada pengajuan tim untuk filter ini.' : 'Tidak ada karyawan yang cocok.' }}
+                {{ lsMembers.length === 0 ? 'No LS employees are assigned to your supervision.' : 'No matching employees.' }}
               </p>
               <ul v-else class="leave-master__list" role="listbox" :aria-activedescendant="selectedUserId ? `ls-item-${selectedUserId}` : undefined">
                 <li
@@ -150,7 +189,7 @@
                   :aria-selected="selectedUserId == emp.user_id"
                   class="leave-master__item"
                   :class="{ 'leave-master__item--active': selectedUserId == emp.user_id }"
-                  @click="selectedUserId = emp.user_id"
+                  @click="selectMember(emp.user_id)"
                 >
                   <div class="leave-master__item-name">{{ emp.employee_name }}</div>
                   <div class="leave-master__item-nik" title="NIK">{{ emp.nik || '—' }}</div>
@@ -164,7 +203,7 @@
         <div class="leave-detail card">
           <div class="leave-detail__head card-header">
             <div class="leave-detail__head-left">
-              <span class="card-title">Pengajuan tim</span>
+              <span class="card-title">Team Requests</span>
               <template v-if="selectedEmployeeLabel">
                 <span class="leave-detail__sep" aria-hidden="true">·</span>
                 <span class="leave-detail__selected">{{ selectedEmployeeLabel }}</span>
@@ -173,48 +212,51 @@
           </div>
           <div class="leave-detail__filter-row detail-panel-filters">
             <select v-model="filterRequestType" class="form-control leave-detail__select" @change="onFilterChange">
-              <option value="">Semua jenis</option>
+              <option value="">All Types</option>
               <option value="cuti">Cuti</option>
               <option value="izin">Izin</option>
               <option value="sakit">Sakit</option>
             </select>
             <select v-model="filters.status" class="form-control leave-detail__select" @change="onFilterChange">
-              <option value="">Semua status</option>
+              <option value="">All Statuses</option>
               <option value="pending">Pending</option>
-              <option value="approved">Disetujui</option>
-              <option value="rejected">Ditolak</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
             </select>
             <input v-model="filters.start_date" type="date" class="form-control leave-detail__date" @change="onFilterChange" />
             <input v-model="filters.end_date" type="date" class="form-control leave-detail__date" @change="onFilterChange" />
             <button type="button" class="btn btn-outline btn-sm" @click="clearSupervisorDetailFilters">Reset</button>
           </div>
           <p v-if="supervisorTruncated" class="leave-detail__trunc text-sm text-muted">
-            Menampilkan {{ records.length }} pengajuan terbaru dari {{ pagination.total }} total — saring jenis, status, atau tanggal untuk menyempitkan.
+            Showing {{ records.length }} most recent requests out of {{ pagination.total }} total — filter by type, status, or date to narrow down.
           </p>
           <div class="leave-detail__body">
             <template v-if="!selectedUserId">
               <div class="empty-state leave-detail__placeholder">
                 <div class="empty-state-icon">👈</div>
-                <h3>Pilih karyawan LS</h3>
-                <p>Gunakan daftar di kiri untuk membuka cuti, izin, dan sakit.</p>
+                <h3>Select an LS employee</h3>
+                <p>Use the list on the left to review Cuti, Izin, and Sakit requests.</p>
               </div>
             </template>
             <template v-else>
-              <div v-if="sortedLeavesForSelectedUser.length === 0" class="empty-state leave-detail__placeholder">
+              <div v-if="loading" class="loading-overlay"><span class="spinner"></span> Loading…</div>
+              <div v-else-if="sortedLeavesForSelectedUser.length === 0" class="empty-state leave-detail__placeholder">
                 <div class="empty-state-icon">📋</div>
-                <h3>Tidak ada pengajuan</h3>
-                <p class="text-muted text-sm">Tidak ada cuti, izin, atau sakit untuk karyawan ini dengan filter saat ini.</p>
+                <h3>No leave requests found for this period</h3>
+                <p class="text-muted text-sm">
+                  This employee has no Cuti, Izin, or Sakit records matching the current filters.
+                </p>
               </div>
               <div v-else class="table-wrapper leave-detail__table-wrap">
                 <table>
                   <thead>
                     <tr>
-                      <th>Jenis</th>
-                      <th>Periode</th>
-                      <th>Hari</th>
-                      <th>Alasan</th>
-                      <th>Status</th>
-                      <th style="min-width:200px;">Aksi</th>
+                      <th>Type</th>
+                      <th>Period</th>
+                      <th>Days</th>
+                      <th>Remarks</th>
+                      <th>Approval Status</th>
+                      <th style="min-width:200px;">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -225,12 +267,12 @@
                       </td>
                       <td>{{ countDays(r.start_date, r.end_date) }}</td>
                       <td><span class="cell-reason">{{ r.reason || '—' }}</span></td>
-                      <td><span class="badge" :class="`badge-${r.status}`">{{ r.status }}</span></td>
+                      <td><span class="badge" :class="`badge-${r.status}`">{{ statusLabel(r.status) }}</span></td>
                       <td>
                         <div class="action-btns">
                           <template v-if="r.status === 'pending'">
-                            <button class="btn btn-primary btn-sm" :disabled="actionId === r.id" @click="approve(r.id)">Setujui</button>
-                            <button class="btn btn-danger btn-sm" :disabled="actionId === r.id" @click="openReject(r)">Tolak</button>
+                            <button class="btn btn-primary btn-sm" :disabled="actionId === r.id" @click="approve(r.id)">Approve</button>
+                            <button class="btn btn-danger btn-sm" :disabled="actionId === r.id" @click="openReject(r)">Reject</button>
                           </template>
                           <span v-else class="text-muted text-sm">—</span>
                         </div>
@@ -247,18 +289,18 @@
       <div v-if="rejectModal.show" class="modal-backdrop" @click.self="rejectModal.show = false">
         <div class="modal" style="max-width:440px;">
           <div class="modal-header">
-            <span class="modal-title">Tolak pengajuan</span>
+            <span class="modal-title">Reject Request</span>
             <button type="button" class="modal-close" @click="rejectModal.show = false">✕</button>
           </div>
           <div class="modal-body">
             <div class="form-group">
-              <label class="form-label">Alasan <span style="color:var(--bc-rejected)">*</span></label>
-              <textarea v-model="rejectModal.note" class="form-control" rows="3" placeholder="Berikan alasan…" />
+              <label class="form-label">Remarks <span style="color:var(--bc-rejected)">*</span></label>
+              <textarea v-model="rejectModal.note" class="form-control" rows="3" placeholder="Provide a reason…" />
             </div>
           </div>
           <div class="modal-footer">
-            <button type="button" class="btn btn-outline" @click="rejectModal.show = false">Batal</button>
-            <button type="button" class="btn btn-danger" :disabled="!rejectModal.note.trim() || actionId" @click="confirmReject">Konfirmasi</button>
+            <button type="button" class="btn btn-outline" @click="rejectModal.show = false">Cancel</button>
+            <button type="button" class="btn btn-danger" :disabled="!rejectModal.note.trim() || actionId" @click="confirmReject">Confirm</button>
           </div>
         </div>
       </div>
@@ -274,33 +316,33 @@
         <div class="stat-card" style="border-left:4px solid var(--bc-pending);">
           <div class="stat-card-label">Pending</div>
           <div class="stat-card-value" style="color:var(--bc-pending)">{{ leaveMonthStats.pending }}</div>
-          <div class="stat-card-sub">Menunggu</div>
+          <div class="stat-card-sub">Awaiting Review</div>
         </div>
         <div class="stat-card" style="border-left:4px solid var(--bc-approved);">
-          <div class="stat-card-label">Disetujui</div>
+          <div class="stat-card-label">Approved</div>
           <div class="stat-card-value" style="color:var(--bc-approved)">{{ leaveMonthStats.approved }}</div>
-          <div class="stat-card-sub">Diproses</div>
+          <div class="stat-card-sub">Processed</div>
         </div>
         <div class="stat-card" style="border-left:4px solid var(--bc-rejected);">
-          <div class="stat-card-label">Ditolak</div>
+          <div class="stat-card-label">Rejected</div>
           <div class="stat-card-value" style="color:var(--bc-rejected)">{{ leaveMonthStats.rejected }}</div>
-          <div class="stat-card-sub">Ditolak</div>
+          <div class="stat-card-sub">Declined</div>
         </div>
       </div>
 
       <div class="card">
         <div class="card-header">
-          <span class="card-title">Pengajuan tim — {{ leaveMonthStatsLabel }}</span>
+          <span class="card-title">Team Requests — {{ leaveMonthStatsLabel }}</span>
         </div>
         <div class="card-body" style="padding-bottom:0;">
           <div class="filter-bar filter-bar--wrap">
-            <label class="overview-filter-label" for="leave-overview-employee">Karyawan</label>
+            <label class="overview-filter-label" for="leave-overview-employee">Employee</label>
             <select
               id="leave-overview-employee"
               v-model="overviewEmployeeUserId"
               class="form-control overview-employee-select"
             >
-              <option value="">Semua karyawan</option>
+              <option value="">All Employees</option>
               <option
                 v-for="e in sortedTeamEmployeeOptions"
                 :key="e.user_id"
@@ -317,13 +359,13 @@
           <div v-else class="employee-grid">
             <div v-if="teamEmployees.length === 0" class="empty-state empty-state--pad">
               <div class="empty-state-icon">✅</div>
-              <h3>Tidak ada anggota tim</h3>
-              <p>Belum ada karyawan LS di bawah supervisi Anda.</p>
+              <h3>No team members</h3>
+              <p>No LS employees are currently assigned to your supervision.</p>
             </div>
             <div v-else-if="displayedTeamEmployees.length === 0" class="empty-state empty-state--pad">
               <div class="empty-state-icon">🔎</div>
-              <h3>Tidak ada kartu untuk pilihan ini</h3>
-              <p>Pilih karyawan lain atau reset filter.</p>
+              <h3>No cards for this selection</h3>
+              <p>Select a different employee or reset the filter.</p>
             </div>
             <button
               v-for="emp in displayedTeamEmployees"
@@ -340,10 +382,10 @@
               <div class="employee-card__counts">
                 <span class="mini-pill">Total {{ emp.total }}</span>
                 <span v-if="emp.pending > 0" class="mini-pill mini-pill--pending">Pending {{ emp.pending }}</span>
-                <span class="mini-pill mini-pill--muted">OK {{ emp.approved }}</span>
-                <span v-if="emp.rejected > 0" class="mini-pill mini-pill--rej">Ditolak {{ emp.rejected }}</span>
+                <span class="mini-pill mini-pill--muted">Approved {{ emp.approved }}</span>
+                <span v-if="emp.rejected > 0" class="mini-pill mini-pill--rej">Rejected {{ emp.rejected }}</span>
               </div>
-              <div class="employee-card__cta">Proses approval →</div>
+              <div class="employee-card__cta">Review Approvals →</div>
             </button>
           </div>
         </div>
@@ -362,32 +404,32 @@
           </div>
           <div class="modal-body sheet-body">
             <div class="bulk-toolbar sheet-toolbar">
-              <span class="selected-info">{{ sheetSelectedLeaveIds.size }} terpilih</span>
+              <span class="selected-info">{{ sheetSelectedLeaveIds.size }} selected</span>
               <button
                 class="btn btn-primary btn-sm"
                 type="button"
                 :disabled="sheetSelectedLeaveIds.size === 0 || leaveBulkProcessing"
                 @click="openLeaveBulkModal"
               >
-                Approval
+                Review Approval
               </button>
             </div>
             <div class="filter-bar">
               <select v-model="sheetFilterRequestType" class="form-control" style="max-width:160px;" @change="onSheetFilterChange">
-                <option value="">Semua jenis</option>
+                <option value="">All Types</option>
                 <option value="cuti">Cuti</option>
                 <option value="izin">Izin</option>
                 <option value="sakit">Sakit</option>
               </select>
               <select v-model="sheetFilters.status" class="form-control" style="max-width:160px;" @change="fetchSheetLeaves">
-                <option value="">Semua status</option>
+                <option value="">All Statuses</option>
                 <option value="pending">Pending</option>
-                <option value="approved">Disetujui</option>
-                <option value="rejected">Ditolak</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
               </select>
               <input v-model="sheetFilters.start_date" type="date" class="form-control" style="max-width:150px;" @change="fetchSheetLeaves" />
               <input v-model="sheetFilters.end_date" type="date" class="form-control" style="max-width:150px;" @change="fetchSheetLeaves" />
-              <button class="btn btn-outline btn-sm" @click="resetSheetLeaveFilters">Reset periode</button>
+              <button class="btn btn-outline btn-sm" @click="resetSheetLeaveFilters">Reset Period</button>
             </div>
 
             <div class="table-wrapper sheet-table" style="border:none;border-radius:0;margin-top:12px;">
@@ -403,12 +445,12 @@
                         @change="toggleSheetLeaveSelectAll"
                       />
                     </th>
-                    <th>Jenis</th>
-                    <th>Periode</th>
-                    <th>Hari</th>
-                    <th>Alasan</th>
-                    <th>Status</th>
-                    <th style="min-width:200px;">Aksi</th>
+                    <th>Type</th>
+                    <th>Period</th>
+                    <th>Days</th>
+                    <th>Remarks</th>
+                    <th>Approval Status</th>
+                    <th style="min-width:200px;">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -416,8 +458,8 @@
                     <td colspan="7">
                       <div class="empty-state">
                         <div class="empty-state-icon">📋</div>
-                        <h3>Tidak ada data</h3>
-                        <p>Ubah filter atau rentang tanggal.</p>
+                        <h3>No data</h3>
+                        <p>Adjust the filter or date range.</p>
                       </div>
                     </td>
                   </tr>
@@ -436,12 +478,12 @@
                     </td>
                     <td>{{ countDays(r.start_date, r.end_date) }}</td>
                     <td><span class="cell-reason">{{ r.reason || '—' }}</span></td>
-                    <td><span class="badge" :class="`badge-${r.status}`">{{ r.status }}</span></td>
+                    <td><span class="badge" :class="`badge-${r.status}`">{{ statusLabel(r.status) }}</span></td>
                     <td>
                       <div class="action-btns">
                         <template v-if="r.status === 'pending'">
-                          <button class="btn btn-primary btn-sm" :disabled="actionId === r.id" @click="approve(r.id)">Setujui</button>
-                          <button class="btn btn-danger btn-sm" :disabled="actionId === r.id" @click="openReject(r)">Tolak</button>
+                          <button class="btn btn-primary btn-sm" :disabled="actionId === r.id" @click="approve(r.id)">Approve</button>
+                          <button class="btn btn-danger btn-sm" :disabled="actionId === r.id" @click="openReject(r)">Reject</button>
                         </template>
                         <span v-else class="text-muted text-sm">—</span>
                       </div>
@@ -453,14 +495,14 @@
 
             <div v-if="sheetPagination.total > 0" class="pagination sheet-pag">
               <span class="pagination-info">
-                {{ ((sheetPagination.page - 1) * sheetPagination.limit) + 1 }}–{{ Math.min(sheetPagination.page * sheetPagination.limit, sheetPagination.total) }} dari {{ sheetPagination.total }}
+                {{ ((sheetPagination.page - 1) * sheetPagination.limit) + 1 }}–{{ Math.min(sheetPagination.page * sheetPagination.limit, sheetPagination.total) }} of {{ sheetPagination.total }}
               </span>
               <button class="btn btn-ghost btn-sm" :disabled="sheetPagination.page <= 1" @click="changeSheetPage(sheetPagination.page - 1)">‹ Prev</button>
               <button class="btn btn-ghost btn-sm" :disabled="sheetPagination.page * sheetPagination.limit >= sheetPagination.total" @click="changeSheetPage(sheetPagination.page + 1)">Next ›</button>
             </div>
           </div>
           <div class="modal-footer">
-            <button class="btn btn-outline" @click="closeLeaveEmployeeSheet">Tutup</button>
+            <button class="btn btn-outline" @click="closeLeaveEmployeeSheet">Close</button>
           </div>
         </div>
       </div>
@@ -468,32 +510,32 @@
       <div v-if="leaveBulkModal.show" class="modal-backdrop" @click.self="leaveBulkModal.show = false">
         <div class="modal" style="max-width:440px;">
           <div class="modal-header">
-            <span class="modal-title">Approval Pengajuan</span>
+            <span class="modal-title">Request Approval</span>
             <button type="button" class="modal-close" @click="leaveBulkModal.show = false">✕</button>
           </div>
           <div class="modal-body">
             <div class="form-group">
-              <label class="form-label">Pilih Proses Approval <span style="color:var(--bc-rejected)">*</span></label>
+              <label class="form-label">Approval Action <span style="color:var(--bc-rejected)">*</span></label>
               <select v-model="leaveBulkModal.action" class="form-control">
-                <option value="approve">Setuju</option>
-                <option value="reject">Tolak</option>
+                <option value="approve">Approve</option>
+                <option value="reject">Reject</option>
               </select>
             </div>
             <div class="form-group">
               <label class="form-label">
-                Alasan penolakan
+                Rejection Remarks
                 <span v-if="leaveBulkModal.action === 'reject'" style="color:var(--bc-rejected)">*</span>
               </label>
               <textarea
                 v-model="leaveBulkModal.note"
                 class="form-control"
                 rows="3"
-                :placeholder="leaveBulkModal.action === 'reject' ? 'Wajib untuk penolakan…' : 'Opsional'"
+                :placeholder="leaveBulkModal.action === 'reject' ? 'Required for rejection…' : 'Optional'"
               />
             </div>
           </div>
           <div class="modal-footer">
-            <button type="button" class="btn btn-outline" @click="leaveBulkModal.show = false">Batal</button>
+            <button type="button" class="btn btn-outline" @click="leaveBulkModal.show = false">Cancel</button>
             <button
               type="button"
               class="btn"
@@ -501,7 +543,7 @@
               :disabled="leaveBulkProcessing || sheetSelectedLeaveIds.size === 0 || (leaveBulkModal.action === 'reject' && !leaveBulkModal.note.trim())"
               @click="submitLeaveBulkApproval"
             >
-              {{ leaveBulkModal.action === 'approve' ? 'Konfirmasi setujui' : 'Konfirmasi tolak' }}
+              {{ leaveBulkModal.action === 'approve' ? 'Confirm Approval' : 'Confirm Rejection' }}
             </button>
           </div>
         </div>
@@ -510,22 +552,59 @@
       <div v-if="rejectModal.show" class="modal-backdrop" @click.self="rejectModal.show = false">
         <div class="modal" style="max-width:440px;">
           <div class="modal-header">
-            <span class="modal-title">Tolak pengajuan</span>
+            <span class="modal-title">Reject Request</span>
             <button type="button" class="modal-close" @click="rejectModal.show = false">✕</button>
           </div>
           <div class="modal-body">
             <div class="form-group">
-              <label class="form-label">Alasan <span style="color:var(--bc-rejected)">*</span></label>
-              <textarea v-model="rejectModal.note" class="form-control" rows="3" placeholder="Berikan alasan…" />
+              <label class="form-label">Remarks <span style="color:var(--bc-rejected)">*</span></label>
+              <textarea v-model="rejectModal.note" class="form-control" rows="3" placeholder="Provide a reason…" />
             </div>
           </div>
           <div class="modal-footer">
-            <button type="button" class="btn btn-outline" @click="rejectModal.show = false">Batal</button>
-            <button type="button" class="btn btn-danger" :disabled="!rejectModal.note.trim() || actionId" @click="confirmReject">Konfirmasi</button>
+            <button type="button" class="btn btn-outline" @click="rejectModal.show = false">Cancel</button>
+            <button type="button" class="btn btn-danger" :disabled="!rejectModal.note.trim() || actionId" @click="confirmReject">Confirm</button>
           </div>
         </div>
       </div>
     </template>
+
+    <!-- LS: Cancel / Withdraw confirmation -->
+    <div v-if="lifecycleModal.show" class="modal-backdrop" @click.self="lifecycleModal.show = false">
+      <div class="modal" style="max-width:420px;">
+        <div class="modal-header">
+          <span class="modal-title">
+            {{ lifecycleModal.action === 'cancel' ? 'Cancel Leave Request' : 'Withdraw Leave Request' }}
+          </span>
+          <button type="button" class="modal-close" @click="lifecycleModal.show = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <p class="text-sm" style="margin-bottom:10px;">
+            <template v-if="lifecycleModal.action === 'cancel'">
+              Mark this <strong>pending</strong> leave request as <strong>Cancelled</strong>?
+              It will leave the Supervisor review queue and no longer count toward your recap.
+            </template>
+            <template v-else>
+              Withdraw this <strong>approved</strong> leave?
+              The days will stop counting toward Monthly Recap, BAST and other payroll analytics.
+            </template>
+          </p>
+          <p class="text-sm text-muted" v-if="lifecycleModal.label">{{ lifecycleModal.label }}</p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" @click="lifecycleModal.show = false">Back</button>
+          <button
+            type="button"
+            class="btn"
+            :class="lifecycleModal.action === 'cancel' ? 'btn-danger' : 'btn-primary'"
+            :disabled="lifecycleId === lifecycleModal.id"
+            @click="confirmLifecycle"
+          >
+            {{ lifecycleModal.action === 'cancel' ? 'Confirm Cancel' : 'Confirm Withdraw' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -542,6 +621,13 @@ const isSupervisor = computed(() => user?.role === 'ls_supervisor');
 const SUPERVISOR_TEAM_FETCH_LIMIT = 500;
 
 const typeLabel = (t) => ({ cuti: 'Cuti', izin: 'Izin', sakit: 'Sakit' }[t] || t);
+const statusLabel = (s) => ({
+  pending: 'Pending',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  cancelled: 'Cancelled',
+  withdrawn: 'Withdrawn',
+}[s] || s);
 
 const form = reactive({
   request_type: 'cuti',
@@ -551,6 +637,8 @@ const form = reactive({
 });
 const formSuccess = ref('');
 const formError = ref('');
+const formWarning = ref('');
+const formWarningTitle = ref('');
 const submitting = ref(false);
 const loading = ref(false);
 const records = ref([]);
@@ -560,36 +648,19 @@ const filterRequestType = ref('');
 const filters = reactive({ search: '', status: '', start_date: '', end_date: '' });
 const rejectModal = reactive({ show: false, id: null, note: '' });
 const actionId = ref(null);
+const lifecycleId = ref(null);
+const lifecycleModal = reactive({ show: false, id: null, action: 'cancel', label: '' });
 
 const sidebarSearch = ref('');
 const selectedUserId = ref(null);
-
-const uniqueEmployees = computed(() => {
-  const map = new Map();
-  for (const r of records.value) {
-    const uid = r.user_id;
-    if (uid == null) continue;
-    if (!map.has(uid)) {
-      map.set(uid, {
-        user_id: uid,
-        employee_name: r.employee_name,
-        employee_id: r.employee_id,
-        nik: r.nik || null,
-      });
-    } else if (r.nik) {
-      const cur = map.get(uid);
-      if (!cur.nik) cur.nik = r.nik;
-    }
-  }
-  return [...map.values()].sort((a, b) =>
-    String(a.employee_name || '').localeCompare(String(b.employee_name || ''), 'id', { sensitivity: 'base' })
-  );
-});
+const lsMembers = ref([]);
+const membersLoading = ref(false);
 
 const filteredSidebarEmployees = computed(() => {
   const q = sidebarSearch.value.trim().toLowerCase();
-  if (!q) return uniqueEmployees.value;
-  return uniqueEmployees.value.filter(
+  const list = lsMembers.value;
+  if (!q) return list;
+  return list.filter(
     (e) =>
       String(e.employee_name || '').toLowerCase().includes(q) ||
       String(e.nik || '').toLowerCase().includes(q) ||
@@ -613,7 +684,7 @@ const sortedLeavesForSelectedUser = computed(() =>
 );
 
 const selectedEmployeeLabel = computed(() => {
-  const emp = uniqueEmployees.value.find((e) => e.user_id == selectedUserId.value);
+  const emp = lsMembers.value.find((e) => e.user_id == selectedUserId.value);
   if (!emp) return '';
   return `${emp.employee_name} · NIK ${emp.nik || '—'}`;
 });
@@ -628,8 +699,8 @@ function pendingCountForUser(userId) {
 
 const reasonRequired = computed(() => form.request_type === 'izin' || form.request_type === 'sakit');
 const reasonPlaceholder = computed(() => {
-  if (form.request_type === 'cuti') return 'Opsional — konteks untuk approver…';
-  return 'Wajib (min. 5 karakter)…';
+  if (form.request_type === 'cuti') return 'Optional — context for the approver…';
+  return 'Required (min. 5 characters)…';
 });
 
 const dayCount = computed(() => {
@@ -711,14 +782,51 @@ const fetchList = async () => {
   }
 };
 
+// Supervisor: fetch the full roster of LS employees assigned to this supervisor
+// so the Master sidebar lists everyone regardless of whether they have leave
+// requests yet (mirrors Overtime + Approval List behavior).
+const fetchSupervisorMembers = async () => {
+  membersLoading.value = true;
+  try {
+    const { data } = await api.get('/attendance/team/members');
+    const rows = data?.data || [];
+    lsMembers.value = rows
+      .map((m) => ({
+        user_id: m.id,
+        employee_name: m.name,
+        employee_id: m.employee_id,
+        nik: m.nik || null,
+      }))
+      .sort((a, b) =>
+        String(a.employee_name || '').localeCompare(
+          String(b.employee_name || ''),
+          'id',
+          { sensitivity: 'base' }
+        )
+      );
+  } catch {
+    lsMembers.value = [];
+  } finally {
+    membersLoading.value = false;
+  }
+};
+
+const selectMember = (userId) => {
+  selectedUserId.value = userId;
+};
+
 const changePage = (p) => {
   pagination.page = p;
   fetchList();
 };
 
+const LEAVE_DUP_CODES = new Set(['LEAVE_ACTIVE_EXISTS', 'LEAVE_APPROVED_EXISTS']);
+
 const submitLeave = async () => {
   formSuccess.value = '';
   formError.value = '';
+  formWarning.value = '';
+  formWarningTitle.value = '';
   submitting.value = true;
   try {
     const startYmd = String(form.start_date || '').slice(0, 10);
@@ -735,7 +843,21 @@ const submitLeave = async () => {
       await fetchList();
     }
   } catch (err) {
-    formError.value = err.response?.data?.message || 'Submission failed.';
+    const resp = err.response?.data;
+    const msg = resp?.message || 'Submission failed.';
+    const code = resp?.code;
+    const isDup =
+      err.response?.status === 409 &&
+      (LEAVE_DUP_CODES.has(code) || /pending|approved/i.test(msg));
+    if (isDup) {
+      formWarning.value = msg;
+      formWarningTitle.value =
+        resp?.existing_status === 'pending'
+          ? 'Pending request already exists for this date'
+          : 'Approved request already exists for this date';
+    } else {
+      formError.value = msg;
+    }
   } finally {
     submitting.value = false;
   }
@@ -774,11 +896,38 @@ const confirmReject = async () => {
   }
 };
 
+const openLifecycleConfirm = (record, action) => {
+  lifecycleModal.id = record.id;
+  lifecycleModal.action = action;
+  lifecycleModal.label = `${typeLabel(record.request_type)} · ${fmtRange(record.start_date, record.end_date)}`;
+  lifecycleModal.show = true;
+};
+
+const confirmLifecycle = async () => {
+  if (!lifecycleModal.id) return;
+  lifecycleId.value = lifecycleModal.id;
+  try {
+    const { data } = await api.put(
+      `/leaves/${lifecycleModal.id}/cancel-withdraw`,
+      { action: lifecycleModal.action }
+    );
+    if (data?.success === false) {
+      window.alert(data.message || 'Operation failed.');
+    }
+    lifecycleModal.show = false;
+    await fetchList();
+  } catch (err) {
+    window.alert(err?.response?.data?.message || 'Operation failed.');
+  } finally {
+    lifecycleId.value = null;
+  }
+};
+
 watch(
-  [filteredSidebarEmployees, loading, records],
+  [filteredSidebarEmployees, membersLoading],
   () => {
     if (!isSupervisor.value) return;
-    if (loading.value) return;
+    if (membersLoading.value) return;
     const list = filteredSidebarEmployees.value;
     if (list.length === 0) {
       selectedUserId.value = null;
@@ -797,7 +946,9 @@ onMounted(() => {
   if (isLs.value) {
     fetchList();
   } else if (isSupervisor.value) {
-    fetchList();
+    // Load full team roster first so the sidebar always shows every assigned
+    // LS employee, then load their leave records to populate the detail panel.
+    fetchSupervisorMembers().then(() => fetchList());
   } else {
     fetchLeaveMonthStats();
     fetchTeamEmployeesOverview();
@@ -810,6 +961,8 @@ onMounted(() => {
 .leave-hub--supervisor-split {
   max-width: 1400px;
 }
+/* LS employee view: use full page width so the request list mirrors AttendanceList */
+.leave-hub--single { max-width: none; }
 
 .leave-supervisor-split {
   display: flex;
@@ -1024,12 +1177,25 @@ onMounted(() => {
 
 .leave-grid {
   display: grid;
-  grid-template-columns: minmax(280px, 360px) 1fr;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
   gap: 24px;
   align-items: start;
 }
 .leave-new-card { box-shadow: var(--shadow-sm); }
-.leave-list-card { box-shadow: var(--shadow-sm); }
+.leave-list-card { box-shadow: var(--shadow-sm); min-width: 0; }
+
+/* LS list: let Remarks breathe across the full available width */
+.leave-ls-table table { table-layout: fixed; }
+.leave-ls-table .cell-reason {
+  display: -webkit-box;
+  max-width: 100%;
+  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.4;
+}
 .toolbar-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .toolbar-select { max-width: 140px; font-size: 13px; padding: 6px 10px; }
 
@@ -1054,6 +1220,28 @@ onMounted(() => {
 .req { color: var(--bc-rejected); }
 
 .action-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.btn-cancel {
+  color: var(--bc-rejected);
+  border-color: #fecaca;
+}
+.btn-cancel:hover:not(:disabled) {
+  background: #fee2e2;
+  border-color: var(--bc-rejected);
+}
+.btn-withdraw {
+  color: #b45309;
+  border-color: #fde68a;
+}
+.btn-withdraw:hover:not(:disabled) {
+  background: #fef3c7;
+  border-color: #f59e0b;
+}
 
 .bulk-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .sheet-toolbar { margin-bottom: 12px; }
