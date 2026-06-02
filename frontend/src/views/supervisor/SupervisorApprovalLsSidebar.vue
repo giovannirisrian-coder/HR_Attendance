@@ -13,7 +13,7 @@
           class="form-control ls-search-input"
           type="search"
           autocomplete="off"
-          placeholder="Filter by name or NIK…"
+          placeholder="Filter by name or NPK…"
           @input="$emit('update:search', $event.target.value)"
         />
       </div>
@@ -38,7 +38,7 @@
           @keydown.space.prevent="select(m.id)"
         >
           <span class="ls-item-name">{{ m.name }}</span>
-          <span class="ls-item-nik">{{ m.nik || '—' }}</span>
+          <span class="ls-item-npk">{{ m.npk || '—' }}</span>
         </li>
       </ul>
     </div>
@@ -154,7 +154,7 @@ const select = (id) => {
   line-height: 1.3;
 }
 
-.ls-item-nik {
+.ls-item-npk {
   display: block;
   font-size: 11px;
   color: var(--bc-gray-500);

@@ -191,7 +191,7 @@
             <span class="card-title ot-master__title">LS Employees</span>
             <div class="search-wrap ot-master__search">
               <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-              <input v-model="sidebarSearch" class="form-control" type="search" placeholder="Search by name or NIK…" autocomplete="off" />
+              <input v-model="sidebarSearch" class="form-control" type="search" placeholder="Search by name or NPK…" autocomplete="off" />
             </div>
           </div>
           <div class="ot-master__scroll">
@@ -212,7 +212,7 @@
                   @click="selectMember(m.id)"
                 >
                   <div class="ot-master__item-name">{{ m.name }}</div>
-                  <div class="ot-master__item-nik" title="NIK">{{ m.nik || '—' }}</div>
+                  <div class="ot-master__item-npk" title="NPK">{{ m.npk || '—' }}</div>
                   <span v-if="pendingByUser[m.id] > 0" class="ot-master__pending">{{ pendingByUser[m.id] }} pending</span>
                 </li>
               </ul>
@@ -487,7 +487,7 @@ const filteredMembers = computed(() => {
   return lsMembers.value.filter(
     (m) =>
       String(m.name || '').toLowerCase().includes(q) ||
-      String(m.nik || '').toLowerCase().includes(q) ||
+      String(m.npk || '').toLowerCase().includes(q) ||
       String(m.employee_id || '').toLowerCase().includes(q)
   );
 });
@@ -495,7 +495,7 @@ const filteredMembers = computed(() => {
 const selectedMemberLabel = computed(() => {
   const m = lsMembers.value.find((x) => x.id == selectedUserId.value);
   if (!m) return '';
-  return `${m.name} · NIK ${m.nik || '—'}`;
+  return `${m.name} · NPK ${m.npk || '—'}`;
 });
 
 // ─── LS list fetch ───
@@ -957,7 +957,7 @@ onMounted(async () => {
   font-size: 14px;
   color: var(--bc-gray-900);
 }
-.ot-master__item-nik {
+.ot-master__item-npk {
   font-size: 12px;
   color: var(--bc-gray-600);
   margin-top: 2px;

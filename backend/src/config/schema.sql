@@ -49,7 +49,15 @@ CREATE TABLE IF NOT EXISTS users (
 --
 -- Single source of truth for ALL employee data in the system:
 --   • LS HR ➜ Employee List (BAST master fields: vendor, PO, NPK, …)
---   • Attendance / Leave / Overtime (linked via user_id + nik)
+--   • Attendance / Leave / Overtime (linked via user_id; NPK is the
+--     unified identitas karyawan that travels with each request).
+--
+-- Identifier consolidation (nik → npk):
+--   The legacy `nik` column has been retired and `npk` is now THE
+--   pengidentifikasi utama karyawan across Biometric Capture, Cloud
+--   Synchronization, BAST and Salary Recap analytics. The drop is
+--   driven by `migration_hr_employees_drop_nik.sql` after backfilling
+--   any historical NIK values into npk.
 --
 -- The legacy `employees` table that previously backed
 -- attendance.employee_id has been retired — see
@@ -68,7 +76,6 @@ CREATE TABLE IF NOT EXISTS hr_employees (
   -- vendor is picked via the lookup, the backend writes
   -- vendors.code → vendor_number and vendors.name → vendor_name.
   vendor_id         INT           NULL,
-  nik               VARCHAR(16)   NULL,
 
   -- Vendor / contract block (all OPTIONAL — HR can complete later)
   vendor_number     VARCHAR(64)   NULL,
@@ -115,7 +122,6 @@ CREATE TABLE IF NOT EXISTS hr_employees (
 
   UNIQUE KEY uq_hr_employees_user_id (user_id),
   UNIQUE KEY uq_hr_employees_npk (npk),
-  KEY idx_hr_employees_nik (nik),
   KEY idx_hr_employees_vendor_id (vendor_id),
   KEY idx_hr_employees_employee_name (employee_name),
   KEY idx_hr_employees_vendor_name (vendor_name),
@@ -137,7 +143,12 @@ CREATE TABLE IF NOT EXISTS attendance (
   id              INT AUTO_INCREMENT PRIMARY KEY,
   user_id         INT          NOT NULL,
   employee_id     INT          NOT NULL,
-  nik             VARCHAR(16)  NULL,
+  -- Per-row identitas karyawan snapshot. After the nik → npk
+  -- consolidation this column stores the NPK value sourced from
+  -- `hr_employees.npk`; it is widened to VARCHAR(64) to accommodate
+  -- NPK formats longer than the legacy 16-digit NIK (see
+  -- `migration_attendance_widen_nik.sql`).
+  nik             VARCHAR(64)  NULL,
   attendance_date DATE         NOT NULL,
   clock_in_time   TIME         NULL,
   clock_in_lat    DECIMAL(10,8) NULL,
@@ -329,19 +340,18 @@ INSERT IGNORE INTO users (name, employee_id, email, password, role, vendor_id, s
 UPDATE users SET supervisor_id = (SELECT id FROM (SELECT id FROM users WHERE employee_id='SPV001') t) WHERE employee_id IN ('LS001','LS002');
 UPDATE users SET supervisor_id = (SELECT id FROM (SELECT id FROM users WHERE employee_id='SPV002') t) WHERE employee_id = 'LS003';
 
--- Master karyawan (NIK) untuk user LS — wajib sebelum absensi.
+-- Master karyawan (NPK) untuk user LS — wajib sebelum absensi.
 -- Seeded into the consolidated hr_employees table so the row also feeds
 -- the LS HR ➜ Employee List view. Vendor / supervisor metadata is filled
 -- in from the user record so QA / UAT see meaningful BAST defaults.
-INSERT INTO hr_employees (user_id, vendor_id, nik, employee_name, vendor_number, vendor_name, supervisor_id, user_status)
+--
+-- NPK mirrors the seed `users.employee_id` (LS001 / LS002 / LS003) so the
+-- account auto-provisioning sync in hrEmployeeController stays trivially
+-- consistent: `hr_employees.npk` ⇔ `users.employee_id`.
+INSERT INTO hr_employees (user_id, vendor_id, npk, employee_name, vendor_number, vendor_name, supervisor_id, user_status)
 SELECT u.id,
   v.id,
-  CASE u.employee_id
-    WHEN 'LS001' THEN '3173010101010001'
-    WHEN 'LS002' THEN '3173020202020002'
-    WHEN 'LS003' THEN '3173030303030003'
-    ELSE '0000000000000001'
-  END AS nik,
+  u.employee_id AS npk,
   u.name,
   v.code,
   v.name,

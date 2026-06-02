@@ -17,16 +17,22 @@ const assertAttendanceDateInLsWindow = (ymd) => {
 
 const fetchEmployeeProfileForUser = async (userId) => {
   const [rows] = await db.query(
-    'SELECT id AS employee_id, nik FROM hr_employees WHERE user_id = ? LIMIT 1',
+    'SELECT id AS employee_id, npk FROM hr_employees WHERE user_id = ? LIMIT 1',
     [userId]
   );
   return rows[0] || null;
 };
 
-/** Normalize to 16-digit string (digits only) or null if empty. */
-const normalizeNik = (raw) => {
+/**
+ * Normalize the NPK identifier persisted into the per-row attendance
+ * snapshot. After the nik → npk consolidation NPK can contain any
+ * printable characters (e.g. "NPK-100245", "LS001"), so unlike the
+ * previous helper we no longer strip non-digits — we only trim and cap
+ * to the attendance column width.
+ */
+const normalizeNpk = (raw) => {
   if (raw === undefined || raw === null) return null;
-  const s = String(raw).replace(/\D/g, '');
+  const s = String(raw).trim().slice(0, 64);
   return s.length ? s : null;
 };
 
@@ -78,14 +84,14 @@ const createAttendance = async (req, res) => {
       return res.status(400).json({
         success: false,
         message:
-          'Profil karyawan dengan NIK belum ditemukan. Akun harus ditautkan ke data karyawan. Hubungi HR.',
+          'Profil karyawan dengan NPK belum ditemukan. Akun harus ditautkan ke data karyawan. Hubungi HR.',
       });
     }
-    const nikNorm = normalizeNik(emp.nik);
-    if (!nikNorm) {
+    const npkNorm = normalizeNpk(emp.npk);
+    if (!npkNorm) {
       return res.status(400).json({
         success: false,
-        message: 'NIK pada master karyawan tidak valid. Hubungi HR.',
+        message: 'NPK pada master karyawan tidak valid. Hubungi HR.',
       });
     }
     const employeeId = emp.employee_id;
@@ -122,7 +128,7 @@ const createAttendance = async (req, res) => {
           [
             userId,
             employeeId,
-            nikNorm,
+            npkNorm,
             attendanceYmd,
             time,
             latitude || null,
@@ -139,7 +145,7 @@ const createAttendance = async (req, res) => {
            WHERE id = ? AND source_type = 'correction' AND status = 'pending'`,
           [
             employeeId,
-            nikNorm,
+            npkNorm,
             time,
             latitude || null,
             longitude || null,
@@ -168,7 +174,7 @@ const createAttendance = async (req, res) => {
          SET clock_out_time = ?, clock_out_lat = ?, clock_out_lng = ?, clock_out_address = ?, nik = ?, employee_id = ?,
              updated_at = CURRENT_TIMESTAMP
          WHERE id = ? AND source_type = 'correction' AND status = 'pending'`,
-        [time, latitude || null, longitude || null, address || null, nikNorm, employeeId, pendingCorrection.id]
+        [time, latitude || null, longitude || null, address || null, npkNorm, employeeId, pendingCorrection.id]
       );
     } else {
       return res.status(400).json({ success: false, message: "type must be 'clock_in' or 'clock_out'." });
@@ -214,7 +220,7 @@ const getMyAttendance = async (req, res) => {
 
     if (search && String(search).trim()) {
       const term = `%${String(search).trim()}%`;
-      where += ' AND (DATE_FORMAT(a.attendance_date, "%Y-%m-%d") LIKE ? OR COALESCE(e.nik, a.nik) LIKE ?)';
+      where += ' AND (DATE_FORMAT(a.attendance_date, "%Y-%m-%d") LIKE ? OR COALESCE(e.npk, a.nik) LIKE ?)';
       params.push(term, term);
     }
     if (start_date) { where += ' AND a.attendance_date >= ?'; params.push(start_date); }
@@ -246,6 +252,7 @@ const getMyAttendance = async (req, res) => {
 
     const [rows] = await db.query(
       `SELECT a.*, u.name AS employee_name, u.employee_id,
+              COALESCE(e.npk, a.nik) AS npk,
               (${leaveDayTypeExpr}) AS leave_day_type
        FROM attendance a
        JOIN users u ON a.user_id = u.id
@@ -335,7 +342,7 @@ const getTeamLsMembers = async (req, res) => {
   try {
     const supervisorId = req.user.id;
     const [rows] = await db.query(
-      `SELECT u.id, u.name, u.employee_id, e.nik AS nik
+      `SELECT u.id, u.name, u.employee_id, e.npk AS npk
        FROM users u
        LEFT JOIN hr_employees e ON e.user_id = u.id
        WHERE u.supervisor_id = ? AND u.role = 'ls'
@@ -367,7 +374,7 @@ const getTeamAttendance = async (req, res) => {
     }
 
     if (search) {
-      where += ' AND (u.name LIKE ? OR u.employee_id LIKE ? OR COALESCE(e.nik, a.nik) LIKE ?)';
+      where += ' AND (u.name LIKE ? OR u.employee_id LIKE ? OR COALESCE(e.npk, a.nik) LIKE ?)';
       const t = `%${search}%`;
       params.push(t, t, t);
     }
@@ -387,7 +394,8 @@ const getTeamAttendance = async (req, res) => {
 
     const [rows] = await db.query(
       `SELECT a.*, u.name AS employee_name, u.employee_id,
-              sup.name AS supervisor_name
+              sup.name AS supervisor_name,
+              COALESCE(e.npk, a.nik) AS npk
        FROM attendance a
        JOIN users u ON a.user_id = u.id
        LEFT JOIN users sup ON u.supervisor_id = sup.id
@@ -653,7 +661,7 @@ const getMonthlyAttendanceRecap = async (req, res) => {
          u.id AS user_id,
          u.employee_id,
          u.name AS employee_name,
-         e.nik,
+         e.npk,
          (COALESCE(att.approved_attendance, 0)
             + COALESCE(att.pending_attendance, 0)
             + COALESCE(att.rejected_attendance, 0)) AS total_attendance_records,
@@ -769,7 +777,7 @@ const getMonthlyAttendanceRecap = async (req, res) => {
       success: true,
       data: rows.map((r) => ({
         ...r,
-        nik: r.nik || null,
+        npk: r.npk || null,
         leave_requests: leavesByUserId[r.user_id] || [],
       })),
       meta: { month, year },
@@ -890,7 +898,7 @@ const getAttendanceDetail = async (req, res) => {
               sup.name AS supervisor_name,
               app.name AS approver_name,
               u.vendor_id AS employee_vendor_id,
-              e.nik AS emp_nik
+              e.npk AS emp_npk
        FROM attendance a
        JOIN users u ON a.user_id = u.id
        LEFT JOIN users sup ON u.supervisor_id = sup.id
@@ -905,10 +913,8 @@ const getAttendanceDetail = async (req, res) => {
     }
 
     const row = rows[0];
-    if (row.emp_nik) {
-      row.nik = row.emp_nik;
-    }
-    delete row.emp_nik;
+    row.npk = row.emp_npk || row.nik || null;
+    delete row.emp_npk;
     if (role === 'ls' && row.user_id !== userId) {
       return res.status(403).json({ success: false, message: 'Forbidden.' });
     }

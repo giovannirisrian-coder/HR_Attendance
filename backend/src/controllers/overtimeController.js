@@ -46,7 +46,7 @@ const OVERTIME_LIST_SELECT = `
   o.status, o.approved_by, o.approved_at, o.rejection_note,
   o.linked_attendance_id, o.created_at, o.updated_at,
   u.name AS employee_name, u.employee_id,
-  e.nik AS nik
+  e.npk AS npk
 `;
 
 // LS: submit overtime request — status defaults to 'pending'
@@ -238,7 +238,7 @@ const getTeamOvertimes = async (req, res) => {
     if (search && String(search).trim()) {
       const t = `%${String(search).trim()}%`;
       where +=
-        ' AND (u.name LIKE ? OR u.employee_id LIKE ? OR COALESCE(e.nik, "") LIKE ? OR o.remarks LIKE ?)';
+        ' AND (u.name LIKE ? OR u.employee_id LIKE ? OR COALESCE(e.npk, "") LIKE ? OR o.remarks LIKE ?)';
       params.push(t, t, t, t);
     }
 

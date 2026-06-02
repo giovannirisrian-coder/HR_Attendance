@@ -171,7 +171,7 @@
             <span class="card-title leave-master__title">LS Employees</span>
             <div class="search-wrap leave-master__search">
               <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-              <input v-model="sidebarSearch" class="form-control" type="search" placeholder="Search by name or NIK…" autocomplete="off" />
+              <input v-model="sidebarSearch" class="form-control" type="search" placeholder="Search by name or NPK…" autocomplete="off" />
             </div>
           </div>
           <div class="leave-master__scroll">
@@ -192,7 +192,7 @@
                   @click="selectMember(emp.user_id)"
                 >
                   <div class="leave-master__item-name">{{ emp.employee_name }}</div>
-                  <div class="leave-master__item-nik" title="NIK">{{ emp.nik || '—' }}</div>
+                  <div class="leave-master__item-npk" title="NPK">{{ emp.npk || '—' }}</div>
                   <span v-if="pendingCountForUser(emp.user_id) > 0" class="leave-master__pending">{{ pendingCountForUser(emp.user_id) }} pending</span>
                 </li>
               </ul>
@@ -348,7 +348,7 @@
                 :key="e.user_id"
                 :value="String(e.user_id)"
               >
-                {{ e.employee_name }} — {{ e.employee_id }}<template v-if="e.nik"> ({{ e.nik }})</template>
+                {{ e.employee_name }} — {{ e.employee_id }}<template v-if="e.npk"> ({{ e.npk }})</template>
               </option>
             </select>
             <button class="btn btn-outline btn-sm" type="button" @click="clearOverviewEmployeeFilter">Reset</button>
@@ -377,7 +377,7 @@
               <div class="employee-card__main">
                 <div class="font-bold employee-card__name">{{ emp.employee_name }}</div>
                 <div class="text-sm text-muted">{{ emp.employee_id }}</div>
-                <div v-if="emp.nik" class="text-sm text-muted font-mono">{{ emp.nik }}</div>
+                <div v-if="emp.npk" class="text-sm text-muted font-mono">{{ emp.npk }}</div>
               </div>
               <div class="employee-card__counts">
                 <span class="mini-pill">Total {{ emp.total }}</span>
@@ -397,7 +397,7 @@
             <div>
               <span class="modal-title">{{ leaveEmployeeSheet.employee_name }}</span>
               <div class="text-sm text-muted" style="margin-top:4px;">
-                {{ leaveEmployeeSheet.employee_id }}<span v-if="leaveEmployeeSheet.nik"> · {{ leaveEmployeeSheet.nik }}</span>
+                {{ leaveEmployeeSheet.employee_id }}<span v-if="leaveEmployeeSheet.npk"> · {{ leaveEmployeeSheet.npk }}</span>
               </div>
             </div>
             <button class="modal-close" @click="closeLeaveEmployeeSheet">✕</button>
@@ -663,7 +663,7 @@ const filteredSidebarEmployees = computed(() => {
   return list.filter(
     (e) =>
       String(e.employee_name || '').toLowerCase().includes(q) ||
-      String(e.nik || '').toLowerCase().includes(q) ||
+      String(e.npk || '').toLowerCase().includes(q) ||
       String(e.employee_id || '').toLowerCase().includes(q)
   );
 });
@@ -686,7 +686,7 @@ const sortedLeavesForSelectedUser = computed(() =>
 const selectedEmployeeLabel = computed(() => {
   const emp = lsMembers.value.find((e) => e.user_id == selectedUserId.value);
   if (!emp) return '';
-  return `${emp.employee_name} · NIK ${emp.nik || '—'}`;
+  return `${emp.employee_name} · NPK ${emp.npk || '—'}`;
 });
 
 const supervisorTruncated = computed(
@@ -795,7 +795,7 @@ const fetchSupervisorMembers = async () => {
         user_id: m.id,
         employee_name: m.name,
         employee_id: m.employee_id,
-        nik: m.nik || null,
+        npk: m.npk || null,
       }))
       .sort((a, b) =>
         String(a.employee_name || '').localeCompare(
@@ -1061,7 +1061,7 @@ onMounted(() => {
   color: var(--bc-gray-900);
 }
 
-.leave-master__item-nik {
+.leave-master__item-npk {
   font-size: 12px;
   color: var(--bc-gray-600);
   margin-top: 2px;

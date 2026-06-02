@@ -64,7 +64,7 @@
         <div class="filter-bar">
           <div class="search-wrap">
             <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-            <input v-model="filters.search" @input="debouncedFetch" class="form-control" placeholder="Search date or NIK…" style="max-width:240px;" />
+            <input v-model="filters.search" @input="debouncedFetch" class="form-control" placeholder="Search date or NPK…" style="max-width:240px;" />
           </div>
           <input v-model="filters.start_date" @change="fetchData" type="date" class="form-control" style="max-width:160px;" placeholder="Start date" />
           <input v-model="filters.end_date"   @change="fetchData" type="date" class="form-control" style="max-width:160px;" placeholder="End date" />
@@ -79,7 +79,7 @@
           <thead>
             <tr>
               <th>Date</th>
-              <th>NIK</th>
+              <th>NPK</th>
               <th>Clock In</th>
               <th>Clock Out</th>
               <th>Duration</th>
@@ -105,7 +105,7 @@
                 <div class="font-bold">{{ formatDate(r.attendance_date) }}</div>
                 <div class="text-sm text-muted">{{ getDayName(r.attendance_date) }}</div>
               </td>
-              <td><span class="text-sm font-mono">{{ r.nik || '—' }}</span></td>
+              <td><span class="text-sm font-mono">{{ r.npk || '—' }}</span></td>
               <td>
                 <div class="time-cell clock-in">{{ r.clock_in_time || '—' }}</div>
               </td>
