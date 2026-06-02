@@ -33,11 +33,29 @@
  *    same `users.id` chosen by PIC LS here is the user that approves
  *    attendance / leave / overtime downstream.
  *
+ * User account auto-provisioning ("Seamless Integration"):
+ *  • Every hr_employees row that has both `email` and `npk` is paired
+ *    with a row in `users` (role='ls') so the employee can log in and
+ *    participate in the digital workflow (Biometric Capture, Overtime,
+ *    Correction, …). Create/update both rows in a single DB
+ *    transaction — if the users-side write fails the hr_employees
+ *    write rolls back, preventing orphan records.
+ *  • The link is materialised as `hr_employees.user_id → users.id`.
+ *    `npk` mirrors `users.employee_id` (the same value used for login)
+ *    so the join is unambiguous and stable. The default password
+ *    ("password") is bcrypt-hashed using the same cost factor as the
+ *    seed users so first-login UX is identical.
+ *  • If a draft employee is created without email/npk (legacy
+ *    permissive UX), the account is auto-provisioned the next time
+ *    those fields are filled in via an update — no manual step needed.
+ *
  * The end-to-end approval workflow (LS → Supervisor → Vendor → PIC LS →
  * SSU) is unchanged — only the vendor and supervisor references are
- * unified into FK lookups.
+ * unified into FK lookups, and the LS user is now created/synced
+ * automatically by this controller.
  */
 
+const bcrypt = require('bcryptjs');
 const db = require('../config/database');
 
 // ── Field whitelisting / validation helpers ────────────────────────────────
@@ -107,7 +125,7 @@ const MAX_LENGTHS = {
 // stored on hr_employees. This keeps the audit trail tied to the LS
 // Supervisor's user identity that powers the Managerial Review stage.
 const SELECT_COLS = `
-  h.id, h.vendor_id,
+  h.id, h.user_id, h.vendor_id,
   COALESCE(v.code, h.vendor_number) AS vendor_number,
   h.user_department, h.department_title,
   COALESCE(v.name, h.vendor_name) AS vendor_name,
@@ -278,6 +296,169 @@ const resolveSupervisor = async (userId) => {
     console.error('Resolve supervisor error:', err);
     return { ok: false, status: 500, message: 'Server error.' };
   }
+};
+
+// ── User-account sync helpers (LS role provisioning) ──────────────────────
+//
+// These helpers implement the "Seamless Integration" objective: every
+// hr_employees row that has enough identifying data is paired with a
+// row in `users` (role='ls') so the registered employee can log in
+// immediately. The default password matches the seed credentials so
+// QA / UAT can sign in with "password" right after PIC LS finishes the
+// registration form.
+//
+// All callers run inside a transaction held on `conn` so a failure
+// here rolls the surrounding hr_employees write back, preventing
+// orphaned records (per the spec's Error Handling & Integrity rule).
+const DEFAULT_LS_PASSWORD = 'password';
+const DEFAULT_LS_ROLE = 'ls';
+const BCRYPT_COST = 10;
+
+/**
+ * Pre-check whether the LS user row has the minimum fields required
+ * to create / sync a login account. We need the employee_name (used
+ * as users.name), the NPK (users.employee_id — UNIQUE) and the email
+ * (users.email — NOT NULL UNIQUE). Anything less and we skip the
+ * account step so legacy "draft" hr_employees rows keep working.
+ */
+const hasUserAccountFields = (employeeName, npk, email) =>
+  Boolean(employeeName && npk && email);
+
+/**
+ * Map `hr_employees.user_status` (Active / Deactive) onto the
+ * `users.is_active` TINYINT(1) column.
+ *
+ *   'Active'   → 1   (user can log in and submit requests)
+ *   'Deactive' → 0   (login is blocked by authController's
+ *                     `WHERE u.is_active = 1` clause, so any
+ *                     existing session remains valid only until
+ *                     the JWT expires — re-issuance is impossible)
+ *
+ * Defaults to 1 when the status is missing/unknown so a partial
+ * payload never accidentally locks an employee out. The hr_employees
+ * schema also defaults `user_status` to 'Active', so this mirrors
+ * the same fail-open semantics.
+ */
+const userStatusToIsActive = (userStatus) => (userStatus === 'Deactive' ? 0 : 1);
+
+/**
+ * Detect an existing `users` row that would collide with the email
+ * or NPK we are about to write. Returns:
+ *   { conflict: 'email' | 'employee_id' | null, user?: row }
+ *
+ * On the update path pass `excludeUserId` to ignore the row we are
+ * synchronising into — otherwise it would always conflict with itself.
+ *
+ * The `employee_id IS NOT NULL` guard prevents legacy users created
+ * without an employee_id from matching a fresh NPK.
+ */
+const findUserConflict = async (conn, { email, npk, excludeUserId = null }) => {
+  const params = [email, npk];
+  let where = 'WHERE (email = ? OR (employee_id IS NOT NULL AND employee_id = ?))';
+  if (excludeUserId) {
+    where += ' AND id <> ?';
+    params.push(excludeUserId);
+  }
+  const [rows] = await conn.query(
+    `SELECT id, email, employee_id FROM users ${where} LIMIT 1`,
+    params
+  );
+  if (rows.length === 0) return { conflict: null };
+  const u = rows[0];
+  if (u.email === email) return { conflict: 'email', user: u };
+  return { conflict: 'employee_id', user: u };
+};
+
+/**
+ * Insert a fresh `users` row to back a newly registered hr_employees
+ * record. The role is hardcoded to 'ls' (PIC LS only manages LS-role
+ * employees from the Employee List, per the stakeholder hierarchy),
+ * vendor_id / supervisor_id are mirrored so the new user shows up in
+ * the correct Managerial Review dashboards, and the default password
+ * is bcrypt-hashed so the user can log in immediately.
+ *
+ * `isActive` is the mapped value of hr_employees.user_status (see
+ * `userStatusToIsActive`). Passing 0 here registers a deactivated
+ * user — `authController.login` will block them at sign-in via its
+ * `is_active = 1` clause, so PIC LS can pre-create accounts that
+ * stay dormant until they are flipped to Active.
+ *
+ * Returns the new users.id which the caller writes back to
+ * `hr_employees.user_id` to establish the link.
+ */
+const provisionLsUserAccount = async (
+  conn,
+  { name, npk, email, vendorId, supervisorId, isActive }
+) => {
+  const passwordHash = await bcrypt.hash(DEFAULT_LS_PASSWORD, BCRYPT_COST);
+  const [ins] = await conn.query(
+    `INSERT INTO users (name, employee_id, email, password, role, vendor_id, supervisor_id, is_active)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [name, npk, email, passwordHash, DEFAULT_LS_ROLE, vendorId, supervisorId, isActive]
+  );
+  return ins.insertId;
+};
+
+/**
+ * Propagate the LS HR-edited fields onto the linked `users` row.
+ *
+ * Per spec we sync: name, employee_id (NPK), email, vendor_id,
+ * supervisor_id, and is_active. is_active is derived from
+ * hr_employees.user_status via `userStatusToIsActive`, so toggling
+ * a row to "Deactive" on the Employee List immediately locks the
+ * paired login out via authController's `WHERE u.is_active = 1`
+ * gate. Login credentials (password) and role are intentionally
+ * left untouched — those are managed elsewhere (auth / admin UIs)
+ * and overwriting them here would defeat the segregation between
+ * personnel data and account lifecycle.
+ */
+const syncLsUserAccount = async (
+  conn,
+  userId,
+  { name, npk, email, vendorId, supervisorId, isActive }
+) => {
+  await conn.query(
+    `UPDATE users
+        SET name = ?, employee_id = ?, email = ?,
+            vendor_id = ?, supervisor_id = ?, is_active = ?
+      WHERE id = ?`,
+    [name, npk, email, vendorId, supervisorId, isActive, userId]
+  );
+};
+
+/**
+ * Translate a MySQL ER_DUP_ENTRY error into a friendly 409 response.
+ * Both the users table (email / employee_id) and the hr_employees
+ * table (npk) can raise this, so we sniff the error message to pick
+ * the right wording.
+ */
+const dupEntryResponse = (err) => {
+  const message = String(err && err.message ? err.message : '').toLowerCase();
+  if (message.includes('email')) {
+    return {
+      status: 409,
+      body: {
+        success: false,
+        message: 'Email already exists. Please use a unique email.',
+      },
+    };
+  }
+  if (message.includes('employee_id')) {
+    return {
+      status: 409,
+      body: {
+        success: false,
+        message: 'Employee ID (NPK) already exists. Please use a unique NPK.',
+      },
+    };
+  }
+  return {
+    status: 409,
+    body: {
+      success: false,
+      message: 'NPK already exists. Please use a unique Employee ID.',
+    },
+  };
 };
 
 // ── Controller actions ─────────────────────────────────────────────────────
@@ -521,52 +702,88 @@ const getEmployeeById = async (req, res) => {
 
 /**
  * POST /api/employees
+ *
+ * Creates a new hr_employees row and — when the form supplies enough
+ * identifying data (employee_name + NPK + email) — also provisions a
+ * matching `users` row (role='ls') in the same DB transaction.
+ *
+ * If the user-side insert fails the entire write rolls back, so the
+ * caller never sees a half-finished personnel record.
  */
 const createEmployee = async (req, res) => {
+  const v = validateBody(req.body, { partial: false });
+  if (!v.ok) {
+    return res.status(400).json({ success: false, message: v.error });
+  }
+
+  const f = v.fields;
+  const createdBy = req.user?.id || null;
+
+  // Vendor lookup: when a vendor_id is supplied we resolve the master
+  // record and authoritatively overwrite the denormalized display
+  // copies so vendor_number / vendor_name can never drift from the
+  // master. When vendor_id is null/absent we trust whatever free-text
+  // HR typed (legacy behaviour for partial / draft records).
+  let vendorId = null;
+  if (v.vendorId && v.vendorId.provided) {
+    const rv = await resolveVendor(v.vendorId.value);
+    if (!rv.ok) return res.status(rv.status).json({ success: false, message: rv.message });
+    if (rv.vendor) {
+      vendorId = rv.vendor.id;
+      f.vendor_number = rv.vendor.code;
+      f.vendor_name = rv.vendor.name;
+    }
+  }
+
+  // Supervisor lookup: resolve the LS Supervisor user (role check
+  // enforced inside resolveSupervisor) and store ONLY the FK. The
+  // name is rendered at read time by the JOIN in SELECT_COLS, so no
+  // denormalized copy is kept on hr_employees.
+  let supervisorId = null;
+  if (v.supervisorId && v.supervisorId.provided) {
+    const rs = await resolveSupervisor(v.supervisorId.value);
+    if (!rs.ok) return res.status(rs.status).json({ success: false, message: rs.message });
+    supervisorId = rs.user ? rs.user.id : null;
+  }
+
+  const conn = await db.getConnection();
   try {
-    const v = validateBody(req.body, { partial: false });
-    if (!v.ok) {
-      return res.status(400).json({ success: false, message: v.error });
-    }
+    await conn.beginTransaction();
 
-    const f = v.fields;
-    const createdBy = req.user?.id || null;
-
-    // Vendor lookup: when a vendor_id is supplied we resolve the master
-    // record and authoritatively overwrite the denormalized display
-    // copies so vendor_number / vendor_name can never drift from the
-    // master. When vendor_id is null/absent we trust whatever free-text
-    // HR typed (legacy behaviour for partial / draft records).
-    let vendorId = null;
-    if (v.vendorId && v.vendorId.provided) {
-      const rv = await resolveVendor(v.vendorId.value);
-      if (!rv.ok) return res.status(rv.status).json({ success: false, message: rv.message });
-      if (rv.vendor) {
-        vendorId = rv.vendor.id;
-        f.vendor_number = rv.vendor.code;
-        f.vendor_name = rv.vendor.name;
+    // Auto-provision an LS user account when the registration form
+    // supplies the minimum credentials. Drafts that omit email or NPK
+    // skip this step — the account is auto-created later when an
+    // update fills in the missing fields (see updateEmployee).
+    let provisionedUserId = null;
+    if (hasUserAccountFields(f.employee_name, f.npk, f.email)) {
+      const conflict = await findUserConflict(conn, { email: f.email, npk: f.npk });
+      if (conflict.conflict) {
+        await conn.rollback();
+        const message =
+          conflict.conflict === 'email'
+            ? 'A user account with this email already exists. Please use a different email.'
+            : 'A user account with this Employee ID (NPK) already exists. Please use a unique NPK.';
+        return res.status(409).json({ success: false, message });
       }
+      provisionedUserId = await provisionLsUserAccount(conn, {
+        name: f.employee_name,
+        npk: f.npk,
+        email: f.email,
+        vendorId,
+        supervisorId,
+        isActive: userStatusToIsActive(f.user_status),
+      });
     }
 
-    // Supervisor lookup: resolve the LS Supervisor user (role check
-    // enforced inside resolveSupervisor) and store ONLY the FK. The
-    // name is rendered at read time by the JOIN in SELECT_COLS, so no
-    // denormalized copy is kept on hr_employees.
-    let supervisorId = null;
-    if (v.supervisorId && v.supervisorId.provided) {
-      const rs = await resolveSupervisor(v.supervisorId.value);
-      if (!rs.ok) return res.status(rs.status).json({ success: false, message: rs.message });
-      supervisorId = rs.user ? rs.user.id : null;
-    }
-
-    const [ins] = await db.query(
+    const [ins] = await conn.query(
       `INSERT INTO hr_employees (
-         vendor_id, vendor_number, user_department, department_title, vendor_name,
+         user_id, vendor_id, vendor_number, user_department, department_title, vendor_name,
          employment_status, po_number, po_period_1, po_period_2, dic_hro, cost_center,
          npk, employee_name, email, position, position_group, category, site,
          supervisor_id, user_status, created_by, updated_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
+        provisionedUserId,
         vendorId,
         f.vendor_number, f.user_department, f.department_title, f.vendor_name,
         f.employment_status, f.po_number, f.po_period_1, f.po_period_2, f.dic_hro, f.cost_center,
@@ -575,6 +792,8 @@ const createEmployee = async (req, res) => {
       ]
     );
 
+    await conn.commit();
+
     const [rows] = await db.query(
       `SELECT ${SELECT_COLS} ${FROM_JOIN} WHERE h.id = ? LIMIT 1`,
       [ins.insertId]
@@ -582,87 +801,201 @@ const createEmployee = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: 'Employee created successfully.',
+      message: provisionedUserId
+        ? 'Employee created successfully and LS login account provisioned.'
+        : 'Employee saved as draft. Add an email and NPK to enable LS login.',
       data: rows[0],
     });
   } catch (err) {
+    try { await conn.rollback(); } catch (_) { /* no-op */ }
     if (err && err.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({
-        success: false,
-        message: 'NPK already exists. Please use a unique Employee ID.',
-      });
+      const dup = dupEntryResponse(err);
+      return res.status(dup.status).json(dup.body);
     }
     console.error('Create hr_employee error:', err);
     res.status(500).json({ success: false, message: 'Server error.' });
+  } finally {
+    conn.release();
   }
 };
 
 /**
  * PUT /api/employees/:id
  * Accepts a full payload or a partial subset of fields.
+ *
+ * In addition to writing the hr_employees row, this handler also keeps
+ * the linked `users` row in sync (name, employee_id, email, vendor_id,
+ * supervisor_id). Both writes share a transaction — if the users-side
+ * sync fails the hr_employees update rolls back too.
+ *
+ * Self-healing: if the existing hr_employees row was created in legacy
+ * "draft" mode (user_id IS NULL) and this update finally supplies the
+ * required email + NPK, an LS user account is provisioned on the
+ * spot. The new users.id is written back to hr_employees.user_id so
+ * subsequent edits flow through the normal sync path.
  */
 const updateEmployee = async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id) || id <= 0) {
-      return res.status(400).json({ success: false, message: 'Invalid employee id.' });
-    }
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id) || id <= 0) {
+    return res.status(400).json({ success: false, message: 'Invalid employee id.' });
+  }
 
-    const [existingRows] = await db.query(
-      `SELECT id FROM hr_employees WHERE id = ? LIMIT 1`,
+  const v = validateBody(req.body, { partial: true });
+  if (!v.ok) {
+    return res.status(400).json({ success: false, message: v.error });
+  }
+
+  const fields = { ...v.fields };
+
+  // Vendor lookup: same authoritative overwrite as in createEmployee.
+  // An explicit `vendor_id: null` clears the FK and leaves the
+  // denormalized display copies untouched (HR can still edit them
+  // manually for legacy / draft records).
+  if (v.vendorId && v.vendorId.provided) {
+    const rv = await resolveVendor(v.vendorId.value);
+    if (!rv.ok) return res.status(rv.status).json({ success: false, message: rv.message });
+    fields.vendor_id = rv.vendor ? rv.vendor.id : null;
+    if (rv.vendor) {
+      fields.vendor_number = rv.vendor.code;
+      fields.vendor_name = rv.vendor.name;
+    }
+  }
+
+  // Supervisor lookup: explicit `supervisor_id: null` clears the FK,
+  // a numeric value is validated against the users master (role must
+  // be `ls_supervisor`). Only the FK is stored — the name is
+  // resolved at read time via JOIN.
+  if (v.supervisorId && v.supervisorId.provided) {
+    const rs = await resolveSupervisor(v.supervisorId.value);
+    if (!rs.ok) return res.status(rs.status).json({ success: false, message: rs.message });
+    fields.supervisor_id = rs.user ? rs.user.id : null;
+  }
+
+  const keys = Object.keys(fields);
+  if (keys.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'No valid fields to update.',
+    });
+  }
+
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // Lock the row for the duration of the transaction so the
+    // user-account sync sees a consistent snapshot even when two PIC
+    // LS officers race on the same record. user_status is loaded so
+    // we can mirror it onto users.is_active even when the current
+    // PATCH leaves it untouched.
+    const [existingRows] = await conn.query(
+      `SELECT id, user_id, employee_name, npk, email,
+              vendor_id, supervisor_id, user_status
+         FROM hr_employees
+        WHERE id = ?
+        FOR UPDATE`,
       [id]
     );
     if (existingRows.length === 0) {
+      await conn.rollback();
       return res.status(404).json({ success: false, message: 'Employee not found.' });
     }
-
-    const v = validateBody(req.body, { partial: true });
-    if (!v.ok) {
-      return res.status(400).json({ success: false, message: v.error });
-    }
-
-    const fields = { ...v.fields };
-
-    // Vendor lookup: same authoritative overwrite as in createEmployee.
-    // An explicit `vendor_id: null` clears the FK and leaves the
-    // denormalized display copies untouched (HR can still edit them
-    // manually for legacy / draft records).
-    if (v.vendorId && v.vendorId.provided) {
-      const rv = await resolveVendor(v.vendorId.value);
-      if (!rv.ok) return res.status(rv.status).json({ success: false, message: rv.message });
-      fields.vendor_id = rv.vendor ? rv.vendor.id : null;
-      if (rv.vendor) {
-        fields.vendor_number = rv.vendor.code;
-        fields.vendor_name = rv.vendor.name;
-      }
-    }
-
-    // Supervisor lookup: explicit `supervisor_id: null` clears the FK,
-    // a numeric value is validated against the users master (role must
-    // be `ls_supervisor`). Only the FK is stored — the name is
-    // resolved at read time via JOIN.
-    if (v.supervisorId && v.supervisorId.provided) {
-      const rs = await resolveSupervisor(v.supervisorId.value);
-      if (!rs.ok) return res.status(rs.status).json({ success: false, message: rs.message });
-      fields.supervisor_id = rs.user ? rs.user.id : null;
-    }
-
-    const keys = Object.keys(fields);
-    if (keys.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'No valid fields to update.',
-      });
-    }
+    const existing = existingRows[0];
 
     const setClause = keys.map((k) => `${k} = ?`).join(', ');
     const values = keys.map((k) => fields[k]);
     const updatedBy = req.user?.id || null;
 
-    await db.query(
+    await conn.query(
       `UPDATE hr_employees SET ${setClause}, updated_by = ? WHERE id = ?`,
       [...values, updatedBy, id]
     );
+
+    // Build the post-update view of just the fields synced to `users`.
+    // Partial updates may leave any of these untouched, so we fall
+    // back to the pre-update value loaded above.
+    const merged = {
+      employee_name:
+        fields.employee_name !== undefined ? fields.employee_name : existing.employee_name,
+      npk: fields.npk !== undefined ? fields.npk : existing.npk,
+      email: fields.email !== undefined ? fields.email : existing.email,
+      vendor_id:
+        fields.vendor_id !== undefined ? fields.vendor_id : existing.vendor_id,
+      supervisor_id:
+        fields.supervisor_id !== undefined ? fields.supervisor_id : existing.supervisor_id,
+      user_status:
+        fields.user_status !== undefined ? fields.user_status : existing.user_status,
+    };
+
+    const mergedIsActive = userStatusToIsActive(merged.user_status);
+
+    if (existing.user_id) {
+      // Existing LS account — mirror the synced fields. Only enforced
+      // when the row still has the required identification; if HR
+      // deliberately cleared email or NPK we leave the linked users
+      // row untouched (next edit that restores them will resync).
+      if (hasUserAccountFields(merged.employee_name, merged.npk, merged.email)) {
+        const conflict = await findUserConflict(conn, {
+          email: merged.email,
+          npk: merged.npk,
+          excludeUserId: existing.user_id,
+        });
+        if (conflict.conflict) {
+          await conn.rollback();
+          const message =
+            conflict.conflict === 'email'
+              ? 'A different user account already uses this email. Please choose another.'
+              : 'A different user account already uses this Employee ID (NPK). Please choose another.';
+          return res.status(409).json({ success: false, message });
+        }
+        await syncLsUserAccount(conn, existing.user_id, {
+          name: merged.employee_name,
+          npk: merged.npk,
+          email: merged.email,
+          vendorId: merged.vendor_id,
+          supervisorId: merged.supervisor_id,
+          isActive: mergedIsActive,
+        });
+      } else if (fields.user_status !== undefined) {
+        // The personnel record lost its email/NPK so we can't refresh
+        // the full user profile, but a status flip still has to land
+        // immediately — otherwise PIC LS toggling an employee to
+        // "Deactive" would leave them able to log in with stale data.
+        await conn.query(
+          `UPDATE users SET is_active = ? WHERE id = ?`,
+          [mergedIsActive, existing.user_id]
+        );
+      }
+    } else if (hasUserAccountFields(merged.employee_name, merged.npk, merged.email)) {
+      // Self-healing: a legacy draft row now has enough data to be
+      // promoted into a real LS account.
+      const conflict = await findUserConflict(conn, {
+        email: merged.email,
+        npk: merged.npk,
+      });
+      if (conflict.conflict) {
+        await conn.rollback();
+        const message =
+          conflict.conflict === 'email'
+            ? 'A user account with this email already exists. Please use a different email.'
+            : 'A user account with this Employee ID (NPK) already exists. Please use a unique NPK.';
+        return res.status(409).json({ success: false, message });
+      }
+      const newUserId = await provisionLsUserAccount(conn, {
+        name: merged.employee_name,
+        npk: merged.npk,
+        email: merged.email,
+        vendorId: merged.vendor_id,
+        supervisorId: merged.supervisor_id,
+        isActive: mergedIsActive,
+      });
+      await conn.query(
+        `UPDATE hr_employees SET user_id = ? WHERE id = ?`,
+        [newUserId, id]
+      );
+    }
+
+    await conn.commit();
 
     const [rows] = await db.query(
       `SELECT ${SELECT_COLS} ${FROM_JOIN} WHERE h.id = ? LIMIT 1`,
@@ -675,14 +1008,15 @@ const updateEmployee = async (req, res) => {
       data: rows[0],
     });
   } catch (err) {
+    try { await conn.rollback(); } catch (_) { /* no-op */ }
     if (err && err.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({
-        success: false,
-        message: 'NPK already exists. Please use a unique Employee ID.',
-      });
+      const dup = dupEntryResponse(err);
+      return res.status(dup.status).json(dup.body);
     }
     console.error('Update hr_employee error:', err);
     res.status(500).json({ success: false, message: 'Server error.' });
+  } finally {
+    conn.release();
   }
 };
 
