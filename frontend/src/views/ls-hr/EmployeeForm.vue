@@ -110,6 +110,13 @@
         </div>
 
         <div class="form-group">
+          <label class="form-label">Group</label>
+          <select v-model="form.employee_group" class="form-control">
+            <option value=""></option>
+            <option v-for="o in employeeGroupOptions" :key="o" :value="o">{{ o }}</option>
+          </select>
+        </div>
+        <div class="form-group">
           <label class="form-label">Site</label>
           <input v-model="form.site" type="text" class="form-control" />
         </div>
@@ -174,6 +181,7 @@ import { reactive, computed, watch } from 'vue';
 import {
   EMPTY_EMPLOYEE,
   EMPLOYMENT_STATUS_OPTIONS,
+  EMPLOYEE_GROUP_OPTIONS,
   USER_STATUS_OPTIONS,
 } from './mockEmployees';
 import VendorSearchSelect from '../../components/VendorSearchSelect.vue';
@@ -205,6 +213,7 @@ const props = defineProps({
 const emit = defineEmits(['submit', 'cancel']);
 
 const employmentStatusOptions = EMPLOYMENT_STATUS_OPTIONS;
+const employeeGroupOptions = EMPLOYEE_GROUP_OPTIONS;
 const userStatusOptions = USER_STATUS_OPTIONS;
 
 const form = reactive({ ...EMPTY_EMPLOYEE, ...(props.initialData || {}) });

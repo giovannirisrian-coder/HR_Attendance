@@ -92,6 +92,12 @@ const TEXT_FIELDS = [
 ];
 const ENUM_FIELDS = {
   employment_status: ['Permanent', 'Contract'],
+  // Coarse classification used by the Automated Analytics step to
+  // bucket recap rows for audit / payroll reporting. Optional — an
+  // empty submission is stored as NULL so legacy / draft records
+  // remain valid. The SQL column is `employee_group` (the literal
+  // `group` keyword is reserved in MySQL); the UI labels it "Group".
+  employee_group: ['BC', 'MTL'],
   user_status: ['Active', 'Deactive'],
 };
 
@@ -132,7 +138,7 @@ const SELECT_COLS = `
   h.employment_status, h.po_number, h.po_period_1, h.po_period_2,
   h.dic_hro, h.cost_center,
   h.npk, h.employee_name, h.email, h.position, h.position_group,
-  h.category, h.site,
+  h.category, h.employee_group, h.site,
   h.supervisor_id, s.name AS supervisor_name, s.employee_id AS supervisor_employee_id,
   h.user_status,
   h.created_by, h.updated_by, h.created_at, h.updated_at
@@ -779,15 +785,15 @@ const createEmployee = async (req, res) => {
       `INSERT INTO hr_employees (
          user_id, vendor_id, vendor_number, user_department, department_title, vendor_name,
          employment_status, po_number, po_period_1, po_period_2, dic_hro, cost_center,
-         npk, employee_name, email, position, position_group, category, site,
+         npk, employee_name, email, position, position_group, category, employee_group, site,
          supervisor_id, user_status, created_by, updated_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         provisionedUserId,
         vendorId,
         f.vendor_number, f.user_department, f.department_title, f.vendor_name,
         f.employment_status, f.po_number, f.po_period_1, f.po_period_2, f.dic_hro, f.cost_center,
-        f.npk, f.employee_name, f.email, f.position, f.position_group, f.category, f.site,
+        f.npk, f.employee_name, f.email, f.position, f.position_group, f.category, f.employee_group, f.site,
         supervisorId, f.user_status, createdBy, createdBy,
       ]
     );

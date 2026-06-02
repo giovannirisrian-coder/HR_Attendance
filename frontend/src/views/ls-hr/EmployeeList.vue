@@ -117,6 +117,7 @@
               <th>Position</th>
               <th>Position Group</th>
               <th>Category</th>
+              <th>Group</th>
               <th>Site</th>
               <th>Supervisor</th>
               <th>User Status</th>
@@ -125,7 +126,7 @@
           </thead>
           <tbody>
             <tr v-if="employees.length === 0">
-              <td :colspan="21">
+              <td :colspan="22">
                 <div class="empty-state">
                   <div class="empty-state-icon">👥</div>
                   <h3>No employees found</h3>
@@ -159,6 +160,10 @@
               <td>{{ emp.position }}</td>
               <td>{{ emp.position_group }}</td>
               <td>{{ emp.category }}</td>
+              <td>
+                <span v-if="emp.employee_group" class="badge badge-group">{{ emp.employee_group }}</span>
+                <span v-else class="text-muted">—</span>
+              </td>
               <td>{{ emp.site }}</td>
               <td>
                 <span v-if="emp.supervisor_name">{{ emp.supervisor_name }}</span>
@@ -392,5 +397,15 @@ onMounted(fetchData);
 }
 .badge-deactive::before {
   background: #ef4444;
+}
+
+.badge-group {
+  background: var(--bc-green-50, #ecfdf5);
+  color: var(--bc-green-700, #047857);
+  font-family: 'JetBrains Mono', 'Fira Code', Consolas, 'Courier New', monospace;
+  letter-spacing: 0.04em;
+}
+.badge-group::before {
+  background: var(--bc-green-500, #22994a);
 }
 </style>

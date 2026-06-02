@@ -89,6 +89,12 @@ CREATE TABLE IF NOT EXISTS hr_employees (
   position          VARCHAR(150)  NULL,
   position_group    VARCHAR(150)  NULL,
   category          VARCHAR(100)  NULL,
+  -- Coarse "Group" classification used by the Automated Analytics
+  -- step to bucket recap rows for audit / payroll reporting. The
+  -- SQL identifier is `employee_group` (not `group`) because
+  -- GROUP is a reserved word in MySQL — the UI still labels it
+  -- "Group". See migration_hr_employees_group.sql.
+  employee_group    ENUM('BC','MTL') NULL,
   site              VARCHAR(100)  NULL,
 
   -- Supervisor block
