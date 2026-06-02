@@ -133,6 +133,10 @@
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
             <span v-if="!sidebarCollapsed">Employee List</span>
           </router-link>
+          <router-link to="/ls-hr/employees/upload" class="nav-item" active-class="active" title="Upload master data karyawan dari Excel">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M8 8l4-4 4 4M4 20h16"/></svg>
+            <span v-if="!sidebarCollapsed">Upload Data Karyawan</span>
+          </router-link>
           <router-link to="/ls-hr/glog-upload" class="nav-item" active-class="active" title="Upload log mesin (.csv / .txt)">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M8 8l4-4 4 4M4 20h16"/></svg>
             <span v-if="!sidebarCollapsed">Upload Attendance Log</span>
@@ -313,6 +317,7 @@ const pageTitle = computed(() => {
   if (path.includes('approvals'))         return 'Approval List';
   if (path.includes('/supervisor/monthly-recap')) return 'Monthly Attendance Recap';
   if (path.includes('/glog-upload')) return 'Upload Glog';
+  if (path.includes('/ls-hr/employees/upload')) return 'Upload Data Karyawan';
   if (path.includes('/vendor/reports') && path.includes('detail')) return 'Report Detail';
   if (path.includes('/vendor/reports')) return 'Report List';
   if (path.match(/\/ls-hr\/employees\/[^/]+\/edit$/)) return 'Edit Employee';

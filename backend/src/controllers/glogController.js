@@ -1,7 +1,18 @@
 const crypto = require('crypto');
-const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const db = require('../config/database');
+const {
+  toSqlDate,
+  toSqlTime,
+  upsertAttendanceFromGlogDailyRow,
+  tallyUpsertStats,
+} = require('../services/glogAttendanceService');
+const { syncAttendanceFromFtmDataAccess, validateDateRange } = require('../services/ftmGlogSyncService');
+const { isFtmDatabaseConfigured } = require('../config/ftmDatabase');
+const {
+  syncAttendanceFromFingerspotAttLog,
+  isFingerspotDatabaseConfigured,
+} = require('../services/fingerspotGlogSyncService');
 
 const storage = multer.memoryStorage();
 const upload = multer({
@@ -168,105 +179,6 @@ function buildStagingRow(batchId, { line_no, cells }) {
   ];
 }
 
-/** YYYY-MM-DD for SQL binding (hindari drift timezone dari objek Date mysql2). */
-function toSqlDate(value) {
-  if (value == null) return null;
-  if (typeof value === 'string') return value.slice(0, 10);
-  if (value instanceof Date) {
-    const y = value.getFullYear();
-    const m = String(value.getMonth() + 1).padStart(2, '0');
-    const d = String(value.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  }
-  return String(value).slice(0, 10);
-}
-
-/** TIME ke string HH:MM:SS untuk kolom MySQL TIME. */
-function toSqlTime(value) {
-  if (value == null) return null;
-  const s = String(value).trim();
-  const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(s);
-  if (!m) return null;
-  const h = String(parseInt(m[1], 10)).padStart(2, '0');
-  const min = String(parseInt(m[2], 10)).padStart(2, '0');
-  const sec = m[3] != null ? String(parseInt(m[3], 10)).padStart(2, '0') : '00';
-  return `${h}:${min}:${sec}`;
-}
-
-function timesEqualSql(a, b) {
-  return toSqlTime(a) === toSqlTime(b);
-}
-
-/**
- * Cocokkan NIK file glog ke hr_employees (hanya user LS aktif).
- * Aturan: TRIM sama, atau tanpa spasi sama, atau hanya digit sama (MySQL 8 REGEXP_REPLACE).
- */
-async function resolveEmployeeForGlogNik(conn, rawNik) {
-  const trimmed = String(rawNik || '').trim();
-  if (!trimmed) return { employee: null, reason: 'empty_nik' };
-  const [rows] = await conn.query(
-    `SELECT e.id AS employee_id, e.user_id, e.nik
-     FROM hr_employees e
-     INNER JOIN users u ON u.id = e.user_id AND u.role = 'ls' AND u.is_active = 1
-     WHERE e.nik = ? LIMIT 1`,
-    [trimmed]
-  );
-  if (rows.length === 0) return { employee: null, reason: 'unmatched_nik' };
-  return { employee: rows[0], reason: null };
-}
-
-/**
- * Buat user LS + baris hr_employees untuk NIK dari glog yang belum ada di master.
- * Email deterministik per NIK; jika bentrok (sudah ada), kembalikan employee hasil resolve.
- *
- * NOTE: hr_employees is the consolidated employee master (LS HR ➜ Employee List
- * also lives here). Only the minimum fields needed by the attendance / glog
- * pipeline are populated; LS HR (PIC LS) completes the remaining BAST fields
- * (vendor, PO, supervisor, etc.) via the Employee List UI.
- */
-async function createPlaceholderLsUserAndEmployee(conn, row) {
-  if (!row.nik) return null;
-  const name = String(row.employee_name || 'Glog Import').trim().slice(0, 150) || 'Glog Import';
-  const email = `glog_${row.nik}@import.local`;
-  const passwordHash = await bcrypt.hash(process.env.PLACEHOLDER_PASSWORD, 10);
-  let inTx = false;
-  try {
-    await conn.beginTransaction();
-    inTx = true;
-    const [ins] = await conn.query(
-      `INSERT INTO users (name, employee_id, email, password, role, vendor_id, supervisor_id, is_active)
-       VALUES (?, NULL, ?, ?, 'ls', ${process.env.PLACEHOLDER_VENDOR_ID}, ${process.env.PLACEHOLDER_SUPERVISOR_ID}, 1)`,
-      [name, email, passwordHash]
-    );
-    const userId = ins.insertId;
-    await conn.query(
-      `INSERT INTO hr_employees (user_id, nik, employee_name, user_status)
-       VALUES (?, ?, ?, 'Active')`,
-      [userId, row.nik, name]
-    );
-    await conn.commit();
-    inTx = false;
-    const [empRows] = await conn.query(
-      'SELECT id AS employee_id, user_id, nik FROM hr_employees WHERE user_id = ? LIMIT 1',
-      [userId]
-    );
-    return empRows[0] || null;
-  } catch (err) {
-    if (inTx) {
-      try {
-        await conn.rollback();
-      } catch (_) {
-        /* no-op */
-      }
-    }
-    if (err && err.code === 'ER_DUP_ENTRY') {
-      const again = await resolveEmployeeForGlogNik(conn, row.nik);
-      return again.employee || null;
-    }
-    throw err;
-  }
-}
-
 function mysqlLockErrorMessage(err) {
   if (!err || !err.code) return null;
   if (err.code === 'ER_LOCK_WAIT_TIMEOUT') {
@@ -332,105 +244,6 @@ async function getDailyRowsChunk(conn, batchId, lastId, limit) {
 }
 
 /**
- * Satu baris glog_import_daily → attendance (match by karyawan LS hasil resolve NIK + tanggal).
- * createEmployeeIfUnmatched: true = patch (buat placeholder user+employee jika NIK tidak ketemu).
- */
-async function upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnmatched }) {
-  const out = {
-    result: 'skip',
-    skipReason: null,
-    employeeCreated: false,
-  };
-
-  let empMatch = await resolveEmployeeForGlogNik(conn, row.nik);
-  let { employee, reason } = empMatch;
-
-  if (!employee && createEmployeeIfUnmatched && reason === 'unmatched_nik') {
-    const created = await createPlaceholderLsUserAndEmployee(conn, row);
-    if (created) {
-      employee = created;
-      out.employeeCreated = true;
-    }
-  }
-
-  if (!employee) {
-    if (reason === 'empty_nik') out.skipReason = 'invalid_time';
-    else out.skipReason = 'unmatched_nik';
-    return out;
-  }
-
-  const attendanceDate = toSqlDate(row.attendance_date);
-  const clockIn = toSqlTime(row.time_in);
-  const clockOut = toSqlTime(row.time_out);
-  if (!attendanceDate || !clockIn || !clockOut) {
-    out.skipReason = 'invalid_time';
-    return out;
-  }
-
-  const canonicalNik = String(employee.nik || '').trim().slice(0, 16);
-
-  const [existing] = await conn.query(
-    `SELECT id, status, source_type, is_effective, clock_in_time, clock_out_time
-     FROM attendance
-     WHERE user_id = ? AND attendance_date = ? AND is_effective = 1
-     ORDER BY id DESC
-     LIMIT 1`,
-    [employee.user_id, attendanceDate]
-  );
-
-  if (existing.length === 0) {
-    await conn.query(
-      `INSERT INTO attendance (
-         user_id, employee_id, nik, attendance_date,
-         clock_in_time, clock_out_time,
-         clock_in_lat, clock_in_lng, clock_in_address,
-         clock_out_lat, clock_out_lng, clock_out_address,
-         ot_start_time, ot_end_time, ot_summary,
-         status, source_type, is_effective
-       ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'approved', 'machine', 1)`,
-      [employee.user_id, employee.employee_id, canonicalNik, attendanceDate, clockIn, clockOut]
-    );
-    out.result = 'insert';
-    return out;
-  }
-
-  if (existing[0].source_type !== 'machine' || Number(existing[0].is_effective) !== 1) {
-    out.skipReason = 'non_pending';
-    return out;
-  }
-
-  if (timesEqualSql(existing[0].clock_in_time, clockIn) && timesEqualSql(existing[0].clock_out_time, clockOut)) {
-    out.skipReason = 'duplicate_noop';
-    return out;
-  }
-
-  await conn.query(
-    `UPDATE attendance SET
-       employee_id = ?,
-       nik = ?,
-       clock_in_time = ?,
-       clock_out_time = ?,
-       status = 'approved',
-       source_type = 'machine',
-       is_effective = 1,
-       updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`,
-    [employee.employee_id, canonicalNik, clockIn, clockOut, existing[0].id]
-  );
-  out.result = 'update';
-  return out;
-}
-
-function tallyUpsertStats(stats, r) {
-  if (r.result === 'insert') stats.attendance_inserted += 1;
-  else if (r.result === 'update') stats.attendance_updated_pending += 1;
-  else if (r.skipReason === 'non_pending') stats.attendance_skipped_non_pending += 1;
-  else if (r.skipReason === 'invalid_time') stats.attendance_skipped_invalid_time += 1;
-  else if (r.skipReason === 'unmatched_nik') stats.attendance_skipped_unmatched_nik += 1;
-  else if (r.skipReason === 'duplicate_noop') stats.attendance_skipped_duplicate_noop += 1;
-}
-
-/**
  * Sinkronkan baris glog_import_daily batch ini ke attendance.
  * - INSERT jika belum ada (user_id + attendance_date).
  * - UPDATE clock_in_time / clock_out_time + employee_id + nik kanonik hanya jika status = pending.
@@ -483,7 +296,6 @@ async function patchGlogDailyToAttendance(conn, batchId) {
     if (rows.length === 0) break;
     for (const row of rows) {
       const r = await upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnmatched: true });
-      if (r.employeeCreated) stats.employee_placeholder_created += 1;
       tallyUpsertStats(stats, r);
       lastId = row.id;
     }
@@ -517,7 +329,6 @@ async function runPatchAttendanceInternal(conn, batchId, onProgress) {
     if (rows.length === 0) break;
     for (const row of rows) {
       const r = await upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnmatched: true });
-      if (r.employeeCreated) stats.employee_placeholder_created += 1;
       tallyUpsertStats(stats, r);
       processed += 1;
       lastId = row.id;
@@ -700,6 +511,178 @@ function startPatchAttendanceJob(job) {
     }
   });
 }
+
+function startFtmSyncJob(job) {
+  setImmediate(async () => {
+    try {
+      job.status = 'running';
+      job.started_at = new Date().toISOString();
+      const result = await syncAttendanceFromFtmDataAccess({
+        dateFrom: job.ftm_date_from,
+        dateTo: job.ftm_date_to,
+        createEmployeeIfUnmatched: Boolean(job.create_employees),
+        onProgress: (processed, total) => touchJobProgress(job, processed, total),
+      });
+      job.status = 'done';
+      job.data = result;
+      job.finished_at = new Date().toISOString();
+      touchJobProgress(job, job.progress.total, job.progress.total);
+    } catch (err) {
+      job.status = 'error';
+      job.error = mysqlLockErrorMessage(err) || err.message || 'Server error.';
+      job.finished_at = new Date().toISOString();
+      console.error('FTM glog sync background job error:', err);
+    } finally {
+      cleanupProcessJobs();
+    }
+  });
+}
+
+function startFingerspotSyncJob(job) {
+  setImmediate(async () => {
+    try {
+      job.status = 'running';
+      job.started_at = new Date().toISOString();
+      const result = await syncAttendanceFromFingerspotAttLog({
+        dateFrom: job.fingerspot_date_from,
+        dateTo: job.fingerspot_date_to,
+        createEmployeeIfUnmatched: Boolean(job.create_employees),
+        onProgress: (processed, total) => touchJobProgress(job, processed, total),
+      });
+      job.status = 'done';
+      job.data = result;
+      job.finished_at = new Date().toISOString();
+      touchJobProgress(job, job.progress.total, job.progress.total);
+    } catch (err) {
+      job.status = 'error';
+      job.error = mysqlLockErrorMessage(err) || err.message || 'Server error.';
+      job.finished_at = new Date().toISOString();
+      console.error('Fingerspot glog sync background job error:', err);
+    } finally {
+      cleanupProcessJobs();
+    }
+  });
+}
+
+/** Sinkron absensi dari Fingerspot.att_log ke tabel attendance. */
+const syncFromFingerspot = async (req, res) => {
+  try {
+    if (!isFingerspotDatabaseConfigured()) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database Fingerspot belum dikonfigurasi. Set FINGERSPOT_DB_* di backend/.env',
+      });
+    }
+
+    const dateFrom = req.body?.date_from ?? req.query?.date_from;
+    const dateTo = req.body?.date_to ?? req.query?.date_to;
+    const range = validateDateRange(dateFrom, dateTo);
+    if (range.error) {
+      return res.status(400).json({ success: false, message: range.error });
+    }
+
+    const createEmployees =
+      req.body?.create_employees === true ||
+      req.body?.create_employees === 1 ||
+      String(req.body?.create_employees || '').toLowerCase() === 'true';
+
+    const uploaderId = req.user.id;
+    const existingRunning = Array.from(processJobs.values()).find(
+      (j) =>
+        j.type === 'glog_fingerspot_sync' &&
+        Number(j.uploader_id) === Number(uploaderId) &&
+        (j.status === 'queued' || j.status === 'running')
+    );
+    if (existingRunning) {
+      return res.status(202).json({
+        success: true,
+        message: 'Sinkron Fingerspot sedang berjalan di background.',
+        data: { job_id: existingRunning.id, status: existingRunning.status },
+      });
+    }
+
+    const job = createProcessJob({ batchId: 0, uploaderId, type: 'glog_fingerspot_sync' });
+    job.fingerspot_date_from = range.dateFrom;
+    job.fingerspot_date_to = range.dateTo;
+    job.create_employees = createEmployees;
+    startFingerspotSyncJob(job);
+
+    return res.status(202).json({
+      success: true,
+      message:
+        'Sinkron dari Fingerspot att_log dimulai. Pantau progres lewat GET /api/glog/jobs/:jobId',
+      data: {
+        job_id: job.id,
+        status: job.status,
+        date_from: range.dateFrom,
+        date_to: range.dateTo,
+      },
+    });
+  } catch (err) {
+    console.error('Fingerspot sync request error:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Server error.' });
+  }
+};
+
+/** Sinkron absensi dari FTM.data_access (database mesin) ke tabel attendance. */
+const syncFromFtm = async (req, res) => {
+  try {
+    if (!isFtmDatabaseConfigured()) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database FTM belum dikonfigurasi. Set FTM_DB_* di backend/.env',
+      });
+    }
+
+    const dateFrom = req.body?.date_from ?? req.query?.date_from;
+    const dateTo = req.body?.date_to ?? req.query?.date_to;
+    const range = validateDateRange(dateFrom, dateTo);
+    if (range.error) {
+      return res.status(400).json({ success: false, message: range.error });
+    }
+
+    const createEmployees =
+      req.body?.create_employees === true ||
+      req.body?.create_employees === 1 ||
+      String(req.body?.create_employees || '').toLowerCase() === 'true';
+
+    const uploaderId = req.user.id;
+    const existingRunning = Array.from(processJobs.values()).find(
+      (j) =>
+        j.type === 'glog_ftm_sync' &&
+        Number(j.uploader_id) === Number(uploaderId) &&
+        (j.status === 'queued' || j.status === 'running')
+    );
+    if (existingRunning) {
+      return res.status(202).json({
+        success: true,
+        message: 'Sinkron FTM sedang berjalan di background.',
+        data: { job_id: existingRunning.id, status: existingRunning.status },
+      });
+    }
+
+    const job = createProcessJob({ batchId: 0, uploaderId, type: 'glog_ftm_sync' });
+    job.ftm_date_from = range.dateFrom;
+    job.ftm_date_to = range.dateTo;
+    job.create_employees = createEmployees;
+    startFtmSyncJob(job);
+
+    return res.status(202).json({
+      success: true,
+      message:
+        'Sinkron dari FTM data_access dimulai. Pantau progres lewat GET /api/glog/jobs/:jobId',
+      data: {
+        job_id: job.id,
+        status: job.status,
+        date_from: range.dateFrom,
+        date_to: range.dateTo,
+      },
+    });
+  } catch (err) {
+    console.error('FTM sync request error:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Server error.' });
+  }
+};
 
 const uploadGlog = async (req, res) => {
   const conn = await db.getConnection();
@@ -1027,5 +1010,7 @@ module.exports = {
   patchAttendanceFromBatch,
   getBatchDetail,
   listMyBatches,
+  syncFromFtm,
+  syncFromFingerspot,
 };
 

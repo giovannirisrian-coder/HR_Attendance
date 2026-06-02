@@ -8,12 +8,16 @@ const {
   patchAttendanceFromBatch,
   getBatchDetail,
   listMyBatches,
+  syncFromFtm,
+  syncFromFingerspot,
 } = require('../controllers/glogController');
 const { authenticate, authorize } = require('../middleware/auth');
 
 const hrOrSupervisor = ['ls_hr', 'ls_supervisor'];
 
 router.post('/upload', authenticate, authorize(...hrOrSupervisor), uploadGlogMiddleware, uploadGlog);
+router.post('/sync-ftm', authenticate, authorize(...hrOrSupervisor), syncFromFtm);
+router.post('/sync-fingerspot', authenticate, authorize(...hrOrSupervisor), syncFromFingerspot);
 router.post('/batches/:id/process', authenticate, authorize(...hrOrSupervisor), processBatch);
 router.get('/jobs/:jobId', authenticate, authorize(...hrOrSupervisor), getProcessJobStatus);
 router.post(
