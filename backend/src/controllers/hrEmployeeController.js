@@ -11,8 +11,19 @@
  *    (`migration_employees_to_hr_employees.sql`). The legacy `employees`
  *    table has been retired.
  *
+ * Vendor reference:
+ *  • `vendor_id` is the authoritative FK → vendors(id) (added by
+ *    `migration_hr_employees_vendor_fk.sql`).
+ *  • `vendor_number` / `vendor_name` are kept as denormalized display
+ *    copies. When a vendor is selected via the searchable lookup on
+ *    the Create / Edit forms, the backend resolves the vendor record
+ *    and overwrites those two columns with vendors.code / vendors.name
+ *    so legacy analytics that still read the free-text columns keep
+ *    working unchanged. Rows with no vendor link keep whatever
+ *    free-text values HR typed in.
+ *
  * The end-to-end approval workflow (LS → Supervisor → Vendor → PIC LS →
- * SSU) is unchanged — only the underlying table is unified.
+ * SSU) is unchanged — only the vendor reference is unified.
  */
 
 const db = require('../config/database');
@@ -24,6 +35,9 @@ const db = require('../config/database');
 // OPTIONAL. The only validation we still apply is:
 //   1. Max length per column (protects against accidental oversize payloads).
 //   2. Enum value membership (when an enum field is provided as non-empty).
+//   3. Vendor reference: vendor_id must resolve to an existing row in
+//      `vendors` when supplied. On a valid match the controller also
+//      overwrites vendor_number / vendor_name with the master values.
 //
 // PO Period 1 / PO Period 2 are intentionally treated as free-text strings
 // (see migration_hr_employees_optional_fields.sql) so HR can enter wording
@@ -74,17 +88,45 @@ const MAX_LENGTHS = {
   supervisor_name: 200,
 };
 
+// Columns selected for every read (list + getById). We JOIN `vendors` so
+// the response always returns the master vendor's current code / name —
+// even when the denormalized `vendor_number` / `vendor_name` snapshots
+// have drifted (e.g. vendor was renamed in the master table).
 const SELECT_COLS = `
-  id, vendor_number, user_department, department_title, vendor_name,
-  employment_status, po_number, po_period_1, po_period_2, dic_hro, cost_center,
-  npk, employee_name, email, position, position_group, category, site,
-  supervisor_nik, supervisor_name, user_status,
-  created_by, updated_by, created_at, updated_at
+  h.id, h.vendor_id,
+  COALESCE(v.code, h.vendor_number) AS vendor_number,
+  h.user_department, h.department_title,
+  COALESCE(v.name, h.vendor_name) AS vendor_name,
+  h.employment_status, h.po_number, h.po_period_1, h.po_period_2,
+  h.dic_hro, h.cost_center,
+  h.npk, h.employee_name, h.email, h.position, h.position_group,
+  h.category, h.site,
+  h.supervisor_nik, h.supervisor_name, h.user_status,
+  h.created_by, h.updated_by, h.created_at, h.updated_at
 `;
+
+const FROM_JOIN = `FROM hr_employees h LEFT JOIN vendors v ON v.id = h.vendor_id`;
 
 const sanitizeText = (raw) => {
   if (raw === undefined || raw === null) return '';
   return String(raw).trim();
+};
+
+/**
+ * Parse a vendor_id submitted from the client. Returns:
+ *   { provided: false }                — field absent from payload
+ *   { provided: true, value: null }    — explicit "clear vendor" (null / '' / 0)
+ *   { provided: true, value: <int> }   — numeric vendor id
+ *   { provided: true, error: '…' }     — non-numeric / negative input
+ */
+const parseVendorId = (raw) => {
+  if (raw === undefined) return { provided: false };
+  if (raw === null || raw === '') return { provided: true, value: null };
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+    return { provided: true, error: 'Field "vendor_id" must be a positive integer or null.' };
+  }
+  return { provided: true, value: n };
 };
 
 /**
@@ -99,7 +141,7 @@ const sanitizeText = (raw) => {
  *   completely absent from `body` are omitted from the result (PATCH-style).
  *   When partial=false (POST), every column is included so the INSERT covers
  *   the full row.
- * @returns {{ ok: boolean, fields?: Record<string, string|null>, error?: string }}
+ * @returns {{ ok: boolean, fields?: Record<string, string|null>, vendorId?: {provided:boolean,value?:number|null}, error?: string }}
  */
 const validateBody = (body, opts = {}) => {
   const partial = !!opts.partial;
@@ -132,17 +174,45 @@ const validateBody = (body, opts = {}) => {
     fields[f] = v;
   }
 
-  return { ok: true, fields };
+  const vendorId = parseVendorId(body.vendor_id);
+  if (vendorId.error) {
+    return { ok: false, error: vendorId.error };
+  }
+
+  return { ok: true, fields, vendorId };
+};
+
+/**
+ * Resolve a vendor_id to its master record. Returns:
+ *   { ok: true,  vendor: { id, code, name } | null }   — null = vendor cleared
+ *   { ok: false, status, message }                      — 404 / 500
+ */
+const resolveVendor = async (vendorId) => {
+  if (vendorId == null) return { ok: true, vendor: null };
+  try {
+    const [rows] = await db.query(
+      'SELECT id, code, name FROM vendors WHERE id = ? LIMIT 1',
+      [vendorId]
+    );
+    if (rows.length === 0) {
+      return { ok: false, status: 400, message: 'Selected vendor does not exist.' };
+    }
+    return { ok: true, vendor: rows[0] };
+  } catch (err) {
+    console.error('Resolve vendor error:', err);
+    return { ok: false, status: 500, message: 'Server error.' };
+  }
 };
 
 // ── Controller actions ─────────────────────────────────────────────────────
 
 /**
  * GET /api/employees
- * Query params: page, limit, search, supervisor, site, vendor, status.
- * `search` matches employee_name OR npk.
- * `supervisor` matches supervisor_name.
- * `vendor` matches vendor_name (exact when option, contains when free text).
+ * Query params: page, limit, search, supervisor, site, vendor_id, vendor, status.
+ *   • `search`     matches employee_name OR npk.
+ *   • `supervisor` matches supervisor_name.
+ *   • `vendor_id`  exact match on the FK (preferred).
+ *   • `vendor`     legacy: matches `vendor_name` (kept for any old query strings).
  */
 const listEmployees = async (req, res) => {
   try {
@@ -155,24 +225,32 @@ const listEmployees = async (req, res) => {
     const site = sanitizeText(req.query.site);
     const vendor = sanitizeText(req.query.vendor);
     const status = sanitizeText(req.query.status);
+    const vendorIdRaw = req.query.vendor_id;
+    const vendorId =
+      vendorIdRaw !== undefined && vendorIdRaw !== '' && Number.isFinite(Number(vendorIdRaw))
+        ? Number(vendorIdRaw)
+        : null;
 
     let where = 'WHERE 1=1';
     const params = [];
     if (search) {
-      where += ' AND (employee_name LIKE ? OR npk LIKE ?)';
+      where += ' AND (h.employee_name LIKE ? OR h.npk LIKE ?)';
       const t = `%${search}%`;
       params.push(t, t);
     }
     if (supervisor) {
-      where += ' AND supervisor_name LIKE ?';
+      where += ' AND h.supervisor_name LIKE ?';
       params.push(`%${supervisor}%`);
     }
     if (site) {
-      where += ' AND site = ?';
+      where += ' AND h.site = ?';
       params.push(site);
     }
-    if (vendor) {
-      where += ' AND vendor_name = ?';
+    if (vendorId) {
+      where += ' AND h.vendor_id = ?';
+      params.push(vendorId);
+    } else if (vendor) {
+      where += ' AND COALESCE(v.name, h.vendor_name) = ?';
       params.push(vendor);
     }
     if (status) {
@@ -182,30 +260,32 @@ const listEmployees = async (req, res) => {
           message: `Invalid status. Must be one of: ${ENUM_FIELDS.user_status.join(', ')}.`,
         });
       }
-      where += ' AND user_status = ?';
+      where += ' AND h.user_status = ?';
       params.push(status);
     }
 
     const [rows] = await db.query(
       `SELECT ${SELECT_COLS}
-         FROM hr_employees
+         ${FROM_JOIN}
          ${where}
-         ORDER BY employee_name ASC, id ASC
+         ORDER BY h.employee_name ASC, h.id ASC
          LIMIT ? OFFSET ?`,
       [...params, limit, offset]
     );
 
     const [[{ total }]] = await db.query(
-      `SELECT COUNT(*) AS total FROM hr_employees ${where}`,
+      `SELECT COUNT(*) AS total ${FROM_JOIN} ${where}`,
       params
     );
 
-    // Reference lists for client-side filter dropdowns (small sets).
+    // Reference lists for client-side filter dropdowns.
     const [siteRows] = await db.query(
       `SELECT DISTINCT site FROM hr_employees WHERE site IS NOT NULL AND site <> '' ORDER BY site ASC`
     );
+    // Active vendors from the master so the filter dropdown stays in
+    // sync with the same source of truth as the Create / Edit lookup.
     const [vendorRows] = await db.query(
-      `SELECT DISTINCT vendor_name FROM hr_employees WHERE vendor_name IS NOT NULL AND vendor_name <> '' ORDER BY vendor_name ASC`
+      `SELECT id, code, name FROM vendors WHERE is_active = 1 ORDER BY name ASC`
     );
 
     const [[counts]] = await db.query(
@@ -213,7 +293,7 @@ const listEmployees = async (req, res) => {
          COUNT(*) AS total_all,
          SUM(CASE WHEN user_status = 'Active'   THEN 1 ELSE 0 END) AS active_count,
          SUM(CASE WHEN user_status = 'Deactive' THEN 1 ELSE 0 END) AS deactive_count,
-         COUNT(DISTINCT vendor_name) AS vendor_count
+         COUNT(DISTINCT COALESCE(vendor_id, CONCAT('legacy:', vendor_name))) AS vendor_count
        FROM hr_employees`
     );
 
@@ -223,7 +303,7 @@ const listEmployees = async (req, res) => {
       pagination: { total: Number(total) || 0, page, limit },
       meta: {
         sites: siteRows.map((r) => r.site),
-        vendors: vendorRows.map((r) => r.vendor_name),
+        vendors: vendorRows,
         summary: {
           total: Number(counts.total_all) || 0,
           active: Number(counts.active_count) || 0,
@@ -239,6 +319,47 @@ const listEmployees = async (req, res) => {
 };
 
 /**
+ * GET /api/employees/vendors
+ * Returns the active vendor master list used by the searchable lookup
+ * on the Create / Edit Employee forms.
+ *
+ * Query params:
+ *   • `search` — case-insensitive partial match on either `code` or
+ *     `name`. Returned regardless of value so the client can implement
+ *     either client-side or server-side search; an empty search returns
+ *     all active vendors ordered by name.
+ *   • `limit`  — soft cap (default 100, max 500) to keep payloads small.
+ */
+const listVendors = async (req, res) => {
+  try {
+    const search = sanitizeText(req.query.search);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
+
+    let where = 'WHERE is_active = 1';
+    const params = [];
+    if (search) {
+      where += ' AND (name LIKE ? OR code LIKE ?)';
+      const t = `%${search}%`;
+      params.push(t, t);
+    }
+
+    const [rows] = await db.query(
+      `SELECT id, code, name, address, phone, email
+         FROM vendors
+         ${where}
+         ORDER BY name ASC
+         LIMIT ?`,
+      [...params, limit]
+    );
+
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    console.error('List vendors lookup error:', err);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
+/**
  * GET /api/employees/:id
  */
 const getEmployeeById = async (req, res) => {
@@ -249,7 +370,7 @@ const getEmployeeById = async (req, res) => {
     }
 
     const [rows] = await db.query(
-      `SELECT ${SELECT_COLS} FROM hr_employees WHERE id = ? LIMIT 1`,
+      `SELECT ${SELECT_COLS} ${FROM_JOIN} WHERE h.id = ? LIMIT 1`,
       [id]
     );
     if (rows.length === 0) {
@@ -275,14 +396,31 @@ const createEmployee = async (req, res) => {
     const f = v.fields;
     const createdBy = req.user?.id || null;
 
+    // Vendor lookup: when a vendor_id is supplied we resolve the master
+    // record and authoritatively overwrite the denormalized display
+    // copies so vendor_number / vendor_name can never drift from the
+    // master. When vendor_id is null/absent we trust whatever free-text
+    // HR typed (legacy behaviour for partial / draft records).
+    let vendorId = null;
+    if (v.vendorId && v.vendorId.provided) {
+      const rv = await resolveVendor(v.vendorId.value);
+      if (!rv.ok) return res.status(rv.status).json({ success: false, message: rv.message });
+      if (rv.vendor) {
+        vendorId = rv.vendor.id;
+        f.vendor_number = rv.vendor.code;
+        f.vendor_name = rv.vendor.name;
+      }
+    }
+
     const [ins] = await db.query(
       `INSERT INTO hr_employees (
-         vendor_number, user_department, department_title, vendor_name,
+         vendor_id, vendor_number, user_department, department_title, vendor_name,
          employment_status, po_number, po_period_1, po_period_2, dic_hro, cost_center,
          npk, employee_name, email, position, position_group, category, site,
          supervisor_nik, supervisor_name, user_status, created_by, updated_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
+        vendorId,
         f.vendor_number, f.user_department, f.department_title, f.vendor_name,
         f.employment_status, f.po_number, f.po_period_1, f.po_period_2, f.dic_hro, f.cost_center,
         f.npk, f.employee_name, f.email, f.position, f.position_group, f.category, f.site,
@@ -291,7 +429,7 @@ const createEmployee = async (req, res) => {
     );
 
     const [rows] = await db.query(
-      `SELECT ${SELECT_COLS} FROM hr_employees WHERE id = ? LIMIT 1`,
+      `SELECT ${SELECT_COLS} ${FROM_JOIN} WHERE h.id = ? LIMIT 1`,
       [ins.insertId]
     );
 
@@ -338,6 +476,20 @@ const updateEmployee = async (req, res) => {
 
     const fields = { ...v.fields };
 
+    // Vendor lookup: same authoritative overwrite as in createEmployee.
+    // An explicit `vendor_id: null` clears the FK and leaves the
+    // denormalized display copies untouched (HR can still edit them
+    // manually for legacy / draft records).
+    if (v.vendorId && v.vendorId.provided) {
+      const rv = await resolveVendor(v.vendorId.value);
+      if (!rv.ok) return res.status(rv.status).json({ success: false, message: rv.message });
+      fields.vendor_id = rv.vendor ? rv.vendor.id : null;
+      if (rv.vendor) {
+        fields.vendor_number = rv.vendor.code;
+        fields.vendor_name = rv.vendor.name;
+      }
+    }
+
     const keys = Object.keys(fields);
     if (keys.length === 0) {
       return res.status(400).json({
@@ -356,7 +508,7 @@ const updateEmployee = async (req, res) => {
     );
 
     const [rows] = await db.query(
-      `SELECT ${SELECT_COLS} FROM hr_employees WHERE id = ? LIMIT 1`,
+      `SELECT ${SELECT_COLS} ${FROM_JOIN} WHERE h.id = ? LIMIT 1`,
       [id]
     );
 
@@ -379,6 +531,7 @@ const updateEmployee = async (req, res) => {
 
 module.exports = {
   listEmployees,
+  listVendors,
   getEmployeeById,
   createEmployee,
   updateEmployee,

@@ -13,11 +13,24 @@
       <div class="form-grid">
         <div class="form-group">
           <label class="form-label">Vendor Number</label>
-          <input v-model="form.vendor_number" type="text" class="form-control" />
+          <VendorSearchSelect
+            v-model="form.vendor_id"
+            :initial-vendor="initialVendorOption"
+            @change="onVendorSelected"
+          />
+          <p class="text-sm text-muted" style="margin-top: 6px;">
+            Search by Vendor Name or Code. Selecting a vendor auto-fills the Vendor Name field.
+          </p>
         </div>
         <div class="form-group">
           <label class="form-label">Vendor Name</label>
-          <input v-model="form.vendor_name" type="text" class="form-control" />
+          <input
+            v-model="form.vendor_name"
+            type="text"
+            class="form-control"
+            readonly
+            placeholder="Auto-filled from selected vendor"
+          />
         </div>
 
         <div class="form-group">
@@ -149,12 +162,13 @@
 </template>
 
 <script setup>
-import { reactive, watch } from 'vue';
+import { reactive, computed, watch } from 'vue';
 import {
   EMPTY_EMPLOYEE,
   EMPLOYMENT_STATUS_OPTIONS,
   USER_STATUS_OPTIONS,
 } from './mockEmployees';
+import VendorSearchSelect from '../../components/VendorSearchSelect.vue';
 
 const props = defineProps({
   initialData: {
@@ -192,6 +206,38 @@ watch(
     Object.assign(form, EMPTY_EMPLOYEE, val || {});
   }
 );
+
+/**
+ * Seed the searchable lookup with the currently-saved vendor (if any)
+ * so the Edit page shows the vendor name immediately, without waiting
+ * for the master list fetch to complete. Built from the fields the
+ * backend already returns on the employee payload.
+ */
+const initialVendorOption = computed(() => {
+  if (!props.initialData || props.initialData.vendor_id == null) return null;
+  return {
+    id: props.initialData.vendor_id,
+    code: props.initialData.vendor_number || '',
+    name: props.initialData.vendor_name || '',
+  };
+});
+
+/**
+ * Auto-population hook — the spec mandates that picking a vendor fills
+ * the Vendor Name textbox. We also mirror the vendor code into the
+ * legacy Vendor Number snapshot so the field stays meaningful even if
+ * the user never opens the dropdown again. Clearing the selection
+ * wipes both snapshots so the form does not save stale data.
+ */
+const onVendorSelected = (vendor) => {
+  if (vendor) {
+    form.vendor_name = vendor.name || '';
+    form.vendor_number = vendor.code || '';
+  } else {
+    form.vendor_name = '';
+    form.vendor_number = '';
+  }
+};
 
 const onSubmit = () => {
   if (props.submitting) return;

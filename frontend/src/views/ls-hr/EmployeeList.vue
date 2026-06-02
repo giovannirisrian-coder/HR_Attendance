@@ -80,9 +80,9 @@
             <option value="">All Sites</option>
             <option v-for="s in siteOptions" :key="s" :value="s">{{ s }}</option>
           </select>
-          <select v-model="filters.vendor" class="form-control" style="max-width: 220px;" @change="resetAndFetch">
+          <select v-model="filters.vendor_id" class="form-control" style="max-width: 240px;" @change="resetAndFetch">
             <option value="">All Vendors</option>
-            <option v-for="v in vendorOptions" :key="v" :value="v">{{ v }}</option>
+            <option v-for="v in vendorOptions" :key="v.id" :value="v.id">{{ v.name }} ({{ v.code }})</option>
           </select>
           <select v-model="filters.status" class="form-control" style="max-width: 160px;" @change="resetAndFetch">
             <option value="">All Status</option>
@@ -221,7 +221,7 @@ const filters = reactive({
   search: '',
   supervisor: '',
   site: '',
-  vendor: '',
+  vendor_id: '',
   status: '',
 });
 
@@ -253,7 +253,7 @@ const fetchData = async () => {
     if (filters.search.trim()) params.search = filters.search.trim();
     if (filters.supervisor.trim()) params.supervisor = filters.supervisor.trim();
     if (filters.site) params.site = filters.site;
-    if (filters.vendor) params.vendor = filters.vendor;
+    if (filters.vendor_id) params.vendor_id = filters.vendor_id;
     if (filters.status) params.status = filters.status;
 
     const { data } = await api.get('/employees', { params });
@@ -283,7 +283,7 @@ const resetFilters = () => {
   filters.search = '';
   filters.supervisor = '';
   filters.site = '';
-  filters.vendor = '';
+  filters.vendor_id = '';
   filters.status = '';
   pagination.page = 1;
   fetchData();

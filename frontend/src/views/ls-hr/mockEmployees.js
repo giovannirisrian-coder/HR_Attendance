@@ -9,6 +9,7 @@ export const EMPLOYMENT_STATUS_OPTIONS = ['Permanent', 'Contract'];
 export const USER_STATUS_OPTIONS = ['Active', 'Deactive'];
 
 export const EMPTY_EMPLOYEE = {
+  vendor_id: null,
   vendor_number: '',
   user_department: '',
   department_title: '',

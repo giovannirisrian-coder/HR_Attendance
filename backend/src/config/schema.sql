@@ -60,6 +60,14 @@ CREATE TABLE IF NOT EXISTS hr_employees (
 
   -- Attendance linkage (one hr_employees row per LS user)
   user_id           INT           NULL,
+
+  -- Vendor master reference (PIC LS Vendor Number lookup).
+  -- The two display columns below (vendor_number / vendor_name)
+  -- are kept as denormalized snapshots so legacy consumers and
+  -- analytics that still read those names keep working. When a
+  -- vendor is picked via the lookup, the backend writes
+  -- vendors.code → vendor_number and vendors.name → vendor_name.
+  vendor_id         INT           NULL,
   nik               VARCHAR(16)   NULL,
 
   -- Vendor / contract block (all OPTIONAL — HR can complete later)
@@ -99,6 +107,7 @@ CREATE TABLE IF NOT EXISTS hr_employees (
   UNIQUE KEY uq_hr_employees_user_id (user_id),
   UNIQUE KEY uq_hr_employees_npk (npk),
   KEY idx_hr_employees_nik (nik),
+  KEY idx_hr_employees_vendor_id (vendor_id),
   KEY idx_hr_employees_employee_name (employee_name),
   KEY idx_hr_employees_vendor_name (vendor_name),
   KEY idx_hr_employees_supervisor_name (supervisor_name),
@@ -106,6 +115,7 @@ CREATE TABLE IF NOT EXISTS hr_employees (
   KEY idx_hr_employees_user_status (user_status),
 
   CONSTRAINT fk_hr_employees_user       FOREIGN KEY (user_id)    REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_hr_employees_vendor     FOREIGN KEY (vendor_id)  REFERENCES vendors(id) ON DELETE SET NULL,
   CONSTRAINT fk_hr_employees_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
   CONSTRAINT fk_hr_employees_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -313,8 +323,9 @@ UPDATE users SET supervisor_id = (SELECT id FROM (SELECT id FROM users WHERE emp
 -- Seeded into the consolidated hr_employees table so the row also feeds
 -- the LS HR ➜ Employee List view. Vendor / supervisor metadata is filled
 -- in from the user record so QA / UAT see meaningful BAST defaults.
-INSERT INTO hr_employees (user_id, nik, employee_name, vendor_name, supervisor_name, user_status)
+INSERT INTO hr_employees (user_id, vendor_id, nik, employee_name, vendor_number, vendor_name, supervisor_name, user_status)
 SELECT u.id,
+  v.id,
   CASE u.employee_id
     WHEN 'LS001' THEN '3173010101010001'
     WHEN 'LS002' THEN '3173020202020002'
@@ -322,6 +333,7 @@ SELECT u.id,
     ELSE '0000000000000001'
   END AS nik,
   u.name,
+  v.code,
   v.name,
   sup.name,
   IF(u.is_active = 1, 'Active', 'Deactive')
