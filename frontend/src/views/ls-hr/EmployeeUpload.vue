@@ -17,7 +17,7 @@
         <p class="text-sm text-muted" style="margin:0 0 8px;">
           Header wajib sesuai template:
         </p>
-        <pre class="format-sample">No,No/Vdr,User/ Department,Title/ Department,Vendor,Status,Nomor PO,Jangka Waktu PO Ke-1,Jangka Waktu PO Ke-2,DIC (HRO),Cost Center,NPK,Nama Karyawan,Jabatan,Kelompok Jabatan,kategori,Site,NIK Atasan,Nama Atasan</pre>
+        <pre class="format-sample">NIK,NAMA,JABATAN,DEPARTEMEN,SITE,PERUSAHAAN,NIK ATASAN,NAMA ATASAN</pre>
       </div>
     </div>
 
@@ -51,7 +51,7 @@
           <div><strong>Data baru:</strong> {{ summary.inserted }}</div>
           <div><strong>Data update:</strong> {{ summary.updated }}</div>
           <div><strong>Data dilewati:</strong> {{ summary.skipped }}</div>
-          <div><strong>Skip - NPK kosong:</strong> {{ summary.skipped_npk_empty ?? 0 }}</div>
+          <div><strong>Skip - NIK/NPK kosong:</strong> {{ summary.skipped_nik_npk_empty ?? summary.skipped_npk_empty ?? 0 }}</div>
           <div><strong>Skip - Error proses:</strong> {{ summary.skipped_error ?? 0 }}</div>
           <div><strong>Kendala:</strong> {{ summary.error_count }}</div>
         </div>
@@ -59,7 +59,7 @@
     </div>
 
     <p v-if="summary" class="text-sm text-muted" style="margin-top:8px;">
-      Hanya baris dengan NPK terisi yang diproses. Data kosong/tidak sesuai otomatis di-skip.
+      Hanya baris dengan NIK/NPK terisi yang diproses. Kolom PERUSAHAAN harus cocok dengan master vendor.
     </p>
   </div>
 </template>

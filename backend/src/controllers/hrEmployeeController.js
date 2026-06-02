@@ -187,22 +187,12 @@ const uploadHrEmployeesMiddlewareSafe = (req, res, next) => {
 };
 
 const TEMPLATE_HEADER_TO_FIELD = {
-  'no/vdr': 'vendor_number',
-  'user/ department': 'user_department',
-  'title/ department': 'department_title',
-  vendor: 'vendor_name',
-  status: 'employment_status',
-  'nomor po': 'po_number',
-  'jangka waktu po ke-1': 'po_period_1',
-  'jangka waktu po ke-2': 'po_period_2',
-  'dic (hro)': 'dic_hro',
-  'cost center': 'cost_center',
-  npk: 'npk',
-  'nama karyawan': 'employee_name',
+  nik: 'nik',
+  nama: 'employee_name',
   jabatan: 'position',
-  'kelompok jabatan': 'position_group',
-  kategori: 'category',
+  departemen: 'user_department',
   site: 'site',
+  perusahaan: 'company_name',
   'nik atasan': 'supervisor_nik',
   'nama atasan': 'supervisor_name',
 };
@@ -332,7 +322,14 @@ const normalizeEmploymentStatus = (value) => {
 const findHeaderRow = (rows) => {
   for (let i = 0; i < Math.min(rows.length, 30); i += 1) {
     const headers = rows[i].map(normalizeUploadHeader);
-    if (headers.includes('nama karyawan') && headers.includes('nomor po') && headers.includes('npk')) {
+    if (
+      headers.includes('nik') &&
+      headers.includes('nama') &&
+      headers.includes('jabatan') &&
+      headers.includes('departemen') &&
+      headers.includes('site') &&
+      headers.includes('perusahaan')
+    ) {
       return { headerRowIndex: i, headers };
     }
   }
@@ -345,15 +342,6 @@ const mapSheetRowToEmployeeBody = (cells, headerMap) => {
     const raw = colIndex >= 0 ? cells[colIndex] : '';
     body[field] = sanitizeText(raw);
   }
-
-  body.employment_status = normalizeEmploymentStatus(body.employment_status);
-
-  const po1 = parseExcelDateValue(cells[headerMap.po_period_1]);
-  const po2 = parseExcelDateValue(cells[headerMap.po_period_2]);
-  body.po_period_1 = po1?.start || '';
-  body.po_period_2 = po2?.end || po1?.end || po1?.start || '';
-  body.user_status = 'Active';
-
   return body;
 };
 
@@ -368,34 +356,56 @@ const normalizeUploadRowForUpsert = (body) => {
   const d = String(today.getDate()).padStart(2, '0');
   const todayYmd = `${y}-${m}-${d}`;
 
-  const po1 = sanitizeText(body.po_period_1);
-  const po2 = sanitizeText(body.po_period_2);
+  const po1 = '';
+  const po2 = '';
   const finalPo1 = po1 || po2 || todayYmd;
   const finalPo2 = po2 || po1 || todayYmd;
+  const nik = sanitizeText(body.nik);
+  const npk = sanitizeText(body.npk || body.nik);
+  const department = sanitizeText(body.user_department);
 
   return {
-    vendor_number: nonEmptyOrDash(body.vendor_number),
-    user_department: nonEmptyOrDash(body.user_department),
-    department_title: nonEmptyOrDash(body.department_title),
-    vendor_name: nonEmptyOrDash(body.vendor_name),
-    employment_status: ['Permanent', 'Contract'].includes(body.employment_status)
-      ? body.employment_status
-      : 'Contract',
-    po_number: nonEmptyOrDash(body.po_number),
+    nik,
+    npk,
+    vendor_id: null,
+    vendor_number: '-',
+    user_department: nonEmptyOrDash(department),
+    department_title: nonEmptyOrDash(department),
+    vendor_name: nonEmptyOrDash(body.company_name),
+    employment_status: 'Contract',
+    po_number: '-',
     po_period_1: finalPo1,
     po_period_2: finalPo2,
-    dic_hro: nonEmptyOrDash(body.dic_hro),
-    cost_center: nonEmptyOrDash(body.cost_center),
-    npk: sanitizeText(body.npk),
+    dic_hro: '-',
+    cost_center: '-',
     employee_name: nonEmptyOrDash(body.employee_name),
     position: nonEmptyOrDash(body.position),
-    position_group: nonEmptyOrDash(body.position_group),
-    category: nonEmptyOrDash(body.category),
+    position_group: '-',
+    category: '-',
     site: nonEmptyOrDash(body.site),
     supervisor_nik: nonEmptyOrDash(body.supervisor_nik),
     supervisor_name: nonEmptyOrDash(body.supervisor_name),
     user_status: 'Active',
   };
+};
+
+const buildVendorLookupMap = (vendorRows) => {
+  const lookup = new Map();
+  for (const row of vendorRows) {
+    const keys = [sanitizeText(row.name), sanitizeText(row.code)]
+      .map((v) => v.toLowerCase())
+      .filter(Boolean);
+    for (const key of keys) {
+      if (!lookup.has(key)) lookup.set(key, row);
+    }
+  }
+  return lookup;
+};
+
+const resolveVendorForUpload = (companyName, vendorLookup) => {
+  const key = sanitizeText(companyName).toLowerCase();
+  if (!key) return null;
+  return vendorLookup.get(key) || null;
 };
 
 /**
@@ -1280,12 +1290,6 @@ const uploadEmployeesBulk = async (req, res) => {
   const uploadRequestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   try {
     const sourceSystem = sanitizeText(req.body?.source_system).toUpperCase();
-    if (!['MTL', 'BC'].includes(sourceSystem)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Field "source_system" wajib dipilih: MTL atau BC.',
-      });
-    }
 
     console.info('HR employee bulk upload started:', {
       request_id: uploadRequestId,
@@ -1341,6 +1345,9 @@ const uploadEmployeesBulk = async (req, res) => {
       headerMap[field] = index;
     }
 
+    const [vendorRows] = await db.query(`SELECT id, code, name FROM vendors`);
+    const vendorLookup = buildVendorLookupMap(vendorRows);
+
     let totalRows = 0;
     let inserted = 0;
     let updated = 0;
@@ -1357,24 +1364,38 @@ const uploadEmployeesBulk = async (req, res) => {
 
       totalRows += 1;
       const body = mapSheetRowToEmployeeBody(cells, headerMap);
-      const rowNpk = sanitizeText(body.npk);
+      const rowNpk = sanitizeText(body.nik || body.npk);
 
-      // Sesuai kebutuhan: baris tanpa NPK diabaikan (tidak diproses submit).
+      // Validasi utama tetap berbasis NIK/NPK.
       if (!rowNpk) {
         skipped += 1;
         skippedNpkEmpty += 1;
         continue;
       }
       const f = normalizeUploadRowForUpsert(body);
+      const vendor = resolveVendorForUpload(body.company_name, vendorLookup);
+      if (!vendor) {
+        skipped += 1;
+        skippedError += 1;
+        errors.push(
+          summarizeLineError(lineNo, 'PERUSAHAAN tidak ditemukan di master vendor (kolom vendors.name/code).')
+        );
+        continue;
+      }
+      f.vendor_id = vendor.id;
+      f.vendor_number = sanitizeText(vendor.code) || '-';
+      f.vendor_name = sanitizeText(vendor.name) || nonEmptyOrDash(body.company_name);
       try {
         const [upsert] = await db.query(
           `INSERT INTO hr_employees (
-             vendor_number, user_department, department_title, vendor_name,
+             vendor_id, nik, vendor_number, user_department, department_title, vendor_name,
              employment_status, po_number, po_period_1, po_period_2, dic_hro, cost_center,
              npk, employee_name, position, position_group, category, site,
              supervisor_nik, supervisor_name, user_status, created_by, updated_by
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
+             vendor_id = VALUES(vendor_id),
+             nik = VALUES(nik),
              vendor_number = VALUES(vendor_number),
              user_department = VALUES(user_department),
              department_title = VALUES(department_title),
@@ -1395,7 +1416,7 @@ const uploadEmployeesBulk = async (req, res) => {
              user_status = VALUES(user_status),
              updated_by = VALUES(updated_by)`,
           [
-            f.vendor_number, f.user_department, f.department_title, f.vendor_name,
+            f.vendor_id, f.nik, f.vendor_number, f.user_department, f.department_title, f.vendor_name,
             f.employment_status, f.po_number, f.po_period_1, f.po_period_2, f.dic_hro, f.cost_center,
             f.npk, f.employee_name, f.position, f.position_group, f.category, f.site,
             f.supervisor_nik, f.supervisor_name, f.user_status, uploaderId, uploaderId,
@@ -1442,6 +1463,7 @@ const uploadEmployeesBulk = async (req, res) => {
         updated,
         skipped,
         skipped_npk_empty: skippedNpkEmpty,
+        skipped_nik_npk_empty: skippedNpkEmpty,
         skipped_error: skippedError,
         error_count: errors.length,
         errors: errors.slice(0, 500),
