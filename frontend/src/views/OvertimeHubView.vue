@@ -191,7 +191,7 @@
             <span class="card-title ot-master__title">LS Employees</span>
             <div class="search-wrap ot-master__search">
               <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-              <input v-model="sidebarSearch" class="form-control" type="search" placeholder="Search by name or NIK…" autocomplete="off" />
+              <input v-model="sidebarSearch" class="form-control" type="search" placeholder="Search by name or NPK…" autocomplete="off" />
             </div>
           </div>
           <div class="ot-master__scroll">
@@ -212,7 +212,7 @@
                   @click="selectMember(m.id)"
                 >
                   <div class="ot-master__item-name">{{ m.name }}</div>
-                  <div class="ot-master__item-nik" title="NIK">{{ m.nik || '—' }}</div>
+                  <div class="ot-master__item-npk" title="NPK">{{ m.npk || '—' }}</div>
                   <span v-if="pendingByUser[m.id] > 0" class="ot-master__pending">{{ pendingByUser[m.id] }} pending</span>
                 </li>
               </ul>
@@ -265,7 +265,7 @@
                       <th>Duration</th>
                       <th>Remarks</th>
                       <th>Approval Status</th>
-                      <th style="min-width:160px;">Actions</th>
+                      <th style="min-width:200px;">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -287,23 +287,15 @@
                         <div class="action-btns">
                           <template v-if="r.status === 'pending'">
                             <button
-                              class="icon-btn icon-btn--approve"
+                              class="btn btn-primary btn-sm"
                               :disabled="actionId === r.id"
-                              :title="`Approve overtime on ${fmtDate(r.request_date)}`"
-                              aria-label="Approve overtime"
                               @click="approve(r.id)"
-                            >
-                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7"/></svg>
-                            </button>
+                            >Approve</button>
                             <button
-                              class="icon-btn icon-btn--reject"
+                              class="btn btn-danger btn-sm"
                               :disabled="actionId === r.id"
-                              :title="`Reject overtime on ${fmtDate(r.request_date)}`"
-                              aria-label="Reject overtime"
                               @click="openReject(r)"
-                            >
-                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
-                            </button>
+                            >Reject</button>
                           </template>
                           <span v-else class="text-muted text-sm">—</span>
                         </div>
@@ -487,7 +479,7 @@ const filteredMembers = computed(() => {
   return lsMembers.value.filter(
     (m) =>
       String(m.name || '').toLowerCase().includes(q) ||
-      String(m.nik || '').toLowerCase().includes(q) ||
+      String(m.npk || '').toLowerCase().includes(q) ||
       String(m.employee_id || '').toLowerCase().includes(q)
   );
 });
@@ -495,7 +487,7 @@ const filteredMembers = computed(() => {
 const selectedMemberLabel = computed(() => {
   const m = lsMembers.value.find((x) => x.id == selectedUserId.value);
   if (!m) return '';
-  return `${m.name} · NIK ${m.nik || '—'}`;
+  return `${m.name} · NPK ${m.npk || '—'}`;
 });
 
 // ─── LS list fetch ───
@@ -844,34 +836,6 @@ onMounted(async () => {
   background: #fef3c7;
   border-color: #f59e0b;
 }
-.icon-btn {
-  width: 32px;
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  border: 1px solid var(--bc-gray-200);
-  background: #fff;
-  color: var(--bc-gray-600);
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.icon-btn:hover:not(:disabled) {
-  border-color: currentColor;
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-sm);
-}
-.icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.icon-btn--approve { color: var(--bc-green-600); }
-.icon-btn--approve:hover:not(:disabled) {
-  background: var(--bc-green-50, #ecfdf5);
-}
-.icon-btn--reject { color: var(--bc-rejected); }
-.icon-btn--reject:hover:not(:disabled) {
-  background: #fef2f2;
-}
-
 /* ─── Supervisor split layout ─── */
 .ot-supervisor-split {
   display: flex;
@@ -957,7 +921,7 @@ onMounted(async () => {
   font-size: 14px;
   color: var(--bc-gray-900);
 }
-.ot-master__item-nik {
+.ot-master__item-npk {
   font-size: 12px;
   color: var(--bc-gray-600);
   margin-top: 2px;

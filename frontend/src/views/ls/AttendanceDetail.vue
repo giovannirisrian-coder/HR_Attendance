@@ -24,7 +24,7 @@
       </div>
       <div class="card-body">
         <div class="dl">
-          <div class="dl-row"><span>NIK</span><strong>{{ record.nik || '—' }}</strong></div>
+          <div class="dl-row"><span>NPK</span><strong>{{ record.npk || '—' }}</strong></div>
           <div class="dl-row"><span>Date</span><strong>{{ formatDate(record.attendance_date) }}</strong></div>
           <div class="dl-row"><span>Clock in</span><strong class="text-green">{{ record.clock_in_time || '—' }}</strong></div>
           <div class="dl-row"><span>Clock out</span><strong class="text-red">{{ record.clock_out_time || '—' }}</strong></div>

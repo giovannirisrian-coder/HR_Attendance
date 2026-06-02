@@ -85,7 +85,7 @@
  * Searchable lookup tied to the `users` master table, restricted to
  * accounts with role='ls_supervisor'. Used by the LS HR (PIC LS)
  * Create / Edit Employee forms to replace the legacy free-text
- * Supervisor NIK + Supervisor Name inputs.
+ * Supervisor NPK + Supervisor Name inputs.
  *
  * Why this matters:
  * The Managerial Review stage of the workflow (Employee → Leader
@@ -99,7 +99,7 @@
  *   • Fetches the active LS Supervisor list once via
  *     `GET /api/employees/supervisors` and filters client-side as the
  *     user types — primary search axis is Supervisor Name (per spec),
- *     with NIK / employee_id matching as a convenience.
+ *     with NPK / employee_id matching as a convenience.
  *   • Emits the selected user id via v-model and a `change` event
  *     with the full supervisor object — the parent uses it to update
  *     any read-only display fields it keeps on the form model.
@@ -165,8 +165,8 @@ const filteredSupervisors = computed(() => {
   if (!q) return supervisors.value;
   return supervisors.value.filter((s) => {
     const name = (s.name || '').toLowerCase();
-    const nik = (s.employee_id || '').toLowerCase();
-    return name.includes(q) || nik.includes(q);
+    const npk = (s.employee_id || '').toLowerCase();
+    return name.includes(q) || npk.includes(q);
   });
 });
 

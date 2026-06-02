@@ -36,19 +36,19 @@
               </div>
 
               <div class="form-group">
-                <label class="form-label">NIK</label>
+                <label class="form-label">NPK</label>
                 <div
                   class="form-control form-control--readonly"
-                  :class="{ 'form-control--placeholder': !displayNik }"
-                  :title="displayNik ? 'Pre-filled from your employee profile' : 'Linking to employee profile…'"
+                  :class="{ 'form-control--placeholder': !displayNpk }"
+                  :title="displayNpk ? 'Pre-filled from your employee profile' : 'Linking to employee profile…'"
                   aria-readonly="true"
                 >
-                  <template v-if="displayNik">{{ displayNik }}</template>
+                  <template v-if="displayNpk">{{ displayNpk }}</template>
                   <template v-else-if="loadingProfile">
                     <span class="spinner" style="width:12px;height:12px;border-width:2px;"></span>
-                    Loading NIK…
+                    Loading NPK…
                   </template>
-                  <template v-else>NIK belum tertaut. Hubungi HR.</template>
+                  <template v-else>NPK belum tertaut. Hubungi HR.</template>
                 </div>
               </div>
 
@@ -140,8 +140,8 @@
 
             <div v-if="todayRecord" class="detail-list">
               <div class="detail-row">
-                <span class="detail-label">NIK</span>
-                <span class="detail-value">{{ todayRecord.nik || displayNik || '—' }}</span>
+                <span class="detail-label">NPK</span>
+                <span class="detail-value">{{ todayRecord.npk || displayNpk || '—' }}</span>
               </div>
               <div class="detail-row">
                 <span class="detail-label">Status</span>
@@ -180,12 +180,13 @@ const geoStatus = ref('idle'); // idle | loading | success | error
 const todayRecord = ref(null);
 const selectedDateRows = ref([]);
 /**
- * NIK from the auth context (employees.nik linked to users.user_id). Surfaced
- * in the form even before any attendance record exists so the LS user can
- * confirm their identifier prior to submitting the Biometric Capture /
- * Correction request that flows downstream to the Leader Employee.
+ * NPK from the auth context (hr_employees.npk linked to users.user_id).
+ * Surfaced in the form even before any attendance record exists so the
+ * LS user can confirm their identifier prior to submitting the Biometric
+ * Capture / Correction request that flows downstream to the Leader
+ * Employee.
  */
-const profileNik = ref(getUser()?.nik || null);
+const profileNpk = ref(getUser()?.npk || null);
 
 const now = new Date();
 const nowTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -203,11 +204,11 @@ const form = reactive({
 });
 
 /**
- * Prefer the master profile NIK so the field stays populated in the
- * "No Record" state; fall back to the record's NIK only if the auth
+ * Prefer the master profile NPK so the field stays populated in the
+ * "No Record" state; fall back to the record's NPK only if the auth
  * context hasn't supplied one yet (e.g. legacy cached session).
  */
-const displayNik = computed(() => profileNik.value || todayRecord.value?.nik || '');
+const displayNpk = computed(() => profileNpk.value || todayRecord.value?.npk || '');
 
 const summaryDateLabel = computed(() => {
   try {
@@ -335,22 +336,22 @@ const syncDateWindow = () => {
 };
 
 /**
- * Pre-fetch the LS user's NIK from the auth profile when the cached session
+ * Pre-fetch the LS user's NPK from the auth profile when the cached session
  * doesn't have it yet (older logins). Updates the local cache so subsequent
- * page visits show NIK instantly without an extra round-trip.
+ * page visits show NPK instantly without an extra round-trip.
  */
-const ensureProfileNik = async () => {
-  if (profileNik.value) return;
+const ensureProfileNpk = async () => {
+  if (profileNpk.value) return;
   loadingProfile.value = true;
   try {
     const { data } = await api.get('/auth/profile');
-    const fetchedNik = data?.user?.nik || null;
-    if (fetchedNik) {
-      profileNik.value = fetchedNik;
-      updateCachedUser({ nik: fetchedNik });
+    const fetchedNpk = data?.user?.npk || null;
+    if (fetchedNpk) {
+      profileNpk.value = fetchedNpk;
+      updateCachedUser({ npk: fetchedNpk });
     }
   } catch {
-    /* Silent: NIK still falls back to the record's nik when one exists. */
+    /* Silent: NPK still falls back to the record's npk when one exists. */
   } finally {
     loadingProfile.value = false;
   }
@@ -358,7 +359,7 @@ const ensureProfileNik = async () => {
 
 onMounted(() => {
   clampAttendanceDateToWindow();
-  ensureProfileNik();
+  ensureProfileNpk();
   loadRecordForSelectedDate();
   captureLocation();
   dateTick = window.setInterval(syncDateWindow, 60_000);

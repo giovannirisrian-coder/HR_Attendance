@@ -7,9 +7,11 @@
  * `hr_employees` is now the consolidated employee master table:
  *  • LS HR (PIC LS) maintains the BAST fields here (vendor, PO, NPK, etc.).
  *  • Attendance / Leave / Overtime reference the same row via the
- *    `user_id` and `nik` columns added by the consolidation migration
- *    (`migration_employees_to_hr_employees.sql`). The legacy `employees`
- *    table has been retired.
+ *    `user_id` column and the unified `npk` identifier (the legacy
+ *    `nik` column has been retired by
+ *    `migration_hr_employees_drop_nik.sql`; NPK is now the single
+ *    standard identitas karyawan across Biometric Capture,
+ *    Cloud Synchronization, BAST and Salary Recap analytics).
  *
  * Vendor reference:
  *  • `vendor_id` is the authoritative FK → vendors(id) (added by
@@ -26,7 +28,7 @@
  *  • `supervisor_id` is the authoritative FK → users(id) (added by
  *    `migration_hr_employees_supervisor_fk.sql`). The selected user
  *    must have role='ls_supervisor'.
- *  • There are NO denormalized supervisor name / NIK columns — the
+ *  • There are NO denormalized supervisor name / NPK columns — the
  *    supervisor name is resolved at read time via JOIN against
  *    `users` so it can never drift from the master record. This
  *    gives the Managerial Review stage a robust audit trail: the
@@ -896,14 +898,14 @@ const listVendors = async (req, res) => {
  * Employee forms.
  *
  * Linking the employee to a real user record (rather than free-text
- * NIK / Name) gives the Managerial Review stage a robust audit trail:
+ * NPK / Name) gives the Managerial Review stage a robust audit trail:
  * when the Leader Employee approves attendance, leave or overtime,
  * the Approval is recorded against the same `users.id` that PIC LS
  * picked here.
  *
  * Query params:
  *   • `search` — case-insensitive partial match on either `name` or
- *     `employee_id` (NIK). An empty search returns all active
+ *     `employee_id` (NPK). An empty search returns all active
  *     supervisors ordered by name. The primary search axis is name,
  *     per the product spec.
  *   • `limit`  — soft cap (default 100, max 500) to keep payloads small.

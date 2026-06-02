@@ -79,7 +79,7 @@
                     <input type="checkbox" :checked="allSelectableChecked" :indeterminate.prop="isPartiallyChecked" @change="toggleSelectAll" />
                   </th>
                   <th>Employee</th>
-                  <th>NIK</th>
+                  <th>NPK</th>
                   <th>Date</th>
                   <th>Clock In</th>
                   <th>Clock Out</th>
@@ -122,7 +122,7 @@
                     <div class="font-bold">{{ r.employee_name }}</div>
                     <div class="text-sm text-muted">{{ r.employee_id }}</div>
                   </td>
-                  <td><span class="text-sm font-mono">{{ r.nik || '—' }}</span></td>
+                  <td><span class="text-sm font-mono">{{ r.npk || '—' }}</span></td>
                   <td>
                     <div class="font-bold">{{ formatDate(r.attendance_date) }}</div>
                     <div class="text-sm text-muted">{{ getDayName(r.attendance_date) }}</div>
@@ -185,7 +185,7 @@
               <div class="dl">
                 <div class="dl-row"><span>Name</span><strong>{{ detailModal.record.employee_name }}</strong></div>
                 <div class="dl-row"><span>ID</span><strong>{{ detailModal.record.employee_id }}</strong></div>
-                <div class="dl-row"><span>NIK</span><strong>{{ detailModal.record.nik || '—' }}</strong></div>
+                <div class="dl-row"><span>NPK</span><strong>{{ detailModal.record.npk || '—' }}</strong></div>
               </div>
             </div>
             <div class="detail-section">
@@ -310,7 +310,7 @@ const employeeSheet = reactive({
   user_id: null,
   employee_name: '',
   employee_id: '',
-  nik: null,
+  npk: null,
 });
 const sheetLoading = ref(false);
 const sheetRecords = ref([]);
@@ -341,7 +341,7 @@ const filteredLsMembers = computed(() => {
     list = list.filter(
       (m) =>
         (m.name || '').toLowerCase().includes(q) ||
-        String(m.nik || '').toLowerCase().includes(q) ||
+        String(m.npk || '').toLowerCase().includes(q) ||
         String(m.employee_id || '').toLowerCase().includes(q)
     );
   }
@@ -358,7 +358,7 @@ const selectedLsLabel = computed(() => {
   if (id == null) return '';
   const m = lsMembers.value.find((x) => x.id === id);
   if (!m) return '';
-  return `${m.name} · ${m.nik || '—'}`;
+  return `${m.name} · ${m.npk || '—'}`;
 });
 
 const pendingIdsOnPage = computed(() => records.value.filter((r) => r.status === 'pending').map((r) => r.id));
@@ -505,7 +505,7 @@ const openEmployeeSheet = (emp) => {
   employeeSheet.user_id = emp.user_id;
   employeeSheet.employee_name = emp.employee_name;
   employeeSheet.employee_id = emp.employee_id;
-  employeeSheet.nik = emp.nik;
+  employeeSheet.npk = emp.npk;
   employeeSheet.show = true;
   sheetMonthBounds.start = start;
   sheetMonthBounds.end = end;

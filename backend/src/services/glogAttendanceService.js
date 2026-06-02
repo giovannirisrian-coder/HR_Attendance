@@ -42,16 +42,20 @@ function shiftDurationMinutes(timeIn, timeOut) {
 }
 
 /**
- * Cocokkan NIK ke employees (hanya user LS aktif).
+ * Cocokkan NIK file glog (output Biometric Capture dari mesin Glog) ke
+ * hr_employees (hanya user LS aktif) via kolom NPK — pengidentifikasi
+ * tunggal karyawan setelah refaktor nik → npk. Sistem Berau Coal
+ * memutuskan NPK sebagai standar identitas master, jadi kolom "NIK"
+ * pada file glog dicocokkan ke `hr_employees.npk`.
  */
 async function resolveEmployeeForGlogNik(conn, rawNik) {
   const trimmed = String(rawNik || '').trim();
   if (!trimmed) return { employee: null, reason: 'empty_nik' };
   const [rows] = await conn.query(
-    `SELECT e.id AS employee_id, e.user_id, e.nik
-     FROM employees e
+    `SELECT e.id AS employee_id, e.user_id, e.npk
+     FROM hr_employees e
      INNER JOIN users u ON u.id = e.user_id AND u.role = 'ls' AND u.is_active = 1
-     WHERE e.nik = ? LIMIT 1`,
+     WHERE e.npk = ? LIMIT 1`,
     [trimmed]
   );
   if (rows.length === 0) return { employee: null, reason: 'unmatched_nik' };
@@ -59,18 +63,20 @@ async function resolveEmployeeForGlogNik(conn, rawNik) {
 }
 
 /**
- * Buat user LS + baris employees untuk NIK dari glog yang belum ada di master.
+ * Buat user LS + baris hr_employees untuk identitas dari glog yang belum
+ * ada di master. Identitas tersebut diisi ke kolom `npk` (sumber tunggal
+ * setelah refaktor nik → npk). Email deterministik per identitas; jika
+ * bentrok (sudah ada), kembalikan employee hasil resolve.
+ *
+ * NOTE: hr_employees is the consolidated employee master (LS HR ➜ Employee List
+ * also lives here). Only the minimum fields needed by the attendance / glog
+ * pipeline are populated; LS HR (PIC LS) completes the remaining BAST fields
+ * (vendor, PO, supervisor, etc.) via the Employee List UI.
  */
 async function createPlaceholderLsUserAndEmployee(conn, row) {
   if (!row.nik) return null;
-  const nik = String(row.nik).trim().slice(0, 16);
-  const name =
-    String(row.employee_name || '')
-      .trim()
-      .slice(0, 150) || `Glog Import ${nik}`;
-  // users.employee_id = kode karyawan (VARCHAR), bukan employees.id — pakai NIK agar konsisten di UI
-  const userEmployeeCode = nik.slice(0, 50);
-  const email = `glog_${nik}@import.local`;
+  const name = String(row.employee_name || 'Glog Import').trim().slice(0, 150) || 'Glog Import';
+  const email = `glog_${row.nik}@import.local`;
   const passwordHash = await bcrypt.hash(process.env.PLACEHOLDER_PASSWORD, 10);
   let inTx = false;
   try {
@@ -78,15 +84,19 @@ async function createPlaceholderLsUserAndEmployee(conn, row) {
     inTx = true;
     const [ins] = await conn.query(
       `INSERT INTO users (name, employee_id, email, password, role, vendor_id, supervisor_id, is_active)
-       VALUES (?, ?, ?, ?, 'ls', ${process.env.PLACEHOLDER_VENDOR_ID}, ${process.env.PLACEHOLDER_SUPERVISOR_ID}, 1)`,
-      [name, userEmployeeCode, email, passwordHash]
+       VALUES (?, NULL, ?, ?, 'ls', ${process.env.PLACEHOLDER_VENDOR_ID}, ${process.env.PLACEHOLDER_SUPERVISOR_ID}, 1)`,
+      [name, email, passwordHash]
     );
     const userId = ins.insertId;
-    await conn.query('INSERT INTO employees (user_id, nik) VALUES (?, ?)', [userId, nik]);
+    await conn.query(
+      `INSERT INTO hr_employees (user_id, npk, employee_name, user_status)
+       VALUES (?, ?, ?, 'Active')`,
+      [userId, row.nik, name]
+    );
     await conn.commit();
     inTx = false;
     const [empRows] = await conn.query(
-      'SELECT id AS employee_id, user_id, nik FROM employees WHERE user_id = ? LIMIT 1',
+      'SELECT id AS employee_id, user_id, npk FROM hr_employees WHERE user_id = ? LIMIT 1',
       [userId]
     );
     return empRows[0] || null;
@@ -141,7 +151,13 @@ async function upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnm
     return out;
   }
 
-  const canonicalNik = String(employee.nik || '').trim().slice(0, 16);
+  // Snapshot the resolved master NPK into `attendance.nik` (the per-row
+  // identifier snapshot kept on the attendance table). After refaktor
+  // nik → npk this column stores the NPK value sourced from
+  // hr_employees.npk; the column has been widened to VARCHAR(64) via
+  // `migration_attendance_widen_nik.sql` to accommodate NPK formats
+  // longer than the legacy 16-digit NIK.
+  const canonicalNpk = String(employee.npk || '').trim().slice(0, 64);
 
   const [existing] = await conn.query(
     `SELECT id, status, source_type, is_effective, clock_in_time, clock_out_time
@@ -162,7 +178,7 @@ async function upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnm
          ot_start_time, ot_end_time, ot_summary,
          status, source_type, is_effective
        ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'approved', 'machine', 1)`,
-      [employee.user_id, employee.employee_id, canonicalNik, attendanceDate, clockIn, clockOut]
+      [employee.user_id, employee.employee_id, canonicalNpk, attendanceDate, clockIn, clockOut]
     );
     out.result = 'insert';
     return out;
@@ -189,7 +205,7 @@ async function upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnm
        is_effective = 1,
        updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
-    [employee.employee_id, canonicalNik, clockIn, clockOut, existing[0].id]
+    [employee.employee_id, canonicalNpk, clockIn, clockOut, existing[0].id]
   );
   out.result = 'update';
   return out;

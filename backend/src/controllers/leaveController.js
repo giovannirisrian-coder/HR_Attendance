@@ -241,7 +241,7 @@ const getTeamLeavesEmployeesOverview = async (req, res) => {
     const userParams = [supervisorId, 'ls'];
     if (search) {
       const t = `%${search}%`;
-      userWhere += ' AND (u.name LIKE ? OR u.employee_id LIKE ? OR e.nik LIKE ?)';
+      userWhere += ' AND (u.name LIKE ? OR u.employee_id LIKE ? OR e.npk LIKE ?)';
       userParams.push(t, t, t);
     }
 
@@ -250,7 +250,7 @@ const getTeamLeavesEmployeesOverview = async (req, res) => {
          u.id AS user_id,
          u.name AS employee_name,
          u.employee_id,
-         MAX(e.nik) AS nik,
+         MAX(e.npk) AS npk,
          COUNT(lr.id) AS total,
          SUM(CASE WHEN lr.status = 'pending' THEN 1 ELSE 0 END) AS pending,
          SUM(CASE WHEN lr.status = 'approved' THEN 1 ELSE 0 END) AS approved,
@@ -274,7 +274,7 @@ const getTeamLeavesEmployeesOverview = async (req, res) => {
         user_id: r.user_id,
         employee_name: r.employee_name,
         employee_id: r.employee_id,
-        nik: r.nik || null,
+        npk: r.npk || null,
         total: Number(r.total) || 0,
         pending: Number(r.pending) || 0,
         approved: Number(r.approved) || 0,
@@ -327,7 +327,7 @@ const getTeamLeaves = async (req, res) => {
     if (search && String(search).trim()) {
       const t = `%${String(search).trim()}%`;
       where +=
-        ' AND (u.name LIKE ? OR u.employee_id LIKE ? OR lr.reason LIKE ? OR COALESCE(e.nik, "") LIKE ?)';
+        ' AND (u.name LIKE ? OR u.employee_id LIKE ? OR lr.reason LIKE ? OR COALESCE(e.npk, "") LIKE ?)';
       params.push(t, t, t, t);
     }
     if (status) {
@@ -361,7 +361,7 @@ const getTeamLeaves = async (req, res) => {
     const [rows] = await db.query(
       `SELECT lr.*, u.name AS employee_name, u.employee_id,
               sup.name AS supervisor_name,
-              e.nik AS nik
+              e.npk AS npk
        FROM leave_requests lr
        JOIN users u ON lr.user_id = u.id
        LEFT JOIN users sup ON u.supervisor_id = sup.id

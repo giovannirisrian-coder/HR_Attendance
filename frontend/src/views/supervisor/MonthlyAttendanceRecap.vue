@@ -31,7 +31,7 @@
               <tr>
                 <th style="width:44px;"></th>
                 <th>Employee</th>
-                <th>NIK</th>
+                <th>NPK</th>
                 <th>Clock In Days</th>
                 <th>Attendance Records</th>
                 <th>Approved</th>
@@ -70,7 +70,7 @@
                     <div class="font-bold">{{ row.employee_name }}</div>
                     <div class="text-sm text-muted">{{ row.employee_id || '-' }}</div>
                   </td>
-                  <td><span class="text-sm font-mono">{{ row.nik || '—' }}</span></td>
+                  <td><span class="text-sm font-mono">{{ row.npk || '—' }}</span></td>
                   <td><strong>{{ row.total_clock_in_days }}</strong></td>
                   <td>{{ row.total_attendance_records }}</td>
                   <td><span class="badge badge-approved">{{ row.approved_attendance }}</span></td>
