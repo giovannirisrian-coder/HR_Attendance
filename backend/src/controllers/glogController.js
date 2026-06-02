@@ -5,6 +5,8 @@ const {
   upsertAttendanceFromGlogDailyRow,
   tallyUpsertStats,
 } = require('../services/glogAttendanceService');
+/** Hanya sinkron ke attendance jika NIK/NPK sudah ada di hr_employees (tanpa auto-create). */
+const GLOG_UPSERT_OPTS = { createEmployeeIfUnmatched: false };
 
 const storage = multer.memoryStorage();
 const upload = multer({
@@ -241,6 +243,7 @@ async function getDailyRowsChunk(conn, batchId, lastId, limit) {
  * - UPDATE clock_in_time / clock_out_time + employee_id + nik kanonik hanya jika status = pending.
  * - Lewati jika sudah approved/rejected (jaga alur persetujuan).
  * - Lewati update jika pending sudah sama dengan glog (nik+tanggal+t jam sama).
+ * - Lewati jika NIK/NPK tidak ada di hr_employees (tidak dibuat placeholder).
  * Geo & lembur (OT) tidak diubah pada UPDATE (tetap seperti data aplikasi).
  */
 async function syncGlogDailyToAttendance(conn, batchId) {
@@ -258,7 +261,7 @@ async function syncGlogDailyToAttendance(conn, batchId) {
     const rows = await getDailyRowsChunk(conn, batchId, lastId, PROCESS_JOB_CHUNK_SIZE);
     if (rows.length === 0) break;
     for (const row of rows) {
-      const r = await upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnmatched: false });
+      const r = await upsertAttendanceFromGlogDailyRow(conn, row, GLOG_UPSERT_OPTS);
       tallyUpsertStats(stats, r);
       lastId = row.id;
     }
@@ -269,7 +272,7 @@ async function syncGlogDailyToAttendance(conn, batchId) {
 
 /**
  * Patch / update attendance dari glog_import_daily: sama seperti sinkron, tetapi
- * jika NIK belum ada di master → buat user LS + hr_employees placeholder lalu insert attendance.
+ * NIK/NPK yang tidak ada di hr_employees diabaikan (tidak disinkronkan).
  */
 async function patchGlogDailyToAttendance(conn, batchId) {
   const stats = {
@@ -279,7 +282,6 @@ async function patchGlogDailyToAttendance(conn, batchId) {
     attendance_skipped_unmatched_nik: 0,
     attendance_skipped_invalid_time: 0,
     attendance_skipped_duplicate_noop: 0,
-    employee_placeholder_created: 0,
   };
 
   let lastId = 0;
@@ -287,7 +289,7 @@ async function patchGlogDailyToAttendance(conn, batchId) {
     const rows = await getDailyRowsChunk(conn, batchId, lastId, PROCESS_JOB_CHUNK_SIZE);
     if (rows.length === 0) break;
     for (const row of rows) {
-      const r = await upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnmatched: true });
+      const r = await upsertAttendanceFromGlogDailyRow(conn, row, GLOG_UPSERT_OPTS);
       tallyUpsertStats(stats, r);
       lastId = row.id;
     }
@@ -304,7 +306,6 @@ async function runPatchAttendanceInternal(conn, batchId, onProgress) {
     attendance_skipped_unmatched_nik: 0,
     attendance_skipped_invalid_time: 0,
     attendance_skipped_duplicate_noop: 0,
-    employee_placeholder_created: 0,
   };
 
   const [[{ total }]] = await conn.query(
@@ -320,7 +321,7 @@ async function runPatchAttendanceInternal(conn, batchId, onProgress) {
     const rows = await getDailyRowsChunk(conn, batchId, lastId, PROCESS_JOB_CHUNK_SIZE);
     if (rows.length === 0) break;
     for (const row of rows) {
-      const r = await upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnmatched: true });
+      const r = await upsertAttendanceFromGlogDailyRow(conn, row, GLOG_UPSERT_OPTS);
       tallyUpsertStats(stats, r);
       processed += 1;
       lastId = row.id;
@@ -419,7 +420,7 @@ async function runProcessBatchInternal(conn, batchId, onProgress) {
     const rows = await getDailyRowsChunk(conn, batchId, lastId, PROCESS_JOB_CHUNK_SIZE);
     if (rows.length === 0) break;
     for (const row of rows) {
-      const r = await upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnmatched: false });
+      const r = await upsertAttendanceFromGlogDailyRow(conn, row, GLOG_UPSERT_OPTS);
       tallyUpsertStats(stats, r);
       processed += 1;
       lastId = row.id;
@@ -673,7 +674,7 @@ const getProcessJobStatus = async (req, res) => {
   }
 };
 
-/** Patch attendance dari glog_import_daily (NIK + tanggal): insert/update pending; lewati approved; buat user+employee jika NIK baru. */
+/** Patch attendance dari glog_import_daily (NIK + tanggal): insert/update pending; lewati approved; abaikan NIK tanpa hr_employees. */
 const patchAttendanceFromBatch = async (req, res) => {
   const conn = await db.getConnection();
   try {
