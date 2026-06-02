@@ -22,8 +22,20 @@
  *    working unchanged. Rows with no vendor link keep whatever
  *    free-text values HR typed in.
  *
+ * Supervisor reference:
+ *  • `supervisor_id` is the authoritative FK → users(id) (added by
+ *    `migration_hr_employees_supervisor_fk.sql`). The selected user
+ *    must have role='ls_supervisor'.
+ *  • There are NO denormalized supervisor name / NIK columns — the
+ *    supervisor name is resolved at read time via JOIN against
+ *    `users` so it can never drift from the master record. This
+ *    gives the Managerial Review stage a robust audit trail: the
+ *    same `users.id` chosen by PIC LS here is the user that approves
+ *    attendance / leave / overtime downstream.
+ *
  * The end-to-end approval workflow (LS → Supervisor → Vendor → PIC LS →
- * SSU) is unchanged — only the vendor reference is unified.
+ * SSU) is unchanged — only the vendor and supervisor references are
+ * unified into FK lookups.
  */
 
 const db = require('../config/database');
@@ -59,8 +71,6 @@ const TEXT_FIELDS = [
   'position_group',
   'category',
   'site',
-  'supervisor_nik',
-  'supervisor_name',
 ];
 const ENUM_FIELDS = {
   employment_status: ['Permanent', 'Contract'],
@@ -84,14 +94,18 @@ const MAX_LENGTHS = {
   position_group: 150,
   category: 100,
   site: 100,
-  supervisor_nik: 64,
-  supervisor_name: 200,
 };
 
-// Columns selected for every read (list + getById). We JOIN `vendors` so
-// the response always returns the master vendor's current code / name —
-// even when the denormalized `vendor_number` / `vendor_name` snapshots
-// have drifted (e.g. vendor was renamed in the master table).
+// Columns selected for every read (list + getById). We JOIN `vendors`
+// so the response always returns the master vendor's current code /
+// name — even when the denormalized `vendor_number` / `vendor_name`
+// snapshots have drifted (e.g. vendor was renamed in the master table).
+//
+// We also JOIN `users` (aliased `s`) on the supervisor reference so the
+// list / detail payloads expose `supervisor_id` (FK) and the resolved
+// `supervisor_name` from the users master, even though only the ID is
+// stored on hr_employees. This keeps the audit trail tied to the LS
+// Supervisor's user identity that powers the Managerial Review stage.
 const SELECT_COLS = `
   h.id, h.vendor_id,
   COALESCE(v.code, h.vendor_number) AS vendor_number,
@@ -101,11 +115,14 @@ const SELECT_COLS = `
   h.dic_hro, h.cost_center,
   h.npk, h.employee_name, h.email, h.position, h.position_group,
   h.category, h.site,
-  h.supervisor_nik, h.supervisor_name, h.user_status,
+  h.supervisor_id, s.name AS supervisor_name, s.employee_id AS supervisor_employee_id,
+  h.user_status,
   h.created_by, h.updated_by, h.created_at, h.updated_at
 `;
 
-const FROM_JOIN = `FROM hr_employees h LEFT JOIN vendors v ON v.id = h.vendor_id`;
+const FROM_JOIN = `FROM hr_employees h
+  LEFT JOIN vendors v ON v.id = h.vendor_id
+  LEFT JOIN users   s ON s.id = h.supervisor_id`;
 
 const sanitizeText = (raw) => {
   if (raw === undefined || raw === null) return '';
@@ -125,6 +142,25 @@ const parseVendorId = (raw) => {
   const n = Number(raw);
   if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
     return { provided: true, error: 'Field "vendor_id" must be a positive integer or null.' };
+  }
+  return { provided: true, value: n };
+};
+
+/**
+ * Parse a supervisor_id submitted from the client. Same semantics as
+ * parseVendorId — supervisor selection is OPTIONAL so an explicit
+ * null / empty string clears the relationship and a missing field
+ * leaves the existing value untouched on PATCH-style updates.
+ */
+const parseSupervisorId = (raw) => {
+  if (raw === undefined) return { provided: false };
+  if (raw === null || raw === '') return { provided: true, value: null };
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+    return {
+      provided: true,
+      error: 'Field "supervisor_id" must be a positive integer or null.',
+    };
   }
   return { provided: true, value: n };
 };
@@ -179,7 +215,12 @@ const validateBody = (body, opts = {}) => {
     return { ok: false, error: vendorId.error };
   }
 
-  return { ok: true, fields, vendorId };
+  const supervisorId = parseSupervisorId(body.supervisor_id);
+  if (supervisorId.error) {
+    return { ok: false, error: supervisorId.error };
+  }
+
+  return { ok: true, fields, vendorId, supervisorId };
 };
 
 /**
@@ -204,15 +245,52 @@ const resolveVendor = async (vendorId) => {
   }
 };
 
+/**
+ * Resolve a supervisor_id to its master `users` record. The selected
+ * user MUST have role='ls_supervisor' — picking any other role is
+ * rejected so the Managerial Review stage always points at a valid
+ * Leader Employee identity. Returns:
+ *   { ok: true,  user: { id, name, employee_id } | null }   — null = cleared
+ *   { ok: false, status, message }                            — 400 / 500
+ */
+const resolveSupervisor = async (userId) => {
+  if (userId == null) return { ok: true, user: null };
+  try {
+    const [rows] = await db.query(
+      `SELECT id, name, employee_id, role
+         FROM users
+        WHERE id = ?
+        LIMIT 1`,
+      [userId]
+    );
+    if (rows.length === 0) {
+      return { ok: false, status: 400, message: 'Selected supervisor does not exist.' };
+    }
+    if (rows[0].role !== 'ls_supervisor') {
+      return {
+        ok: false,
+        status: 400,
+        message: 'Selected user is not an LS Supervisor.',
+      };
+    }
+    return { ok: true, user: rows[0] };
+  } catch (err) {
+    console.error('Resolve supervisor error:', err);
+    return { ok: false, status: 500, message: 'Server error.' };
+  }
+};
+
 // ── Controller actions ─────────────────────────────────────────────────────
 
 /**
  * GET /api/employees
- * Query params: page, limit, search, supervisor, site, vendor_id, vendor, status.
- *   • `search`     matches employee_name OR npk.
- *   • `supervisor` matches supervisor_name.
- *   • `vendor_id`  exact match on the FK (preferred).
- *   • `vendor`     legacy: matches `vendor_name` (kept for any old query strings).
+ * Query params: page, limit, search, supervisor, supervisor_id, site,
+ *               vendor_id, vendor, status.
+ *   • `search`        matches employee_name OR npk.
+ *   • `supervisor`    matches the joined users.name (LS Supervisor).
+ *   • `supervisor_id` exact match on the FK (preferred).
+ *   • `vendor_id`     exact match on the FK (preferred).
+ *   • `vendor`        legacy: matches `vendor_name` (kept for any old query strings).
  */
 const listEmployees = async (req, res) => {
   try {
@@ -230,6 +308,13 @@ const listEmployees = async (req, res) => {
       vendorIdRaw !== undefined && vendorIdRaw !== '' && Number.isFinite(Number(vendorIdRaw))
         ? Number(vendorIdRaw)
         : null;
+    const supervisorIdRaw = req.query.supervisor_id;
+    const supervisorId =
+      supervisorIdRaw !== undefined &&
+      supervisorIdRaw !== '' &&
+      Number.isFinite(Number(supervisorIdRaw))
+        ? Number(supervisorIdRaw)
+        : null;
 
     let where = 'WHERE 1=1';
     const params = [];
@@ -238,8 +323,11 @@ const listEmployees = async (req, res) => {
       const t = `%${search}%`;
       params.push(t, t);
     }
-    if (supervisor) {
-      where += ' AND h.supervisor_name LIKE ?';
+    if (supervisorId) {
+      where += ' AND h.supervisor_id = ?';
+      params.push(supervisorId);
+    } else if (supervisor) {
+      where += ' AND s.name LIKE ?';
       params.push(`%${supervisor}%`);
     }
     if (site) {
@@ -360,6 +448,54 @@ const listVendors = async (req, res) => {
 };
 
 /**
+ * GET /api/employees/supervisors
+ * Returns the list of LS Supervisors (users.role = 'ls_supervisor')
+ * used by the searchable Supervisor lookup on the Create / Edit
+ * Employee forms.
+ *
+ * Linking the employee to a real user record (rather than free-text
+ * NIK / Name) gives the Managerial Review stage a robust audit trail:
+ * when the Leader Employee approves attendance, leave or overtime,
+ * the Approval is recorded against the same `users.id` that PIC LS
+ * picked here.
+ *
+ * Query params:
+ *   • `search` — case-insensitive partial match on either `name` or
+ *     `employee_id` (NIK). An empty search returns all active
+ *     supervisors ordered by name. The primary search axis is name,
+ *     per the product spec.
+ *   • `limit`  — soft cap (default 100, max 500) to keep payloads small.
+ */
+const listSupervisors = async (req, res) => {
+  try {
+    const search = sanitizeText(req.query.search);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
+
+    let where = `WHERE role = 'ls_supervisor' AND is_active = 1`;
+    const params = [];
+    if (search) {
+      where += ' AND (name LIKE ? OR employee_id LIKE ?)';
+      const t = `%${search}%`;
+      params.push(t, t);
+    }
+
+    const [rows] = await db.query(
+      `SELECT id, name, employee_id, email
+         FROM users
+         ${where}
+         ORDER BY name ASC
+         LIMIT ?`,
+      [...params, limit]
+    );
+
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    console.error('List supervisors lookup error:', err);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
+/**
  * GET /api/employees/:id
  */
 const getEmployeeById = async (req, res) => {
@@ -412,19 +548,30 @@ const createEmployee = async (req, res) => {
       }
     }
 
+    // Supervisor lookup: resolve the LS Supervisor user (role check
+    // enforced inside resolveSupervisor) and store ONLY the FK. The
+    // name is rendered at read time by the JOIN in SELECT_COLS, so no
+    // denormalized copy is kept on hr_employees.
+    let supervisorId = null;
+    if (v.supervisorId && v.supervisorId.provided) {
+      const rs = await resolveSupervisor(v.supervisorId.value);
+      if (!rs.ok) return res.status(rs.status).json({ success: false, message: rs.message });
+      supervisorId = rs.user ? rs.user.id : null;
+    }
+
     const [ins] = await db.query(
       `INSERT INTO hr_employees (
          vendor_id, vendor_number, user_department, department_title, vendor_name,
          employment_status, po_number, po_period_1, po_period_2, dic_hro, cost_center,
          npk, employee_name, email, position, position_group, category, site,
-         supervisor_nik, supervisor_name, user_status, created_by, updated_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         supervisor_id, user_status, created_by, updated_by
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         vendorId,
         f.vendor_number, f.user_department, f.department_title, f.vendor_name,
         f.employment_status, f.po_number, f.po_period_1, f.po_period_2, f.dic_hro, f.cost_center,
         f.npk, f.employee_name, f.email, f.position, f.position_group, f.category, f.site,
-        f.supervisor_nik, f.supervisor_name, f.user_status, createdBy, createdBy,
+        supervisorId, f.user_status, createdBy, createdBy,
       ]
     );
 
@@ -490,6 +637,16 @@ const updateEmployee = async (req, res) => {
       }
     }
 
+    // Supervisor lookup: explicit `supervisor_id: null` clears the FK,
+    // a numeric value is validated against the users master (role must
+    // be `ls_supervisor`). Only the FK is stored — the name is
+    // resolved at read time via JOIN.
+    if (v.supervisorId && v.supervisorId.provided) {
+      const rs = await resolveSupervisor(v.supervisorId.value);
+      if (!rs.ok) return res.status(rs.status).json({ success: false, message: rs.message });
+      fields.supervisor_id = rs.user ? rs.user.id : null;
+    }
+
     const keys = Object.keys(fields);
     if (keys.length === 0) {
       return res.status(400).json({
@@ -532,6 +689,7 @@ const updateEmployee = async (req, res) => {
 module.exports = {
   listEmployees,
   listVendors,
+  listSupervisors,
   getEmployeeById,
   createEmployee,
   updateEmployee,

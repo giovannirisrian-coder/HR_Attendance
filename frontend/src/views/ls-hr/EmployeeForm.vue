@@ -135,17 +135,25 @@
     <section class="form-section">
       <div class="form-section-header">
         <h2 class="form-section-title">Supervisor</h2>
-        <p class="form-section-sub">Direct supervisor responsible for daily approval</p>
+        <p class="form-section-sub">
+          Leader Employee (LS Supervisor) responsible for the Managerial Review stage
+        </p>
       </div>
 
       <div class="form-grid">
-        <div class="form-group">
-          <label class="form-label">Supervisor NIK</label>
-          <input v-model="form.supervisor_nik" type="text" class="form-control" />
-        </div>
-        <div class="form-group">
-          <label class="form-label">Supervisor Name</label>
-          <input v-model="form.supervisor_name" type="text" class="form-control" />
+        <div class="form-group form-group--full">
+          <label class="form-label">Supervisor</label>
+          <SupervisorSearchSelect
+            v-model="form.supervisor_id"
+            :initial-supervisor="initialSupervisorOption"
+            @change="onSupervisorSelected"
+          />
+          <p class="text-sm text-muted" style="margin-top: 6px;">
+            Optional. Search by Supervisor Name. Only users with the
+            <strong>LS Supervisor</strong> role appear in the list. The
+            employee record stores the supervisor's user ID so the
+            Managerial Review stage has a robust audit trail.
+          </p>
         </div>
       </div>
     </section>
@@ -169,6 +177,7 @@ import {
   USER_STATUS_OPTIONS,
 } from './mockEmployees';
 import VendorSearchSelect from '../../components/VendorSearchSelect.vue';
+import SupervisorSearchSelect from '../../components/SupervisorSearchSelect.vue';
 
 const props = defineProps({
   initialData: {
@@ -239,6 +248,38 @@ const onVendorSelected = (vendor) => {
   }
 };
 
+/**
+ * Seed the searchable supervisor lookup with the currently-saved user
+ * (if any) so the Edit page shows the supervisor name immediately,
+ * without waiting for the master list fetch to complete. Built from
+ * the JOINed fields the backend already returns on the employee
+ * payload (supervisor_id, supervisor_name, supervisor_employee_id).
+ */
+const initialSupervisorOption = computed(() => {
+  if (!props.initialData || props.initialData.supervisor_id == null) return null;
+  return {
+    id: props.initialData.supervisor_id,
+    name: props.initialData.supervisor_name || '',
+    employee_id: props.initialData.supervisor_employee_id || '',
+  };
+});
+
+/**
+ * Picking a supervisor only needs to update the read-only display
+ * mirror so the form (and any "you selected X" UX) stays in sync. The
+ * authoritative value sent to the backend is `supervisor_id` — the
+ * name is resolved from the users master at read time.
+ */
+const onSupervisorSelected = (supervisor) => {
+  if (supervisor) {
+    form.supervisor_name = supervisor.name || '';
+    form.supervisor_employee_id = supervisor.employee_id || '';
+  } else {
+    form.supervisor_name = '';
+    form.supervisor_employee_id = '';
+  }
+};
+
 const onSubmit = () => {
   if (props.submitting) return;
   emit('submit', { ...form });
@@ -292,6 +333,9 @@ const onCancel = () => {
 
 .form-group {
   margin-bottom: 0;
+}
+.form-group--full {
+  grid-column: 1 / -1;
 }
 
 .status-hint {

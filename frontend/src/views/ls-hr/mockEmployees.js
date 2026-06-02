@@ -27,7 +27,14 @@ export const EMPTY_EMPLOYEE = {
   position_group: '',
   category: '',
   site: '',
-  supervisor_nik: '',
+  // Supervisor is now a FK into the `users` master (role =
+  // 'ls_supervisor'). `supervisor_name` / `supervisor_employee_id`
+  // are read-only display copies populated by the backend JOIN —
+  // they are kept on the form model so the searchable lookup can
+  // pre-populate the selected user's name on the Edit page without
+  // an extra round-trip.
+  supervisor_id: null,
   supervisor_name: '',
+  supervisor_employee_id: '',
   user_status: 'Active',
 };

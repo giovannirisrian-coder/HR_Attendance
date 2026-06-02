@@ -8,6 +8,7 @@ const router = express.Router();
 const {
   listEmployees,
   listVendors,
+  listSupervisors,
   getEmployeeById,
   createEmployee,
   updateEmployee,
@@ -16,9 +17,10 @@ const { authenticate, authorize } = require('../middleware/auth');
 
 router.use(authenticate, authorize('ls_hr'));
 
-// Vendor master lookup must be declared BEFORE the `/:id` route so
-// `/vendors` is not mistakenly parsed as an employee id.
+// Master lookups must be declared BEFORE the `/:id` route so the
+// static path segments are not mistakenly parsed as an employee id.
 router.get('/vendors', listVendors);
+router.get('/supervisors', listSupervisors);
 
 router.get('/', listEmployees);
 router.get('/:id', getEmployeeById);

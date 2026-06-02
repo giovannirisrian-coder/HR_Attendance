@@ -222,7 +222,7 @@ async function resolveEmployeeForGlogNik(conn, rawNik) {
  * NOTE: hr_employees is the consolidated employee master (LS HR ➜ Employee List
  * also lives here). Only the minimum fields needed by the attendance / glog
  * pipeline are populated; LS HR (PIC LS) completes the remaining BAST fields
- * (vendor, PO, supervisor_nik, etc.) via the Employee List UI.
+ * (vendor, PO, supervisor, etc.) via the Employee List UI.
  */
 async function createPlaceholderLsUserAndEmployee(conn, row) {
   if (!row.nik) return null;

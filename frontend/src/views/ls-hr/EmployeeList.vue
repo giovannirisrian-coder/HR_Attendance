@@ -73,8 +73,9 @@
             v-model="filters.supervisor"
             class="form-control"
             placeholder="Supervisor Name…"
-            style="max-width: 200px;"
+            style="max-width: 220px;"
             @input="debouncedFetch"
+            title="Filter by the LS Supervisor's name"
           />
           <select v-model="filters.site" class="form-control" style="max-width: 180px;" @change="resetAndFetch">
             <option value="">All Sites</option>
@@ -117,15 +118,14 @@
               <th>Position Group</th>
               <th>Category</th>
               <th>Site</th>
-              <th>Supervisor NIK</th>
-              <th>Supervisor Name</th>
+              <th>Supervisor</th>
               <th>User Status</th>
               <th class="col-actions">Actions</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="employees.length === 0">
-              <td :colspan="22">
+              <td :colspan="21">
                 <div class="empty-state">
                   <div class="empty-state-icon">👥</div>
                   <h3>No employees found</h3>
@@ -160,8 +160,10 @@
               <td>{{ emp.position_group }}</td>
               <td>{{ emp.category }}</td>
               <td>{{ emp.site }}</td>
-              <td><span class="text-sm font-mono">{{ emp.supervisor_nik }}</span></td>
-              <td>{{ emp.supervisor_name }}</td>
+              <td>
+                <span v-if="emp.supervisor_name">{{ emp.supervisor_name }}</span>
+                <span v-else class="text-muted">—</span>
+              </td>
               <td>
                 <span class="badge" :class="emp.user_status === 'Active' ? 'badge-active' : 'badge-deactive'">
                   {{ emp.user_status }}
@@ -304,7 +306,7 @@ onMounted(fetchData);
 }
 
 .employee-table {
-  min-width: 2620px;
+  min-width: 2500px;
 }
 
 .employee-table thead th,
