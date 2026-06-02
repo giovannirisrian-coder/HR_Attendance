@@ -12,55 +12,49 @@
 
       <div class="form-grid">
         <div class="form-group">
-          <label class="form-label">Vendor Number <span class="required">*</span></label>
-          <input v-model="form.vendor_number" type="text" class="form-control" placeholder="e.g. V-001234" required />
+          <label class="form-label">Vendor Number</label>
+          <input v-model="form.vendor_number" type="text" class="form-control" />
         </div>
         <div class="form-group">
-          <label class="form-label">Vendor Name <span class="required">*</span></label>
-          <input v-model="form.vendor_name" type="text" class="form-control" placeholder="e.g. PT Karya Tambang Sejahtera" required />
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">User Department <span class="required">*</span></label>
-          <input v-model="form.user_department" type="text" class="form-control" placeholder="e.g. Mining Operation" required />
-        </div>
-        <div class="form-group">
-          <label class="form-label">Department Title <span class="required">*</span></label>
-          <input v-model="form.department_title" type="text" class="form-control" placeholder="e.g. Production" required />
+          <label class="form-label">Vendor Name</label>
+          <input v-model="form.vendor_name" type="text" class="form-control" />
         </div>
 
         <div class="form-group">
-          <label class="form-label">PO Number <span class="required">*</span></label>
-          <input v-model="form.po_number" type="text" class="form-control" placeholder="e.g. PO-2026-00112" required />
+          <label class="form-label">User Department</label>
+          <input v-model="form.user_department" type="text" class="form-control" />
         </div>
         <div class="form-group">
-          <label class="form-label">DIC (HRO) <span class="required">*</span></label>
-          <input v-model="form.dic_hro" type="text" class="form-control" placeholder="DIC name from HRO" required />
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">PO Period 1 (Start) <span class="required">*</span></label>
-          <input v-model="form.po_period_1" type="date" class="form-control" required />
-        </div>
-        <div class="form-group">
-          <label class="form-label">PO Period 2 (End) <span class="required">*</span></label>
-          <input
-            v-model="form.po_period_2"
-            type="date"
-            class="form-control"
-            :min="form.po_period_1 || undefined"
-            required
-          />
+          <label class="form-label">Department Title</label>
+          <input v-model="form.department_title" type="text" class="form-control" />
         </div>
 
         <div class="form-group">
-          <label class="form-label">Cost Center <span class="required">*</span></label>
-          <input v-model="form.cost_center" type="text" class="form-control" placeholder="e.g. CC-3001" required />
+          <label class="form-label">PO Number</label>
+          <input v-model="form.po_number" type="text" class="form-control" />
         </div>
         <div class="form-group">
-          <label class="form-label">Employment Status <span class="required">*</span></label>
-          <select v-model="form.employment_status" class="form-control" required>
-            <option value="">— Select Employment Status —</option>
+          <label class="form-label">DIC (HRO)</label>
+          <input v-model="form.dic_hro" type="text" class="form-control" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">PO Period 1</label>
+          <input v-model="form.po_period_1" type="text" class="form-control" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">PO Period 2</label>
+          <input v-model="form.po_period_2" type="text" class="form-control" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Cost Center</label>
+          <input v-model="form.cost_center" type="text" class="form-control" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Employment Status</label>
+          <select v-model="form.employment_status" class="form-control">
+            <option value=""></option>
             <option v-for="o in employmentStatusOptions" :key="o" :value="o">{{ o }}</option>
           </select>
         </div>
@@ -76,42 +70,42 @@
 
       <div class="form-grid">
         <div class="form-group">
-          <label class="form-label">Employee ID (NPK) <span class="required">*</span></label>
-          <input v-model="form.npk" type="text" class="form-control" placeholder="e.g. NPK-100245" required />
+          <label class="form-label">Employee ID (NPK)</label>
+          <input v-model="form.npk" type="text" class="form-control" />
         </div>
         <div class="form-group">
-          <label class="form-label">Employee Name <span class="required">*</span></label>
-          <input v-model="form.employee_name" type="text" class="form-control" placeholder="Full legal name" required />
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">Position <span class="required">*</span></label>
-          <input v-model="form.position" type="text" class="form-control" placeholder="e.g. Heavy Equipment Operator" required />
-        </div>
-        <div class="form-group">
-          <label class="form-label">Position Group <span class="required">*</span></label>
-          <input v-model="form.position_group" type="text" class="form-control" placeholder="e.g. Operator, Staff, Supervisor" required />
+          <label class="form-label">Employee Name</label>
+          <input v-model="form.employee_name" type="text" class="form-control" />
         </div>
 
         <div class="form-group">
-          <label class="form-label">Category <span class="required">*</span></label>
-          <input v-model="form.category" type="text" class="form-control" placeholder="e.g. Field, Workshop, Office" required />
+          <label class="form-label">Position</label>
+          <input v-model="form.position" type="text" class="form-control" />
         </div>
         <div class="form-group">
-          <label class="form-label">Site <span class="required">*</span></label>
-          <input v-model="form.site" type="text" class="form-control" placeholder="e.g. Lati, Sambarata, Binungan" required />
+          <label class="form-label">Position Group</label>
+          <input v-model="form.position_group" type="text" class="form-control" />
         </div>
 
         <div class="form-group">
-          <label class="form-label">User Status <span class="required">*</span></label>
-          <select v-model="form.user_status" class="form-control" required>
+          <label class="form-label">Category</label>
+          <input v-model="form.category" type="text" class="form-control" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Site</label>
+          <input v-model="form.site" type="text" class="form-control" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">User Status</label>
+          <select v-model="form.user_status" class="form-control">
             <option v-for="o in userStatusOptions" :key="o" :value="o">{{ o }}</option>
           </select>
           <p class="text-sm text-muted" style="margin-top: 6px;">
             <span v-if="form.user_status === 'Active'" class="status-hint status-hint--active">
               The user can be referenced in attendance and BAST checks.
             </span>
-            <span v-else class="status-hint status-hint--deactive">
+            <span v-else-if="form.user_status === 'Deactive'" class="status-hint status-hint--deactive">
               The user is excluded from active attendance flows.
             </span>
           </p>
@@ -128,12 +122,12 @@
 
       <div class="form-grid">
         <div class="form-group">
-          <label class="form-label">Supervisor NIK <span class="required">*</span></label>
-          <input v-model="form.supervisor_nik" type="text" class="form-control" placeholder="e.g. 880123" required />
+          <label class="form-label">Supervisor NIK</label>
+          <input v-model="form.supervisor_nik" type="text" class="form-control" />
         </div>
         <div class="form-group">
-          <label class="form-label">Supervisor Name <span class="required">*</span></label>
-          <input v-model="form.supervisor_name" type="text" class="form-control" placeholder="Supervisor full name" required />
+          <label class="form-label">Supervisor Name</label>
+          <input v-model="form.supervisor_name" type="text" class="form-control" />
         </div>
       </div>
     </section>
@@ -247,11 +241,6 @@ const onCancel = () => {
 
 .form-group {
   margin-bottom: 0;
-}
-
-.required {
-  color: var(--bc-rejected);
-  margin-left: 2px;
 }
 
 .status-hint {

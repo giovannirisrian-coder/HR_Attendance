@@ -8,15 +8,26 @@
  */
 
 const db = require('../config/database');
-const { normalizeCalendarYmdFromBody, compareYmd } = require('../utils/calendarDate');
 
 // ── Field whitelisting / validation helpers ────────────────────────────────
+//
+// LS HR (PIC LS) needs flexibility to capture personnel data that may still
+// be incomplete at the time of initial registration, so every field below is
+// OPTIONAL. The only validation we still apply is:
+//   1. Max length per column (protects against accidental oversize payloads).
+//   2. Enum value membership (when an enum field is provided as non-empty).
+//
+// PO Period 1 / PO Period 2 are intentionally treated as free-text strings
+// (see migration_hr_employees_optional_fields.sql) so HR can enter wording
+// like "Jan 2026 - Dec 2026" instead of being forced into a calendar picker.
 const TEXT_FIELDS = [
   'vendor_number',
   'user_department',
   'department_title',
   'vendor_name',
   'po_number',
+  'po_period_1',
+  'po_period_2',
   'dic_hro',
   'cost_center',
   'npk',
@@ -28,7 +39,6 @@ const TEXT_FIELDS = [
   'supervisor_nik',
   'supervisor_name',
 ];
-const DATE_FIELDS = ['po_period_1', 'po_period_2'];
 const ENUM_FIELDS = {
   employment_status: ['Permanent', 'Contract'],
   user_status: ['Active', 'Deactive'],
@@ -40,6 +50,8 @@ const MAX_LENGTHS = {
   department_title: 150,
   vendor_name: 200,
   po_number: 64,
+  po_period_1: 100,
+  po_period_2: 100,
   dic_hro: 150,
   cost_center: 64,
   npk: 64,
@@ -68,41 +80,39 @@ const sanitizeText = (raw) => {
 /**
  * Validate + normalize a request body into a column => value map.
  *
+ * All fields are OPTIONAL. Empty / missing values are coerced to `null` so
+ * that nullable columns receive NULL rather than an empty string. Enum fields
+ * are only validated when a non-empty value is provided.
+ *
  * @param {object} body
- * @param {{ partial?: boolean }} [opts] — when partial=true, missing fields are
- *   simply omitted from the output (used on PUT / partial update).
- * @returns {{ ok: boolean, fields?: Record<string, string|number>, error?: string }}
+ * @param {{ partial?: boolean }} [opts] — when partial=true, fields that are
+ *   completely absent from `body` are omitted from the result (PATCH-style).
+ *   When partial=false (POST), every column is included so the INSERT covers
+ *   the full row.
+ * @returns {{ ok: boolean, fields?: Record<string, string|null>, error?: string }}
  */
 const validateBody = (body, opts = {}) => {
   const partial = !!opts.partial;
   const fields = {};
 
   for (const f of TEXT_FIELDS) {
-    if (body[f] === undefined && partial) continue;
+    if (partial && body[f] === undefined) continue;
     const v = sanitizeText(body[f]);
-    if (!v) return { ok: false, error: `Field "${f}" is required.` };
     if (v.length > MAX_LENGTHS[f]) {
       return { ok: false, error: `Field "${f}" is too long (max ${MAX_LENGTHS[f]} chars).` };
     }
-    fields[f] = v;
-  }
-
-  for (const f of DATE_FIELDS) {
-    if (body[f] === undefined && partial) continue;
-    const norm = normalizeCalendarYmdFromBody(body[f]);
-    if (!norm.ok) return { ok: false, error: `Field "${f}": ${norm.error}` };
-    fields[f] = norm.ymd;
-  }
-
-  if (fields.po_period_1 && fields.po_period_2) {
-    if (compareYmd(fields.po_period_1, fields.po_period_2) > 0) {
-      return { ok: false, error: 'PO Period 2 must be on or after PO Period 1.' };
-    }
+    fields[f] = v === '' ? null : v;
   }
 
   for (const [f, allowed] of Object.entries(ENUM_FIELDS)) {
-    if (body[f] === undefined && partial) continue;
+    if (partial && body[f] === undefined) continue;
     const v = sanitizeText(body[f]);
+    if (v === '') {
+      // `user_status` is NOT NULL (DEFAULT 'Active') in the schema, so an
+      // empty value is coerced to the default instead of stored as NULL.
+      fields[f] = f === 'user_status' ? 'Active' : null;
+      continue;
+    }
     if (!allowed.includes(v)) {
       return {
         ok: false,
@@ -304,7 +314,7 @@ const updateEmployee = async (req, res) => {
     }
 
     const [existingRows] = await db.query(
-      `SELECT id, po_period_1, po_period_2 FROM hr_employees WHERE id = ? LIMIT 1`,
+      `SELECT id FROM hr_employees WHERE id = ? LIMIT 1`,
       [id]
     );
     if (existingRows.length === 0) {
@@ -317,17 +327,6 @@ const updateEmployee = async (req, res) => {
     }
 
     const fields = { ...v.fields };
-
-    // Cross-field validation when only one date side is supplied.
-    const existing = existingRows[0];
-    const finalP1 = fields.po_period_1 ?? existing.po_period_1;
-    const finalP2 = fields.po_period_2 ?? existing.po_period_2;
-    if (finalP1 && finalP2 && compareYmd(finalP1, finalP2) > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'PO Period 2 must be on or after PO Period 1.',
-      });
-    }
 
     const keys = Object.keys(fields);
     if (keys.length === 0) {

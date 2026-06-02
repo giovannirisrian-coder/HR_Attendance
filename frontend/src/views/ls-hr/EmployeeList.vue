@@ -140,8 +140,8 @@
               <td class="font-bold">{{ emp.vendor_name }}</td>
               <td>{{ emp.employment_status }}</td>
               <td><span class="text-sm font-mono">{{ emp.po_number }}</span></td>
-              <td class="text-sm">{{ formatDate(emp.po_period_1) }}</td>
-              <td class="text-sm">{{ formatDate(emp.po_period_2) }}</td>
+              <td class="text-sm">{{ emp.po_period_1 || '—' }}</td>
+              <td class="text-sm">{{ emp.po_period_2 || '—' }}</td>
               <td>{{ emp.dic_hro }}</td>
               <td><span class="text-sm font-mono">{{ emp.cost_center }}</span></td>
               <td><span class="text-sm font-mono">{{ emp.npk }}</span></td>
@@ -281,17 +281,6 @@ const resetFilters = () => {
 
 const goEdit = (id) => {
   router.push(`/ls-hr/employees/${id}/edit`);
-};
-
-const formatDate = (d) => {
-  if (!d) return '—';
-  const s = String(d).slice(0, 10);
-  const [y, m, day] = s.split('-');
-  if (!y || !m || !day) return s;
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const mi = parseInt(m, 10) - 1;
-  if (mi < 0 || mi > 11) return s;
-  return `${parseInt(day, 10).toString().padStart(2, '0')} ${months[mi]} ${y}`;
 };
 
 onMounted(fetchData);
