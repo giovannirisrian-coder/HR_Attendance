@@ -2,8 +2,6 @@ const crypto = require('crypto');
 const multer = require('multer');
 const db = require('../config/database');
 const {
-  toSqlDate,
-  toSqlTime,
   upsertAttendanceFromGlogDailyRow,
   tallyUpsertStats,
 } = require('../services/glogAttendanceService');
