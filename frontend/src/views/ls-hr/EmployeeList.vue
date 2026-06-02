@@ -73,16 +73,17 @@
             v-model="filters.supervisor"
             class="form-control"
             placeholder="Supervisor Name…"
-            style="max-width: 200px;"
+            style="max-width: 220px;"
             @input="debouncedFetch"
+            title="Filter by the LS Supervisor's name"
           />
           <select v-model="filters.site" class="form-control" style="max-width: 180px;" @change="resetAndFetch">
             <option value="">All Sites</option>
             <option v-for="s in siteOptions" :key="s" :value="s">{{ s }}</option>
           </select>
-          <select v-model="filters.vendor" class="form-control" style="max-width: 220px;" @change="resetAndFetch">
+          <select v-model="filters.vendor_id" class="form-control" style="max-width: 240px;" @change="resetAndFetch">
             <option value="">All Vendors</option>
-            <option v-for="v in vendorOptions" :key="v" :value="v">{{ v }}</option>
+            <option v-for="v in vendorOptions" :key="v.id" :value="v.id">{{ v.name }} ({{ v.code }})</option>
           </select>
           <select v-model="filters.status" class="form-control" style="max-width: 160px;" @change="resetAndFetch">
             <option value="">All Status</option>
@@ -112,19 +113,20 @@
               <th>Cost Center</th>
               <th>Employee ID (NPK)</th>
               <th>Employee Name</th>
+              <th class="col-email">Email</th>
               <th>Position</th>
               <th>Position Group</th>
               <th>Category</th>
+              <th>Group</th>
               <th>Site</th>
-              <th>Supervisor NIK</th>
-              <th>Supervisor Name</th>
+              <th>Supervisor</th>
               <th>User Status</th>
               <th class="col-actions">Actions</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="employees.length === 0">
-              <td :colspan="21">
+              <td :colspan="22">
                 <div class="empty-state">
                   <div class="empty-state-icon">👥</div>
                   <h3>No employees found</h3>
@@ -140,18 +142,33 @@
               <td class="font-bold">{{ emp.vendor_name }}</td>
               <td>{{ emp.employment_status }}</td>
               <td><span class="text-sm font-mono">{{ emp.po_number }}</span></td>
-              <td class="text-sm">{{ formatDate(emp.po_period_1) }}</td>
-              <td class="text-sm">{{ formatDate(emp.po_period_2) }}</td>
+              <td class="text-sm">{{ emp.po_period_1 || '—' }}</td>
+              <td class="text-sm">{{ emp.po_period_2 || '—' }}</td>
               <td>{{ emp.dic_hro }}</td>
               <td><span class="text-sm font-mono">{{ emp.cost_center }}</span></td>
               <td><span class="text-sm font-mono">{{ emp.npk }}</span></td>
               <td class="font-bold">{{ emp.employee_name }}</td>
+              <td class="col-email">
+                <a
+                  v-if="emp.email"
+                  :href="`mailto:${emp.email}`"
+                  class="email-link"
+                  :title="emp.email"
+                >{{ emp.email }}</a>
+                <span v-else class="text-muted">—</span>
+              </td>
               <td>{{ emp.position }}</td>
               <td>{{ emp.position_group }}</td>
               <td>{{ emp.category }}</td>
+              <td>
+                <span v-if="emp.employee_group" class="badge badge-group">{{ emp.employee_group }}</span>
+                <span v-else class="text-muted">—</span>
+              </td>
               <td>{{ emp.site }}</td>
-              <td><span class="text-sm font-mono">{{ emp.supervisor_nik }}</span></td>
-              <td>{{ emp.supervisor_name }}</td>
+              <td>
+                <span v-if="emp.supervisor_name">{{ emp.supervisor_name }}</span>
+                <span v-else class="text-muted">—</span>
+              </td>
               <td>
                 <span class="badge" :class="emp.user_status === 'Active' ? 'badge-active' : 'badge-deactive'">
                   {{ emp.user_status }}
@@ -211,7 +228,7 @@ const filters = reactive({
   search: '',
   supervisor: '',
   site: '',
-  vendor: '',
+  vendor_id: '',
   status: '',
 });
 
@@ -243,7 +260,7 @@ const fetchData = async () => {
     if (filters.search.trim()) params.search = filters.search.trim();
     if (filters.supervisor.trim()) params.supervisor = filters.supervisor.trim();
     if (filters.site) params.site = filters.site;
-    if (filters.vendor) params.vendor = filters.vendor;
+    if (filters.vendor_id) params.vendor_id = filters.vendor_id;
     if (filters.status) params.status = filters.status;
 
     const { data } = await api.get('/employees', { params });
@@ -273,7 +290,7 @@ const resetFilters = () => {
   filters.search = '';
   filters.supervisor = '';
   filters.site = '';
-  filters.vendor = '';
+  filters.vendor_id = '';
   filters.status = '';
   pagination.page = 1;
   fetchData();
@@ -281,17 +298,6 @@ const resetFilters = () => {
 
 const goEdit = (id) => {
   router.push(`/ls-hr/employees/${id}/edit`);
-};
-
-const formatDate = (d) => {
-  if (!d) return '—';
-  const s = String(d).slice(0, 10);
-  const [y, m, day] = s.split('-');
-  if (!y || !m || !day) return s;
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const mi = parseInt(m, 10) - 1;
-  if (mi < 0 || mi > 11) return s;
-  return `${parseInt(day, 10).toString().padStart(2, '0')} ${months[mi]} ${y}`;
 };
 
 onMounted(fetchData);
@@ -305,7 +311,7 @@ onMounted(fetchData);
 }
 
 .employee-table {
-  min-width: 2400px;
+  min-width: 2500px;
 }
 
 .employee-table thead th,
@@ -321,6 +327,28 @@ onMounted(fetchData);
 .col-actions {
   width: 90px;
   text-align: center;
+}
+
+.col-email {
+  width: 220px;
+  max-width: 220px;
+}
+
+.col-email .email-link {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+  color: var(--bc-green-700);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.col-email .email-link:hover {
+  text-decoration: underline;
+  color: var(--bc-green-500);
 }
 
 .font-mono {
@@ -369,5 +397,15 @@ onMounted(fetchData);
 }
 .badge-deactive::before {
   background: #ef4444;
+}
+
+.badge-group {
+  background: var(--bc-green-50, #ecfdf5);
+  color: var(--bc-green-700, #047857);
+  font-family: 'JetBrains Mono', 'Fira Code', Consolas, 'Courier New', monospace;
+  letter-spacing: 0.04em;
+}
+.badge-group::before {
+  background: var(--bc-green-500, #22994a);
 }
 </style>

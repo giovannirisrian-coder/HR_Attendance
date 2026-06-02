@@ -15,7 +15,7 @@ const login = async (req, res) => {
       `SELECT u.*, v.name AS vendor_name, v.code AS vendor_code, e.nik AS nik
        FROM users u
        LEFT JOIN vendors v  ON u.vendor_id = v.id
-       LEFT JOIN employees e ON e.user_id  = u.id
+       LEFT JOIN hr_employees e ON e.user_id = u.id
        WHERE u.email = ? AND u.is_active = 1`,
       [email]
     );
@@ -74,7 +74,7 @@ const getProfile = async (req, res) => {
               e.nik  AS nik
        FROM users u
        LEFT JOIN vendors  v ON u.vendor_id = v.id
-       LEFT JOIN employees e ON e.user_id  = u.id
+       LEFT JOIN hr_employees e ON e.user_id = u.id
        WHERE u.id = ?`,
       [req.user.id]
     );

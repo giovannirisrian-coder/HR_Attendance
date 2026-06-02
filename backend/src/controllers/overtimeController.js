@@ -134,7 +134,7 @@ const createOvertime = async (req, res) => {
       `SELECT ${OVERTIME_LIST_SELECT}
        FROM overtime_requests o
        JOIN users u ON o.user_id = u.id
-       LEFT JOIN employees e ON e.user_id = u.id
+       LEFT JOIN hr_employees e ON e.user_id = u.id
        WHERE o.id = ?`,
       [ins.insertId]
     );
@@ -178,7 +178,7 @@ const getMyOvertimes = async (req, res) => {
       `SELECT ${OVERTIME_LIST_SELECT}
        FROM overtime_requests o
        JOIN users u ON o.user_id = u.id
-       LEFT JOIN employees e ON e.user_id = u.id
+       LEFT JOIN hr_employees e ON e.user_id = u.id
        ${where}
        ORDER BY o.request_date DESC, o.id DESC
        LIMIT ? OFFSET ?`,
@@ -248,7 +248,7 @@ const getTeamOvertimes = async (req, res) => {
       `SELECT ${OVERTIME_LIST_SELECT}
        FROM overtime_requests o
        JOIN users u ON o.user_id = u.id
-       LEFT JOIN employees e ON e.user_id = u.id
+       LEFT JOIN hr_employees e ON e.user_id = u.id
        ${where}
        ORDER BY o.request_date DESC, o.id DESC
        LIMIT ? OFFSET ?`,
@@ -259,7 +259,7 @@ const getTeamOvertimes = async (req, res) => {
       `SELECT COUNT(*) AS total
        FROM overtime_requests o
        JOIN users u ON o.user_id = u.id
-       LEFT JOIN employees e ON e.user_id = u.id
+       LEFT JOIN hr_employees e ON e.user_id = u.id
        ${where}`,
       params
     );

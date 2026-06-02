@@ -22,7 +22,7 @@
     <div class="card">
       <div class="card-header">
         <span class="card-title">New User Form</span>
-        <span class="text-sm text-muted">All fields marked <span style="color: var(--bc-rejected); font-weight: 700;">*</span> are required</span>
+        <span class="text-sm text-muted">All fields are optional — fill in only the information that is available.</span>
       </div>
       <div class="card-body">
         <EmployeeForm

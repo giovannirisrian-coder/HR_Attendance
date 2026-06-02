@@ -45,16 +45,90 @@ CREATE TABLE IF NOT EXISTS users (
 ) ENGINE=InnoDB;
 
 -- ──────────────────────────────────────────────
--- 2b. EMPLOYEES (master NIK; satu user dapat punya satu profil karyawan)
+-- 2b. HR_EMPLOYEES (consolidated employee master)
+--
+-- Single source of truth for ALL employee data in the system:
+--   • LS HR ➜ Employee List (BAST master fields: vendor, PO, NPK, …)
+--   • Attendance / Leave / Overtime (linked via user_id + nik)
+--
+-- The legacy `employees` table that previously backed
+-- attendance.employee_id has been retired — see
+-- migration_employees_to_hr_employees.sql.
 -- ──────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS employees (
-  id              INT AUTO_INCREMENT PRIMARY KEY,
-  user_id         INT          NOT NULL UNIQUE,
-  nik             VARCHAR(16)  NOT NULL,
-  created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  CONSTRAINT fk_emp_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS hr_employees (
+  id                INT AUTO_INCREMENT PRIMARY KEY,
+
+  -- Attendance linkage (one hr_employees row per LS user)
+  user_id           INT           NULL,
+
+  -- Vendor master reference (PIC LS Vendor Number lookup).
+  -- The two display columns below (vendor_number / vendor_name)
+  -- are kept as denormalized snapshots so legacy consumers and
+  -- analytics that still read those names keep working. When a
+  -- vendor is picked via the lookup, the backend writes
+  -- vendors.code → vendor_number and vendors.name → vendor_name.
+  vendor_id         INT           NULL,
+  nik               VARCHAR(16)   NULL,
+
+  -- Vendor / contract block (all OPTIONAL — HR can complete later)
+  vendor_number     VARCHAR(64)   NULL,
+  user_department   VARCHAR(150)  NULL,
+  department_title  VARCHAR(150)  NULL,
+  vendor_name       VARCHAR(200)  NULL,
+  employment_status ENUM('Permanent','Contract') NULL,
+  po_number         VARCHAR(64)   NULL,
+  po_period_1       VARCHAR(100)  NULL,
+  po_period_2       VARCHAR(100)  NULL,
+  dic_hro           VARCHAR(150)  NULL,
+  cost_center       VARCHAR(64)   NULL,
+
+  -- Personal identity block
+  npk               VARCHAR(64)   NULL,
+  employee_name     VARCHAR(200)  NULL,
+  email             VARCHAR(190)  NULL,
+  position          VARCHAR(150)  NULL,
+  position_group    VARCHAR(150)  NULL,
+  category          VARCHAR(100)  NULL,
+  -- Coarse "Group" classification used by the Automated Analytics
+  -- step to bucket recap rows for audit / payroll reporting. The
+  -- SQL identifier is `employee_group` (not `group`) because
+  -- GROUP is a reserved word in MySQL — the UI still labels it
+  -- "Group". See migration_hr_employees_group.sql.
+  employee_group    ENUM('BC','MTL') NULL,
+  site              VARCHAR(100)  NULL,
+
+  -- Supervisor block
+  -- Authoritative reference to the LS Supervisor (PIC LS) who owns the
+  -- Managerial Review stage of the workflow. Stores the FK into
+  -- users(id) (role = 'ls_supervisor'); the name is resolved at read
+  -- time via JOIN so it can never drift from the master record.
+  supervisor_id     INT           NULL,
+
+  -- Administrative status
+  user_status       ENUM('Active','Deactive') NOT NULL DEFAULT 'Active',
+
+  -- Audit
+  created_by        INT           NULL,
+  updated_by        INT           NULL,
+  created_at        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  UNIQUE KEY uq_hr_employees_user_id (user_id),
+  UNIQUE KEY uq_hr_employees_npk (npk),
+  KEY idx_hr_employees_nik (nik),
+  KEY idx_hr_employees_vendor_id (vendor_id),
+  KEY idx_hr_employees_employee_name (employee_name),
+  KEY idx_hr_employees_vendor_name (vendor_name),
+  KEY idx_hr_employees_supervisor_id (supervisor_id),
+  KEY idx_hr_employees_site (site),
+  KEY idx_hr_employees_user_status (user_status),
+
+  CONSTRAINT fk_hr_employees_user       FOREIGN KEY (user_id)    REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_hr_employees_vendor     FOREIGN KEY (vendor_id)  REFERENCES vendors(id) ON DELETE SET NULL,
+  CONSTRAINT fk_hr_employees_supervisor FOREIGN KEY (supervisor_id) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_hr_employees_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_hr_employees_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ──────────────────────────────────────────────
 -- 3. ATTENDANCE
@@ -84,7 +158,7 @@ CREATE TABLE IF NOT EXISTS attendance (
   updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   KEY idx_att_user_id (user_id),
   CONSTRAINT fk_att_user     FOREIGN KEY (user_id)     REFERENCES users(id) ON DELETE CASCADE,
-  CONSTRAINT fk_att_employee FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_att_employee FOREIGN KEY (employee_id) REFERENCES hr_employees(id) ON DELETE RESTRICT,
   CONSTRAINT fk_att_approver FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
@@ -255,15 +329,26 @@ INSERT IGNORE INTO users (name, employee_id, email, password, role, vendor_id, s
 UPDATE users SET supervisor_id = (SELECT id FROM (SELECT id FROM users WHERE employee_id='SPV001') t) WHERE employee_id IN ('LS001','LS002');
 UPDATE users SET supervisor_id = (SELECT id FROM (SELECT id FROM users WHERE employee_id='SPV002') t) WHERE employee_id = 'LS003';
 
--- Master karyawan (NIK) untuk user LS — wajib sebelum absensi
-INSERT INTO employees (user_id, nik)
+-- Master karyawan (NIK) untuk user LS — wajib sebelum absensi.
+-- Seeded into the consolidated hr_employees table so the row also feeds
+-- the LS HR ➜ Employee List view. Vendor / supervisor metadata is filled
+-- in from the user record so QA / UAT see meaningful BAST defaults.
+INSERT INTO hr_employees (user_id, vendor_id, nik, employee_name, vendor_number, vendor_name, supervisor_id, user_status)
 SELECT u.id,
+  v.id,
   CASE u.employee_id
     WHEN 'LS001' THEN '3173010101010001'
     WHEN 'LS002' THEN '3173020202020002'
     WHEN 'LS003' THEN '3173030303030003'
     ELSE '0000000000000001'
-  END
+  END AS nik,
+  u.name,
+  v.code,
+  v.name,
+  sup.id,
+  IF(u.is_active = 1, 'Active', 'Deactive')
 FROM users u
+LEFT JOIN vendors v ON v.id = u.vendor_id
+LEFT JOIN users sup ON sup.id = u.supervisor_id AND sup.role = 'ls_supervisor'
 WHERE u.role = 'ls'
-  AND NOT EXISTS (SELECT 1 FROM employees e WHERE e.user_id = u.id);
+  AND NOT EXISTS (SELECT 1 FROM hr_employees e WHERE e.user_id = u.id);

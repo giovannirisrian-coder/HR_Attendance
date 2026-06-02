@@ -66,7 +66,7 @@
     <div v-else class="card">
       <div class="card-header">
         <span class="card-title">Edit User Form</span>
-        <span class="text-sm text-muted">All fields marked <span style="color: var(--bc-rejected); font-weight: 700;">*</span> are required</span>
+        <span class="text-sm text-muted">All fields are optional — update only the information that needs to change.</span>
       </div>
       <div class="card-body">
         <EmployeeForm
@@ -101,15 +101,11 @@ const toast = ref('');
 const routeId = computed(() => route.params.id);
 
 /**
- * Server returns DATE columns as plain `YYYY-MM-DD` strings (mysql2 pool is
- * configured with `dateStrings: true`). We defensively slice to 10 chars to
- * make sure the value is always accepted by `<input type="date">` without
- * any UTC midnight drift / off-by-one-day surprises.
+ * `po_period_1` / `po_period_2` are now stored as free-text strings (see
+ * migration_hr_employees_optional_fields.sql). We pass the value through
+ * unchanged so HR can enter any wording (e.g. "Jan 2026 – Dec 2026").
  */
-const sliceYmd = (raw) => {
-  if (!raw) return '';
-  return String(raw).slice(0, 10);
-};
+const toText = (raw) => (raw == null ? '' : String(raw));
 
 const fetchEmployee = async () => {
   loading.value = true;
@@ -124,8 +120,8 @@ const fetchEmployee = async () => {
     }
     employee.value = {
       ...d,
-      po_period_1: sliceYmd(d.po_period_1),
-      po_period_2: sliceYmd(d.po_period_2),
+      po_period_1: toText(d.po_period_1),
+      po_period_2: toText(d.po_period_2),
     };
   } catch (err) {
     if (err?.response?.status === 404) {
@@ -150,8 +146,8 @@ const onSubmit = async (data) => {
     if (updated) {
       employee.value = {
         ...updated,
-        po_period_1: sliceYmd(updated.po_period_1),
-        po_period_2: sliceYmd(updated.po_period_2),
+        po_period_1: toText(updated.po_period_1),
+        po_period_2: toText(updated.po_period_2),
       };
     }
     toast.value = `Changes for "${data.employee_name}" saved successfully.`;

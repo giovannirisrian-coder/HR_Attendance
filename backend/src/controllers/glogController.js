@@ -277,7 +277,7 @@ async function syncGlogDailyToAttendance(conn, batchId) {
 
 /**
  * Patch / update attendance dari glog_import_daily: sama seperti sinkron, tetapi
- * jika NIK belum ada di master → buat user LS + employees placeholder lalu insert attendance.
+ * jika NIK belum ada di master → buat user LS + hr_employees placeholder lalu insert attendance.
  */
 async function patchGlogDailyToAttendance(conn, batchId) {
   const stats = {
