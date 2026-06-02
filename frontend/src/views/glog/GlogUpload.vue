@@ -4,7 +4,7 @@
       <div>
         <h1 class="page-title">Upload Attendance Log</h1>
         <p class="page-subtitle">
-          Unggah file mesin (.csv atau .txt)
+          Unggah file mesin (.csv / .txt) atau sinkron dari database FTM / Fingerspot
         </p>
       </div>
     </div>
@@ -25,7 +25,131 @@
 
     <div class="card" style="margin-bottom:20px;">
       <div class="card-header">
-        <span class="card-title">Unggah & Preview</span>
+        <span class="card-title">Sinkron Database FTM</span>
+      </div>
+      <div class="card-body">
+        <p class="text-sm text-muted" style="margin:0 0 12px;">
+          Ambil tap dari <code>data_access</code> (SQL Server FTM) yang sudah di-join ke <code>employee</code>,
+          agregasi per NIK per hari, lalu sinkron ke <code>attendance</code>. Maks. 31 hari.
+        </p>
+        <div class="ftm-sync-row">
+          <div class="ftm-date-field">
+            <label class="text-sm text-muted" for="ftm-date-from">Dari tanggal</label>
+            <input
+              id="ftm-date-from"
+              v-model="ftmDateFrom"
+              type="date"
+              class="form-control"
+              :disabled="ftmSyncing"
+            />
+          </div>
+          <div class="ftm-date-field">
+            <label class="text-sm text-muted" for="ftm-date-to">Sampai tanggal</label>
+            <input
+              id="ftm-date-to"
+              v-model="ftmDateTo"
+              type="date"
+              class="form-control"
+              :disabled="ftmSyncing"
+            />
+          </div>
+          <label class="ftm-checkbox text-sm">
+            <input v-model="ftmCreateEmployees" type="checkbox" :disabled="ftmSyncing" />
+            Buat karyawan LS baru jika NIK belum ada
+          </label>
+          <button
+            class="btn btn-primary"
+            :disabled="ftmSyncing || !ftmDateFrom || !ftmDateTo"
+            @click="doSyncFtm"
+          >
+            {{ ftmSyncing ? 'On Progress...' : 'Sync FTM' }}
+          </button>
+        </div>
+        <p v-if="ftmMessage" class="alert-inline" :class="ftmOk ? 'ok' : 'err'">{{ ftmMessage }}</p>
+        <div v-if="lastFtmStats" class="batch-summary" style="margin-top:12px;">
+          <div class="text-sm" style="font-weight:700;margin-bottom:6px;">
+            Hasil sinkron FTM ({{ lastFtmStats.date_from }} — {{ lastFtmStats.date_to }})
+          </div>
+          <div>Tap dibaca dari FTM: <strong>{{ lastFtmStats.ftm_tap_rows_read }}</strong></div>
+          <div>Baris agregasi harian: <strong>{{ lastFtmStats.daily_row_count }}</strong></div>
+          <div v-if="lastFtmStats.employee_placeholder_created != null">
+            Karyawan baru dibuat: <strong>{{ lastFtmStats.employee_placeholder_created }}</strong>
+          </div>
+          <div>Data Baru: <strong>{{ lastFtmStats.attendance_inserted }}</strong></div>
+          <div>Data Diupdate: <strong>{{ lastFtmStats.attendance_updated_pending }}</strong></div>
+          <div>Skip — Data Sudah Sama: <strong>{{ lastFtmStats.attendance_skipped_duplicate_noop }}</strong></div>
+          <div>Skip — Data Sudah Disetujui/Ditolak: <strong>{{ lastFtmStats.attendance_skipped_non_pending }}</strong></div>
+          <div>Skip — NIK Tidak Cocok: <strong>{{ lastFtmStats.attendance_skipped_unmatched_nik }}</strong></div>
+          <div>Skip — Tanggal/Jam Tidak Valid: <strong>{{ lastFtmStats.attendance_skipped_invalid_time }}</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-header">
+        <span class="card-title">Sinkron Database Fingerspot</span>
+      </div>
+      <div class="card-body">
+        <p class="text-sm text-muted" style="margin:0 0 12px;">
+          Ambil tap dari tabel <code>att_log</code> (kolom <code>date_scan</code>), agregasi per PIN/NIK per hari,
+          validasi durasi minimal 6 jam, lalu sinkron ke <code>attendance</code>. Mapping PIN → NIK lewat
+          <code>employees.pin</code> / <code>employees.nik</code>.
+        </p>
+        <div class="ftm-sync-row">
+          <div class="ftm-date-field">
+            <label class="text-sm text-muted" for="fs-date-from">Dari tanggal</label>
+            <input
+              id="fs-date-from"
+              v-model="fsDateFrom"
+              type="date"
+              class="form-control"
+              :disabled="fsSyncing"
+            />
+          </div>
+          <div class="ftm-date-field">
+            <label class="text-sm text-muted" for="fs-date-to">Sampai tanggal</label>
+            <input
+              id="fs-date-to"
+              v-model="fsDateTo"
+              type="date"
+              class="form-control"
+              :disabled="fsSyncing"
+            />
+          </div>
+          <label class="ftm-checkbox text-sm">
+            <input v-model="fsCreateEmployees" type="checkbox" :disabled="fsSyncing" />
+            Buat karyawan LS baru jika NIK belum ada
+          </label>
+          <button
+            class="btn btn-primary"
+            :disabled="fsSyncing || !fsDateFrom || !fsDateTo"
+            @click="doSyncFingerspot"
+          >
+            {{ fsSyncing ? 'On Progress...' : 'Sync Fingerspot' }}
+          </button>
+        </div>
+        <p v-if="fsMessage" class="alert-inline" :class="fsOk ? 'ok' : 'err'">{{ fsMessage }}</p>
+        <div v-if="lastFsStats" class="batch-summary" style="margin-top:12px;">
+          <div class="text-sm" style="font-weight:700;margin-bottom:6px;">
+            Hasil sinkron Fingerspot ({{ lastFsStats.date_from }} — {{ lastFsStats.date_to }})
+          </div>
+          <div>Tap dibaca: <strong>{{ lastFsStats.fingerspot_tap_rows_read }}</strong></div>
+          <div>Baris agregasi harian: <strong>{{ lastFsStats.daily_row_count }}</strong></div>
+          <div>Skip — durasi &lt; 6 jam: <strong>{{ lastFsStats.attendance_skipped_short_shift }}</strong></div>
+          <div v-if="lastFsStats.employee_placeholder_created != null">
+            Karyawan baru dibuat: <strong>{{ lastFsStats.employee_placeholder_created }}</strong>
+          </div>
+          <div>Data Baru: <strong>{{ lastFsStats.attendance_inserted }}</strong></div>
+          <div>Data Diupdate: <strong>{{ lastFsStats.attendance_updated_pending }}</strong></div>
+          <div>Skip — Data Sudah Sama: <strong>{{ lastFsStats.attendance_skipped_duplicate_noop }}</strong></div>
+          <div>Skip — NIK Tidak Cocok: <strong>{{ lastFsStats.attendance_skipped_unmatched_nik }}</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-header">
+        <span class="card-title">Unggah File & Preview</span>
       </div>
       <div class="card-body">
         <div class="upload-row">
@@ -171,7 +295,29 @@ const lastProcessStats = ref(null);
 const lastPatchStats = ref(null);
 const dailyRows = ref([]);
 const stagingErrors = ref([]);
+const ftmSyncing = ref(false);
+const ftmDateFrom = ref(todayIso());
+const ftmDateTo = ref(todayIso());
+const ftmCreateEmployees = ref(false);
+const lastFtmStats = ref(null);
+const ftmMessage = ref('');
+const ftmOk = ref(false);
+const fsSyncing = ref(false);
+const fsDateFrom = ref(todayIso());
+const fsDateTo = ref(todayIso());
+const fsCreateEmployees = ref(false);
+const lastFsStats = ref(null);
+const fsMessage = ref('');
+const fsOk = ref(false);
 let processPollTimer = null;
+
+function todayIso() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
 function onFile(e) {
   const f = e.target.files && e.target.files[0];
@@ -253,10 +399,33 @@ function clearProcessPollTimer() {
   }
 }
 
+function jobKindLabel(kind) {
+  if (kind === 'patch') return 'Submit attendance';
+  if (kind === 'ftm') return 'Sync FTM';
+  if (kind === 'fingerspot') return 'Sync Fingerspot';
+  return 'Proses';
+}
+
+function setJobFeedback(kind, ok, message) {
+  if (kind === 'ftm') {
+    ftmOk.value = ok;
+    ftmMessage.value = message;
+    return;
+  }
+  if (kind === 'fingerspot') {
+    fsOk.value = ok;
+    fsMessage.value = message;
+    return;
+  }
+  uploadOk.value = ok;
+  uploadMessage.value = message;
+}
+
 async function pollProcessJob(jobId, batchId, kind = 'process') {
   clearProcessPollTimer();
   const maxWaitMs = 20 * 60 * 1000;
   const startedAt = Date.now();
+  const label = jobKindLabel(kind);
 
   const tick = async () => {
     const { data } = await api.get(`/glog/jobs/${jobId}`, { timeout: 10000 });
@@ -268,37 +437,43 @@ async function pollProcessJob(jobId, batchId, kind = 'process') {
     const percent = Number(p.percent || 0);
 
     if (job.status === 'done') {
-      uploadOk.value = true;
       if (kind === 'patch') {
-        uploadMessage.value = 'Submit attendance selesai.';
+        setJobFeedback(kind, true, 'Submit attendance selesai.');
         lastPatchStats.value = job.result || null;
+      } else if (kind === 'ftm') {
+        setJobFeedback(kind, true, 'Sync FTM selesai.');
+        lastFtmStats.value = job.result || null;
+      } else if (kind === 'fingerspot') {
+        setJobFeedback(kind, true, 'Sync Fingerspot selesai.');
+        lastFsStats.value = job.result || null;
       } else {
-        uploadMessage.value = 'Proses selesai.';
+        setJobFeedback(kind, true, 'Proses selesai.');
         lastProcessStats.value = job.result || null;
         lastPatchStats.value = null;
       }
-      await loadBatchDetail(batchId);
+      if (batchId) await loadBatchDetail(batchId);
       clearProcessPollTimer();
       return;
     }
 
     if (job.status === 'error') {
-      uploadOk.value = false;
-      uploadMessage.value =
-        job.error || (kind === 'patch' ? 'Submit attendance gagal.' : 'Proses gagal.');
+      setJobFeedback(kind, false, job.error || `${label} gagal.`);
       clearProcessPollTimer();
       return;
     }
 
-    uploadOk.value = true;
-    uploadMessage.value =
+    const progressMsg =
       total > 0
-        ? `${kind === 'patch' ? 'Submit attendance' : 'Proses'} berjalan: ${processed}/${total} (${percent}%).`
-        : `${kind === 'patch' ? 'Submit attendance' : 'Proses'} berjalan (${job.status}).`;
+        ? `${label} berjalan: ${processed}/${total} (${percent}%).`
+        : `${label} berjalan (${job.status}).`;
+    setJobFeedback(kind, true, progressMsg);
 
     if (Date.now() - startedAt >= maxWaitMs) {
-      uploadOk.value = false;
-      uploadMessage.value = 'Waktu tunggu status proses habis. Silakan cek kembali beberapa saat lagi.';
+      setJobFeedback(
+        kind,
+        false,
+        'Waktu tunggu status proses habis. Silakan cek kembali beberapa saat lagi.'
+      );
       clearProcessPollTimer();
       return;
     }
@@ -306,14 +481,93 @@ async function pollProcessJob(jobId, batchId, kind = 'process') {
       try {
         await tick();
       } catch (err) {
-        uploadOk.value = false;
-        uploadMessage.value = err.response?.data?.message || err.message || 'Gagal memantau proses.';
+        setJobFeedback(
+          kind,
+          false,
+          err.response?.data?.message || err.message || 'Gagal memantau proses.'
+        );
         clearProcessPollTimer();
       }
     }, 1500);
   };
 
   await tick();
+}
+
+async function doSyncFingerspot() {
+  if (!fsDateFrom.value || !fsDateTo.value) return;
+  fsSyncing.value = true;
+  clearProcessPollTimer();
+  fsMessage.value = '';
+  lastFsStats.value = null;
+  try {
+    const { data } = await api.post(
+      '/glog/sync-fingerspot',
+      {
+        date_from: fsDateFrom.value,
+        date_to: fsDateTo.value,
+        create_employees: fsCreateEmployees.value,
+      },
+      { timeout: 15000 }
+    );
+    if (!data.success) {
+      fsOk.value = false;
+      fsMessage.value = data.message || 'Sync Fingerspot gagal.';
+      return;
+    }
+    const jobId = data.data?.job_id;
+    if (!jobId) {
+      fsOk.value = false;
+      fsMessage.value = 'Job sync Fingerspot tidak ditemukan.';
+      return;
+    }
+    fsOk.value = true;
+    fsMessage.value = data.message || 'Sync Fingerspot dimulai.';
+    await pollProcessJob(jobId, null, 'fingerspot');
+  } catch (err) {
+    fsOk.value = false;
+    fsMessage.value = err.response?.data?.message || err.message || 'Sync Fingerspot gagal.';
+  } finally {
+    fsSyncing.value = false;
+  }
+}
+
+async function doSyncFtm() {
+  if (!ftmDateFrom.value || !ftmDateTo.value) return;
+  ftmSyncing.value = true;
+  clearProcessPollTimer();
+  ftmMessage.value = '';
+  lastFtmStats.value = null;
+  try {
+    const { data } = await api.post(
+      '/glog/sync-ftm',
+      {
+        date_from: ftmDateFrom.value,
+        date_to: ftmDateTo.value,
+        create_employees: ftmCreateEmployees.value,
+      },
+      { timeout: 15000 }
+    );
+    if (!data.success) {
+      ftmOk.value = false;
+      ftmMessage.value = data.message || 'Sync FTM gagal.';
+      return;
+    }
+    const jobId = data.data?.job_id;
+    if (!jobId) {
+      ftmOk.value = false;
+      ftmMessage.value = 'Job sync FTM tidak ditemukan.';
+      return;
+    }
+    ftmOk.value = true;
+    ftmMessage.value = data.message || 'Sync FTM dimulai.';
+    await pollProcessJob(jobId, null, 'ftm');
+  } catch (err) {
+    ftmOk.value = false;
+    ftmMessage.value = err.response?.data?.message || err.message || 'Sync FTM gagal.';
+  } finally {
+    ftmSyncing.value = false;
+  }
 }
 
 async function doPatchAttendance(batchId) {
@@ -370,6 +624,28 @@ onUnmounted(() => {
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+}
+.ftm-sync-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 16px;
+}
+.ftm-date-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 160px;
+}
+.ftm-date-field .form-control {
+  max-width: 200px;
+}
+.ftm-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  cursor: pointer;
 }
 .format-sample {
   margin: 0;

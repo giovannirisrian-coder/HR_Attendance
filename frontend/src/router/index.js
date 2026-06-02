@@ -60,6 +60,7 @@ const routes = [
     children: [
       { path: 'approvals', component: () => import('../views/SubmissionQueue.vue'), meta: { queue: 'hr' } },
       { path: 'glog-upload', component: () => import('../views/glog/GlogUpload.vue') },
+      { path: 'employees/upload', component: () => import('../views/ls-hr/EmployeeUpload.vue') },
       { path: 'employees', component: () => import('../views/ls-hr/EmployeeList.vue') },
       { path: 'employees/create', component: () => import('../views/ls-hr/EmployeeCreate.vue') },
       { path: 'employees/:id/edit', component: () => import('../views/ls-hr/EmployeeEdit.vue') },
