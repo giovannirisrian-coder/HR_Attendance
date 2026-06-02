@@ -198,7 +198,7 @@ function timesEqualSql(a, b) {
 }
 
 /**
- * Cocokkan NIK file glog ke employees (hanya user LS aktif).
+ * Cocokkan NIK file glog ke hr_employees (hanya user LS aktif).
  * Aturan: TRIM sama, atau tanpa spasi sama, atau hanya digit sama (MySQL 8 REGEXP_REPLACE).
  */
 async function resolveEmployeeForGlogNik(conn, rawNik) {
@@ -206,7 +206,7 @@ async function resolveEmployeeForGlogNik(conn, rawNik) {
   if (!trimmed) return { employee: null, reason: 'empty_nik' };
   const [rows] = await conn.query(
     `SELECT e.id AS employee_id, e.user_id, e.nik
-     FROM employees e
+     FROM hr_employees e
      INNER JOIN users u ON u.id = e.user_id AND u.role = 'ls' AND u.is_active = 1
      WHERE e.nik = ? LIMIT 1`,
     [trimmed]
@@ -216,8 +216,13 @@ async function resolveEmployeeForGlogNik(conn, rawNik) {
 }
 
 /**
- * Buat user LS + baris employees untuk NIK dari glog yang belum ada di master.
+ * Buat user LS + baris hr_employees untuk NIK dari glog yang belum ada di master.
  * Email deterministik per NIK; jika bentrok (sudah ada), kembalikan employee hasil resolve.
+ *
+ * NOTE: hr_employees is the consolidated employee master (LS HR ➜ Employee List
+ * also lives here). Only the minimum fields needed by the attendance / glog
+ * pipeline are populated; LS HR (PIC LS) completes the remaining BAST fields
+ * (vendor, PO, supervisor_nik, etc.) via the Employee List UI.
  */
 async function createPlaceholderLsUserAndEmployee(conn, row) {
   if (!row.nik) return null;
@@ -234,11 +239,15 @@ async function createPlaceholderLsUserAndEmployee(conn, row) {
       [name, email, passwordHash]
     );
     const userId = ins.insertId;
-    await conn.query('INSERT INTO employees (user_id, nik) VALUES (?, ?)', [userId, row.nik]);
+    await conn.query(
+      `INSERT INTO hr_employees (user_id, nik, employee_name, user_status)
+       VALUES (?, ?, ?, 'Active')`,
+      [userId, row.nik, name]
+    );
     await conn.commit();
     inTx = false;
     const [empRows] = await conn.query(
-      'SELECT id AS employee_id, user_id, nik FROM employees WHERE user_id = ? LIMIT 1',
+      'SELECT id AS employee_id, user_id, nik FROM hr_employees WHERE user_id = ? LIMIT 1',
       [userId]
     );
     return empRows[0] || null;
@@ -455,7 +464,7 @@ async function syncGlogDailyToAttendance(conn, batchId) {
 
 /**
  * Patch / update attendance dari glog_import_daily: sama seperti sinkron, tetapi
- * jika NIK belum ada di master → buat user LS + employees placeholder lalu insert attendance.
+ * jika NIK belum ada di master → buat user LS + hr_employees placeholder lalu insert attendance.
  */
 async function patchGlogDailyToAttendance(conn, batchId) {
   const stats = {

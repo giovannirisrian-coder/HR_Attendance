@@ -256,7 +256,7 @@ const getTeamLeavesEmployeesOverview = async (req, res) => {
          SUM(CASE WHEN lr.status = 'approved' THEN 1 ELSE 0 END) AS approved,
          SUM(CASE WHEN lr.status = 'rejected' THEN 1 ELSE 0 END) AS rejected
        FROM users u
-       LEFT JOIN employees e ON e.user_id = u.id
+       LEFT JOIN hr_employees e ON e.user_id = u.id
        LEFT JOIN leave_requests lr
          ON lr.user_id = u.id
         AND lr.status NOT IN ('cancelled', 'withdrawn')
@@ -365,7 +365,7 @@ const getTeamLeaves = async (req, res) => {
        FROM leave_requests lr
        JOIN users u ON lr.user_id = u.id
        LEFT JOIN users sup ON u.supervisor_id = sup.id
-       LEFT JOIN employees e ON e.user_id = u.id
+       LEFT JOIN hr_employees e ON e.user_id = u.id
        ${where}
        ORDER BY lr.start_date DESC, lr.id DESC
        LIMIT ? OFFSET ?`,
@@ -376,7 +376,7 @@ const getTeamLeaves = async (req, res) => {
       `SELECT COUNT(*) AS total
        FROM leave_requests lr
        JOIN users u ON lr.user_id = u.id
-       LEFT JOIN employees e ON e.user_id = u.id
+       LEFT JOIN hr_employees e ON e.user_id = u.id
        ${where}`,
       params
     );

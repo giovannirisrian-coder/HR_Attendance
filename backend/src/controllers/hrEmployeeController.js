@@ -2,9 +2,17 @@
  * LS HR ➜ Employee List controller (CRUD for `hr_employees`).
  *
  * Backs the `/api/employees` endpoints used by the LS HR (PIC LS) role
- * to maintain the BAST Check master data set. This module is intentionally
- * ISOLATED from the legacy `employees` table that is referenced by
- * `attendance.employee_id` — the established attendance workflow is preserved.
+ * to maintain the BAST Check master data set.
+ *
+ * `hr_employees` is now the consolidated employee master table:
+ *  • LS HR (PIC LS) maintains the BAST fields here (vendor, PO, NPK, etc.).
+ *  • Attendance / Leave / Overtime reference the same row via the
+ *    `user_id` and `nik` columns added by the consolidation migration
+ *    (`migration_employees_to_hr_employees.sql`). The legacy `employees`
+ *    table has been retired.
+ *
+ * The end-to-end approval workflow (LS → Supervisor → Vendor → PIC LS →
+ * SSU) is unchanged — only the underlying table is unified.
  */
 
 const db = require('../config/database');

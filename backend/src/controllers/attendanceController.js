@@ -17,7 +17,7 @@ const assertAttendanceDateInLsWindow = (ymd) => {
 
 const fetchEmployeeProfileForUser = async (userId) => {
   const [rows] = await db.query(
-    'SELECT id AS employee_id, nik FROM employees WHERE user_id = ? LIMIT 1',
+    'SELECT id AS employee_id, nik FROM hr_employees WHERE user_id = ? LIMIT 1',
     [userId]
   );
   return rows[0] || null;
@@ -249,7 +249,7 @@ const getMyAttendance = async (req, res) => {
               (${leaveDayTypeExpr}) AS leave_day_type
        FROM attendance a
        JOIN users u ON a.user_id = u.id
-       LEFT JOIN employees e ON e.id = a.employee_id
+       LEFT JOIN hr_employees e ON e.id = a.employee_id
        ${where}
        ORDER BY a.attendance_date DESC, a.created_at DESC, a.id DESC
        LIMIT ? OFFSET ?`,
@@ -260,7 +260,7 @@ const getMyAttendance = async (req, res) => {
       `SELECT COUNT(*) AS total
        FROM attendance a
        JOIN users u ON a.user_id = u.id
-       LEFT JOIN employees e ON e.id = a.employee_id
+       LEFT JOIN hr_employees e ON e.id = a.employee_id
        ${where}`,
       params
     );
@@ -299,7 +299,7 @@ const getMyAttendance = async (req, res) => {
            ) THEN a.attendance_date END) AS sakit_days
        FROM attendance a
        JOIN users u ON a.user_id = u.id
-       LEFT JOIN employees e ON e.id = a.employee_id
+       LEFT JOIN hr_employees e ON e.id = a.employee_id
        ${where}
          AND a.status = 'approved'
          AND a.id = (
@@ -337,7 +337,7 @@ const getTeamLsMembers = async (req, res) => {
     const [rows] = await db.query(
       `SELECT u.id, u.name, u.employee_id, e.nik AS nik
        FROM users u
-       LEFT JOIN employees e ON e.user_id = u.id
+       LEFT JOIN hr_employees e ON e.user_id = u.id
        WHERE u.supervisor_id = ? AND u.role = 'ls'
        ORDER BY u.name ASC`,
       [supervisorId]
@@ -391,7 +391,7 @@ const getTeamAttendance = async (req, res) => {
        FROM attendance a
        JOIN users u ON a.user_id = u.id
        LEFT JOIN users sup ON u.supervisor_id = sup.id
-       LEFT JOIN employees e ON e.id = a.employee_id
+       LEFT JOIN hr_employees e ON e.id = a.employee_id
        ${where}
        ORDER BY a.attendance_date DESC, a.created_at DESC, a.id DESC
        LIMIT ? OFFSET ?`,
@@ -402,7 +402,7 @@ const getTeamAttendance = async (req, res) => {
       `SELECT COUNT(*) AS total
        FROM attendance a
        JOIN users u ON a.user_id = u.id
-       LEFT JOIN employees e ON e.id = a.employee_id
+       LEFT JOIN hr_employees e ON e.id = a.employee_id
        ${where}`,
       params
     );
@@ -665,7 +665,7 @@ const getMonthlyAttendanceRecap = async (req, res) => {
          COALESCE(lv.leave_izin, 0) AS leave_izin,
          COALESCE(lv.leave_sakit, 0) AS leave_sakit
        FROM users u
-       LEFT JOIN employees e ON e.user_id = u.id
+       LEFT JOIN hr_employees e ON e.user_id = u.id
        LEFT JOIN (
          SELECT
            latest.user_id,
@@ -895,7 +895,7 @@ const getAttendanceDetail = async (req, res) => {
        JOIN users u ON a.user_id = u.id
        LEFT JOIN users sup ON u.supervisor_id = sup.id
        LEFT JOIN users app ON a.approved_by = app.id
-       LEFT JOIN employees e ON e.id = a.employee_id
+       LEFT JOIN hr_employees e ON e.id = a.employee_id
        WHERE a.id = ?`,
       [id]
     );
