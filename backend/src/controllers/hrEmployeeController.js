@@ -40,6 +40,7 @@ const TEXT_FIELDS = [
   'cost_center',
   'npk',
   'employee_name',
+  'email',
   'position',
   'position_group',
   'category',
@@ -64,6 +65,7 @@ const MAX_LENGTHS = {
   cost_center: 64,
   npk: 64,
   employee_name: 200,
+  email: 190,
   position: 150,
   position_group: 150,
   category: 100,
@@ -75,7 +77,7 @@ const MAX_LENGTHS = {
 const SELECT_COLS = `
   id, vendor_number, user_department, department_title, vendor_name,
   employment_status, po_number, po_period_1, po_period_2, dic_hro, cost_center,
-  npk, employee_name, position, position_group, category, site,
+  npk, employee_name, email, position, position_group, category, site,
   supervisor_nik, supervisor_name, user_status,
   created_by, updated_by, created_at, updated_at
 `;
@@ -277,13 +279,13 @@ const createEmployee = async (req, res) => {
       `INSERT INTO hr_employees (
          vendor_number, user_department, department_title, vendor_name,
          employment_status, po_number, po_period_1, po_period_2, dic_hro, cost_center,
-         npk, employee_name, position, position_group, category, site,
+         npk, employee_name, email, position, position_group, category, site,
          supervisor_nik, supervisor_name, user_status, created_by, updated_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         f.vendor_number, f.user_department, f.department_title, f.vendor_name,
         f.employment_status, f.po_number, f.po_period_1, f.po_period_2, f.dic_hro, f.cost_center,
-        f.npk, f.employee_name, f.position, f.position_group, f.category, f.site,
+        f.npk, f.employee_name, f.email, f.position, f.position_group, f.category, f.site,
         f.supervisor_nik, f.supervisor_name, f.user_status, createdBy, createdBy,
       ]
     );

@@ -112,6 +112,7 @@
               <th>Cost Center</th>
               <th>Employee ID (NPK)</th>
               <th>Employee Name</th>
+              <th class="col-email">Email</th>
               <th>Position</th>
               <th>Position Group</th>
               <th>Category</th>
@@ -124,7 +125,7 @@
           </thead>
           <tbody>
             <tr v-if="employees.length === 0">
-              <td :colspan="21">
+              <td :colspan="22">
                 <div class="empty-state">
                   <div class="empty-state-icon">👥</div>
                   <h3>No employees found</h3>
@@ -146,6 +147,15 @@
               <td><span class="text-sm font-mono">{{ emp.cost_center }}</span></td>
               <td><span class="text-sm font-mono">{{ emp.npk }}</span></td>
               <td class="font-bold">{{ emp.employee_name }}</td>
+              <td class="col-email">
+                <a
+                  v-if="emp.email"
+                  :href="`mailto:${emp.email}`"
+                  class="email-link"
+                  :title="emp.email"
+                >{{ emp.email }}</a>
+                <span v-else class="text-muted">—</span>
+              </td>
               <td>{{ emp.position }}</td>
               <td>{{ emp.position_group }}</td>
               <td>{{ emp.category }}</td>
@@ -294,7 +304,7 @@ onMounted(fetchData);
 }
 
 .employee-table {
-  min-width: 2400px;
+  min-width: 2620px;
 }
 
 .employee-table thead th,
@@ -310,6 +320,28 @@ onMounted(fetchData);
 .col-actions {
   width: 90px;
   text-align: center;
+}
+
+.col-email {
+  width: 220px;
+  max-width: 220px;
+}
+
+.col-email .email-link {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+  color: var(--bc-green-700);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.col-email .email-link:hover {
+  text-decoration: underline;
+  color: var(--bc-green-500);
 }
 
 .font-mono {

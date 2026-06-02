@@ -21,6 +21,7 @@ export const EMPTY_EMPLOYEE = {
   cost_center: '',
   npk: '',
   employee_name: '',
+  email: '',
   position: '',
   position_group: '',
   category: '',

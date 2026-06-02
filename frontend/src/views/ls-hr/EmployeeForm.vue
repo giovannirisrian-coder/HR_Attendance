@@ -79,18 +79,23 @@
         </div>
 
         <div class="form-group">
+          <label class="form-label">Email</label>
+          <input v-model="form.email" type="email" class="form-control" maxlength="190" autocomplete="email" />
+        </div>
+        <div class="form-group">
           <label class="form-label">Position</label>
           <input v-model="form.position" type="text" class="form-control" />
         </div>
+
         <div class="form-group">
           <label class="form-label">Position Group</label>
           <input v-model="form.position_group" type="text" class="form-control" />
         </div>
-
         <div class="form-group">
           <label class="form-label">Category</label>
           <input v-model="form.category" type="text" class="form-control" />
         </div>
+
         <div class="form-group">
           <label class="form-label">Site</label>
           <input v-model="form.site" type="text" class="form-control" />

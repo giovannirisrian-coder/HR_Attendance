@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS hr_employees (
   -- Personal identity block
   npk               VARCHAR(64)   NULL,
   employee_name     VARCHAR(200)  NULL,
+  email             VARCHAR(190)  NULL,
   position          VARCHAR(150)  NULL,
   position_group    VARCHAR(150)  NULL,
   category          VARCHAR(100)  NULL,
