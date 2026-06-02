@@ -10,12 +10,15 @@ const {
   getEmployeeById,
   createEmployee,
   updateEmployee,
+  uploadHrEmployeesMiddleware,
+  uploadEmployeesBulk,
 } = require('../controllers/hrEmployeeController');
 const { authenticate, authorize } = require('../middleware/auth');
 
 router.use(authenticate, authorize('ls_hr'));
 
 router.get('/', listEmployees);
+router.post('/upload', uploadHrEmployeesMiddleware, uploadEmployeesBulk);
 router.get('/:id', getEmployeeById);
 router.post('/', createEmployee);
 router.put('/:id', updateEmployee);
