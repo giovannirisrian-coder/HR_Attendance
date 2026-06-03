@@ -2,17 +2,11 @@ const crypto = require('crypto');
 const multer = require('multer');
 const db = require('../config/database');
 const {
-  toSqlDate,
-  toSqlTime,
   upsertAttendanceFromGlogDailyRow,
   tallyUpsertStats,
 } = require('../services/glogAttendanceService');
-const { syncAttendanceFromFtmDataAccess, validateDateRange } = require('../services/ftmGlogSyncService');
-const { isFtmDatabaseConfigured } = require('../config/ftmDatabase');
-const {
-  syncAttendanceFromFingerspotAttLog,
-  isFingerspotDatabaseConfigured,
-} = require('../services/fingerspotGlogSyncService');
+/** Hanya sinkron ke attendance jika NIK/NPK sudah ada di hr_employees (tanpa auto-create). */
+const GLOG_UPSERT_OPTS = { createEmployeeIfUnmatched: false };
 
 const storage = multer.memoryStorage();
 const upload = multer({
@@ -249,6 +243,7 @@ async function getDailyRowsChunk(conn, batchId, lastId, limit) {
  * - UPDATE clock_in_time / clock_out_time + employee_id + nik kanonik hanya jika status = pending.
  * - Lewati jika sudah approved/rejected (jaga alur persetujuan).
  * - Lewati update jika pending sudah sama dengan glog (nik+tanggal+t jam sama).
+ * - Lewati jika NIK/NPK tidak ada di hr_employees (tidak dibuat placeholder).
  * Geo & lembur (OT) tidak diubah pada UPDATE (tetap seperti data aplikasi).
  */
 async function syncGlogDailyToAttendance(conn, batchId) {
@@ -266,7 +261,7 @@ async function syncGlogDailyToAttendance(conn, batchId) {
     const rows = await getDailyRowsChunk(conn, batchId, lastId, PROCESS_JOB_CHUNK_SIZE);
     if (rows.length === 0) break;
     for (const row of rows) {
-      const r = await upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnmatched: false });
+      const r = await upsertAttendanceFromGlogDailyRow(conn, row, GLOG_UPSERT_OPTS);
       tallyUpsertStats(stats, r);
       lastId = row.id;
     }
@@ -277,7 +272,7 @@ async function syncGlogDailyToAttendance(conn, batchId) {
 
 /**
  * Patch / update attendance dari glog_import_daily: sama seperti sinkron, tetapi
- * jika NIK belum ada di master → buat user LS + hr_employees placeholder lalu insert attendance.
+ * NIK/NPK yang tidak ada di hr_employees diabaikan (tidak disinkronkan).
  */
 async function patchGlogDailyToAttendance(conn, batchId) {
   const stats = {
@@ -287,7 +282,6 @@ async function patchGlogDailyToAttendance(conn, batchId) {
     attendance_skipped_unmatched_nik: 0,
     attendance_skipped_invalid_time: 0,
     attendance_skipped_duplicate_noop: 0,
-    employee_placeholder_created: 0,
   };
 
   let lastId = 0;
@@ -295,7 +289,7 @@ async function patchGlogDailyToAttendance(conn, batchId) {
     const rows = await getDailyRowsChunk(conn, batchId, lastId, PROCESS_JOB_CHUNK_SIZE);
     if (rows.length === 0) break;
     for (const row of rows) {
-      const r = await upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnmatched: true });
+      const r = await upsertAttendanceFromGlogDailyRow(conn, row, GLOG_UPSERT_OPTS);
       tallyUpsertStats(stats, r);
       lastId = row.id;
     }
@@ -312,7 +306,6 @@ async function runPatchAttendanceInternal(conn, batchId, onProgress) {
     attendance_skipped_unmatched_nik: 0,
     attendance_skipped_invalid_time: 0,
     attendance_skipped_duplicate_noop: 0,
-    employee_placeholder_created: 0,
   };
 
   const [[{ total }]] = await conn.query(
@@ -328,7 +321,7 @@ async function runPatchAttendanceInternal(conn, batchId, onProgress) {
     const rows = await getDailyRowsChunk(conn, batchId, lastId, PROCESS_JOB_CHUNK_SIZE);
     if (rows.length === 0) break;
     for (const row of rows) {
-      const r = await upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnmatched: true });
+      const r = await upsertAttendanceFromGlogDailyRow(conn, row, GLOG_UPSERT_OPTS);
       tallyUpsertStats(stats, r);
       processed += 1;
       lastId = row.id;
@@ -427,7 +420,7 @@ async function runProcessBatchInternal(conn, batchId, onProgress) {
     const rows = await getDailyRowsChunk(conn, batchId, lastId, PROCESS_JOB_CHUNK_SIZE);
     if (rows.length === 0) break;
     for (const row of rows) {
-      const r = await upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnmatched: false });
+      const r = await upsertAttendanceFromGlogDailyRow(conn, row, GLOG_UPSERT_OPTS);
       tallyUpsertStats(stats, r);
       processed += 1;
       lastId = row.id;
@@ -512,177 +505,6 @@ function startPatchAttendanceJob(job) {
   });
 }
 
-function startFtmSyncJob(job) {
-  setImmediate(async () => {
-    try {
-      job.status = 'running';
-      job.started_at = new Date().toISOString();
-      const result = await syncAttendanceFromFtmDataAccess({
-        dateFrom: job.ftm_date_from,
-        dateTo: job.ftm_date_to,
-        createEmployeeIfUnmatched: Boolean(job.create_employees),
-        onProgress: (processed, total) => touchJobProgress(job, processed, total),
-      });
-      job.status = 'done';
-      job.data = result;
-      job.finished_at = new Date().toISOString();
-      touchJobProgress(job, job.progress.total, job.progress.total);
-    } catch (err) {
-      job.status = 'error';
-      job.error = mysqlLockErrorMessage(err) || err.message || 'Server error.';
-      job.finished_at = new Date().toISOString();
-      console.error('FTM glog sync background job error:', err);
-    } finally {
-      cleanupProcessJobs();
-    }
-  });
-}
-
-function startFingerspotSyncJob(job) {
-  setImmediate(async () => {
-    try {
-      job.status = 'running';
-      job.started_at = new Date().toISOString();
-      const result = await syncAttendanceFromFingerspotAttLog({
-        dateFrom: job.fingerspot_date_from,
-        dateTo: job.fingerspot_date_to,
-        createEmployeeIfUnmatched: Boolean(job.create_employees),
-        onProgress: (processed, total) => touchJobProgress(job, processed, total),
-      });
-      job.status = 'done';
-      job.data = result;
-      job.finished_at = new Date().toISOString();
-      touchJobProgress(job, job.progress.total, job.progress.total);
-    } catch (err) {
-      job.status = 'error';
-      job.error = mysqlLockErrorMessage(err) || err.message || 'Server error.';
-      job.finished_at = new Date().toISOString();
-      console.error('Fingerspot glog sync background job error:', err);
-    } finally {
-      cleanupProcessJobs();
-    }
-  });
-}
-
-/** Sinkron absensi dari Fingerspot.att_log ke tabel attendance. */
-const syncFromFingerspot = async (req, res) => {
-  try {
-    if (!isFingerspotDatabaseConfigured()) {
-      return res.status(503).json({
-        success: false,
-        message: 'Database Fingerspot belum dikonfigurasi. Set FINGERSPOT_DB_* di backend/.env',
-      });
-    }
-
-    const dateFrom = req.body?.date_from ?? req.query?.date_from;
-    const dateTo = req.body?.date_to ?? req.query?.date_to;
-    const range = validateDateRange(dateFrom, dateTo);
-    if (range.error) {
-      return res.status(400).json({ success: false, message: range.error });
-    }
-
-    const createEmployees =
-      req.body?.create_employees === true ||
-      req.body?.create_employees === 1 ||
-      String(req.body?.create_employees || '').toLowerCase() === 'true';
-
-    const uploaderId = req.user.id;
-    const existingRunning = Array.from(processJobs.values()).find(
-      (j) =>
-        j.type === 'glog_fingerspot_sync' &&
-        Number(j.uploader_id) === Number(uploaderId) &&
-        (j.status === 'queued' || j.status === 'running')
-    );
-    if (existingRunning) {
-      return res.status(202).json({
-        success: true,
-        message: 'Sinkron Fingerspot sedang berjalan di background.',
-        data: { job_id: existingRunning.id, status: existingRunning.status },
-      });
-    }
-
-    const job = createProcessJob({ batchId: 0, uploaderId, type: 'glog_fingerspot_sync' });
-    job.fingerspot_date_from = range.dateFrom;
-    job.fingerspot_date_to = range.dateTo;
-    job.create_employees = createEmployees;
-    startFingerspotSyncJob(job);
-
-    return res.status(202).json({
-      success: true,
-      message:
-        'Sinkron dari Fingerspot att_log dimulai. Pantau progres lewat GET /api/glog/jobs/:jobId',
-      data: {
-        job_id: job.id,
-        status: job.status,
-        date_from: range.dateFrom,
-        date_to: range.dateTo,
-      },
-    });
-  } catch (err) {
-    console.error('Fingerspot sync request error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Server error.' });
-  }
-};
-
-/** Sinkron absensi dari FTM.data_access (database mesin) ke tabel attendance. */
-const syncFromFtm = async (req, res) => {
-  try {
-    if (!isFtmDatabaseConfigured()) {
-      return res.status(503).json({
-        success: false,
-        message: 'Database FTM belum dikonfigurasi. Set FTM_DB_* di backend/.env',
-      });
-    }
-
-    const dateFrom = req.body?.date_from ?? req.query?.date_from;
-    const dateTo = req.body?.date_to ?? req.query?.date_to;
-    const range = validateDateRange(dateFrom, dateTo);
-    if (range.error) {
-      return res.status(400).json({ success: false, message: range.error });
-    }
-
-    const createEmployees =
-      req.body?.create_employees === true ||
-      req.body?.create_employees === 1 ||
-      String(req.body?.create_employees || '').toLowerCase() === 'true';
-
-    const uploaderId = req.user.id;
-    const existingRunning = Array.from(processJobs.values()).find(
-      (j) =>
-        j.type === 'glog_ftm_sync' &&
-        Number(j.uploader_id) === Number(uploaderId) &&
-        (j.status === 'queued' || j.status === 'running')
-    );
-    if (existingRunning) {
-      return res.status(202).json({
-        success: true,
-        message: 'Sinkron FTM sedang berjalan di background.',
-        data: { job_id: existingRunning.id, status: existingRunning.status },
-      });
-    }
-
-    const job = createProcessJob({ batchId: 0, uploaderId, type: 'glog_ftm_sync' });
-    job.ftm_date_from = range.dateFrom;
-    job.ftm_date_to = range.dateTo;
-    job.create_employees = createEmployees;
-    startFtmSyncJob(job);
-
-    return res.status(202).json({
-      success: true,
-      message:
-        'Sinkron dari FTM data_access dimulai. Pantau progres lewat GET /api/glog/jobs/:jobId',
-      data: {
-        job_id: job.id,
-        status: job.status,
-        date_from: range.dateFrom,
-        date_to: range.dateTo,
-      },
-    });
-  } catch (err) {
-    console.error('FTM sync request error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Server error.' });
-  }
-};
 
 const uploadGlog = async (req, res) => {
   const conn = await db.getConnection();
@@ -852,7 +674,7 @@ const getProcessJobStatus = async (req, res) => {
   }
 };
 
-/** Patch attendance dari glog_import_daily (NIK + tanggal): insert/update pending; lewati approved; buat user+employee jika NIK baru. */
+/** Patch attendance dari glog_import_daily (NIK + tanggal): insert/update pending; lewati approved; abaikan NIK tanpa hr_employees. */
 const patchAttendanceFromBatch = async (req, res) => {
   const conn = await db.getConnection();
   try {
@@ -1010,7 +832,5 @@ module.exports = {
   patchAttendanceFromBatch,
   getBatchDetail,
   listMyBatches,
-  syncFromFtm,
-  syncFromFingerspot,
 };
 

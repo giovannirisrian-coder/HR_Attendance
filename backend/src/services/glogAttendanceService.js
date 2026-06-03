@@ -55,7 +55,8 @@ async function resolveEmployeeForGlogNik(conn, rawNik) {
     `SELECT e.id AS employee_id, e.user_id, e.npk
      FROM hr_employees e
      INNER JOIN users u ON u.id = e.user_id AND u.role = 'ls' AND u.is_active = 1
-     WHERE e.npk = ? LIMIT 1`,
+     WHERE e.npk = ? AND e.user_status = 'Active'
+     LIMIT 1`,
     [trimmed]
   );
   if (rows.length === 0) return { employee: null, reason: 'unmatched_nik' };
@@ -118,6 +119,8 @@ async function createPlaceholderLsUserAndEmployee(conn, row) {
 
 /**
  * Satu baris agregat harian (nik + tanggal + time_in/out) → attendance.
+ * Jika `createEmployeeIfUnmatched` = false, NIK/NPK yang tidak match di
+ * hr_employees akan dilewati (skip), tanpa membuat placeholder user/employee.
  */
 async function upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnmatched }) {
   const out = {
