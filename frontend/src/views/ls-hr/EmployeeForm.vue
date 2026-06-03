@@ -123,9 +123,28 @@
 
         <div class="form-group">
           <label class="form-label">User Status</label>
-          <select v-model="form.user_status" class="form-control">
-            <option v-for="o in userStatusOptions" :key="o" :value="o">{{ o }}</option>
-          </select>
+          <div class="status-radio-group" role="radiogroup" aria-label="User Status">
+            <label
+              v-for="o in userStatusOptions"
+              :key="o"
+              class="status-radio"
+              :class="{
+                'status-radio--checked': form.user_status === o,
+                'status-radio--active': o === 'Active',
+                'status-radio--deactive': o === 'Deactive',
+              }"
+            >
+              <input
+                v-model="form.user_status"
+                type="radio"
+                name="user_status"
+                :value="o"
+                class="status-radio__input"
+              />
+              <span class="status-radio__dot" aria-hidden="true"></span>
+              <span class="status-radio__label">{{ o }}</span>
+            </label>
+          </div>
           <p class="text-sm text-muted" style="margin-top: 6px;">
             <span v-if="form.user_status === 'Active'" class="status-hint status-hint--active">
               The user can be referenced in attendance and BAST checks.
@@ -345,6 +364,95 @@ const onCancel = () => {
 }
 .form-group--full {
   grid-column: 1 / -1;
+}
+
+.status-radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.status-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 16px;
+  border: 1.5px solid var(--bc-gray-200);
+  border-radius: 9px;
+  background: var(--bc-white);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+.status-radio:hover {
+  border-color: var(--bc-gray-300);
+}
+.status-radio__input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.status-radio__dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--bc-gray-300);
+  background: var(--bc-white);
+  flex-shrink: 0;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  position: relative;
+}
+.status-radio__dot::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: transparent;
+  transform: translate(-50%, -50%) scale(0);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+.status-radio__label {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--bc-gray-600);
+}
+.status-radio__input:focus-visible + .status-radio__dot {
+  box-shadow: 0 0 0 3px var(--bc-green-100);
+}
+
+/* Checked — Active (Berau Coal green) */
+.status-radio--active.status-radio--checked {
+  border-color: var(--bc-green-500);
+  background: var(--bc-green-50);
+}
+.status-radio--active.status-radio--checked .status-radio__dot {
+  border-color: var(--bc-green-500);
+}
+.status-radio--active.status-radio--checked .status-radio__dot::after {
+  background: var(--bc-green-500);
+  transform: translate(-50%, -50%) scale(1);
+}
+.status-radio--active.status-radio--checked .status-radio__label {
+  color: var(--bc-green-700);
+}
+
+/* Checked — Deactive */
+.status-radio--deactive.status-radio--checked {
+  border-color: var(--bc-rejected);
+  background: #fef2f2;
+}
+.status-radio--deactive.status-radio--checked .status-radio__dot {
+  border-color: var(--bc-rejected);
+}
+.status-radio--deactive.status-radio--checked .status-radio__dot::after {
+  background: var(--bc-rejected);
+  transform: translate(-50%, -50%) scale(1);
+}
+.status-radio--deactive.status-radio--checked .status-radio__label {
+  color: var(--bc-rejected);
 }
 
 .status-hint {
