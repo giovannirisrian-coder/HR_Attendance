@@ -89,9 +89,6 @@
             <button type="button" class="demo-btn" @click="fillDemo('lshr@beraucoal.com')">
               <span class="demo-role">LS HR</span> LS HR Officer
             </button>
-            <button type="button" class="demo-btn" @click="fillDemo('ssu@beraucoal.com')">
-              <span class="demo-role">SSU</span> SSU Officer
-            </button>
           </div>
         </div>
       </div>
