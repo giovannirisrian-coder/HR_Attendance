@@ -51,6 +51,11 @@ CREATE TABLE IF NOT EXISTS users (
   vendor_id       INT          NULL,
   supervisor_id   INT          NULL,
   is_active       TINYINT(1)   NOT NULL DEFAULT 1,
+  -- First-time login gate: accounts provisioned from the Employee List
+  -- start with a default password and is_first_login = 1 (TRUE). The flag
+  -- is cleared to 0 the first time the user submits a new password via
+  -- POST /api/auth/change-password. See migration_users_first_login.sql.
+  is_first_login  TINYINT(1)   NOT NULL DEFAULT 1,
   created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uq_users_sid (sid),

@@ -93,6 +93,68 @@
         </div>
       </div>
     </div>
+
+    <!-- ── First-time login: forced password change ──────────────── -->
+    <div v-if="firstLogin.show" class="modal-backdrop">
+      <div class="modal" style="max-width:440px;">
+        <div class="modal-header">
+          <span class="modal-title">Change Your Password</span>
+        </div>
+        <form @submit.prevent="handleChangePassword">
+          <div class="modal-body">
+            <p class="fl-intro">
+              For your security, you must set a new password before signing in
+              for the first time.
+            </p>
+
+            <div v-if="firstLogin.error" class="alert alert-error">
+              <span>⚠️</span> {{ firstLogin.error }}
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">New Password</label>
+              <div class="password-wrap">
+                <input
+                  v-model="firstLogin.newPassword"
+                  :type="firstLogin.showNew ? 'text' : 'password'"
+                  class="form-control"
+                  placeholder="At least 8 characters"
+                  autocomplete="new-password"
+                  required
+                />
+                <button type="button" class="pw-toggle" @click="firstLogin.showNew = !firstLogin.showNew">
+                  {{ firstLogin.showNew ? '🙈' : '👁️' }}
+                </button>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">Confirm New Password</label>
+              <div class="password-wrap">
+                <input
+                  v-model="firstLogin.confirmPassword"
+                  :type="firstLogin.showConfirm ? 'text' : 'password'"
+                  class="form-control"
+                  placeholder="Re-enter your new password"
+                  autocomplete="new-password"
+                  required
+                />
+                <button type="button" class="pw-toggle" @click="firstLogin.showConfirm = !firstLogin.showConfirm">
+                  {{ firstLogin.showConfirm ? '🙈' : '👁️' }}
+                </button>
+              </div>
+              <p class="fl-hint">Minimum 8 characters. Both fields must match.</p>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="submit" class="btn btn-primary w-full" :disabled="firstLogin.saving">
+              <span v-if="firstLogin.saving" class="spinner" style="width:16px;height:16px;border-width:2px;"></span>
+              {{ firstLogin.saving ? 'Updating…' : 'Update Password & Sign In' }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -102,15 +164,41 @@ import { useRouter } from 'vue-router';
 import api from '../utils/api';
 import { setAuth } from '../utils/auth';
 
+const MIN_PASSWORD_LENGTH = 8;
+
 const router = useRouter();
 const loading = ref(false);
 const errorMsg = ref('');
 const showPassword = ref(false);
 const form = reactive({ sid: '', password: '' });
 
+// First-time login "Force Password Change" dialog state. Opened when the
+// login endpoint replies with `mustChangePassword: true` instead of a
+// session token.
+const firstLogin = reactive({
+  show: false,
+  sid: '',
+  newPassword: '',
+  confirmPassword: '',
+  showNew: false,
+  showConfirm: false,
+  saving: false,
+  error: '',
+});
+
 const fillDemo = (sid) => {
   form.sid = sid;
   form.password = 'password';
+};
+
+// Resolve the post-login landing route for a role.
+const routeForRole = (role) => {
+  if (role === 'ls') return '/ls/attendance/create';
+  if (role === 'ls_supervisor') return '/supervisor/approvals';
+  if (role === 'vendor') return '/vendor/reports';
+  if (role === 'ls_hr') return '/ls-hr/approvals';
+  if (role === 'ssu') return '/ssu/approvals';
+  return '/';
 };
 
 const handleLogin = async () => {
@@ -118,19 +206,70 @@ const handleLogin = async () => {
   errorMsg.value = '';
   try {
     const { data } = await api.post('/auth/login', form);
+
+    // First-time login: no token is issued yet. Pop the forced
+    // password-change dialog instead of routing to a dashboard.
+    if (data.success && data.mustChangePassword) {
+      firstLogin.sid = data.sid || form.sid;
+      firstLogin.newPassword = '';
+      firstLogin.confirmPassword = '';
+      firstLogin.error = '';
+      firstLogin.show = true;
+      return;
+    }
+
     if (data.success) {
       setAuth(data.token, data.user);
-      const role = data.user.role;
-      if (role === 'ls') router.push('/ls/attendance/create');
-      else if (role === 'ls_supervisor') router.push('/supervisor/approvals');
-      else if (role === 'vendor') router.push('/vendor/reports');
-      else if (role === 'ls_hr') router.push('/ls-hr/approvals');
-      else if (role === 'ssu') router.push('/ssu/approvals');
+      router.push(routeForRole(data.user.role));
     }
   } catch (err) {
     errorMsg.value = err.response?.data?.message || 'Login failed. Please try again.';
   } finally {
     loading.value = false;
+  }
+};
+
+const handleChangePassword = async () => {
+  firstLogin.error = '';
+
+  const next = String(firstLogin.newPassword || '');
+  if (next.length < MIN_PASSWORD_LENGTH) {
+    firstLogin.error = `New password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
+    return;
+  }
+  if (next !== String(firstLogin.confirmPassword || '')) {
+    firstLogin.error = 'New password and confirmation do not match.';
+    return;
+  }
+
+  firstLogin.saving = true;
+  try {
+    await api.post('/auth/change-password', {
+      sid: firstLogin.sid,
+      currentPassword: form.password,
+      newPassword: next,
+      confirmPassword: firstLogin.confirmPassword,
+    });
+
+    // Password updated and is_first_login cleared server-side — sign in
+    // immediately with the new credential so the user lands on their
+    // dashboard without re-typing the SID.
+    form.password = next;
+    const { data } = await api.post('/auth/login', form);
+    if (data.success && data.token) {
+      setAuth(data.token, data.user);
+      firstLogin.show = false;
+      router.push(routeForRole(data.user.role));
+    } else {
+      // Defensive: should not happen now that the flag is cleared.
+      firstLogin.show = false;
+      errorMsg.value = 'Password updated. Please sign in with your new password.';
+    }
+  } catch (err) {
+    firstLogin.error =
+      err.response?.data?.message || 'Could not update password. Please try again.';
+  } finally {
+    firstLogin.saving = false;
   }
 };
 </script>
@@ -226,6 +365,22 @@ const handleLogin = async () => {
   background: var(--bc-green-100); color: var(--bc-green-700);
   padding: 2px 7px; border-radius: var(--radius-full);
 }
+
+/* ── First-time login dialog ─ */
+.fl-intro {
+  font-size: 13.5px;
+  color: var(--bc-gray-600);
+  line-height: 1.5;
+  margin-bottom: 18px;
+}
+.fl-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--bc-gray-400);
+}
+.modal-body .form-group { margin-bottom: 16px; }
+.modal-body .password-wrap { position: relative; }
+.modal-body .password-wrap .form-control { padding-right: 44px; }
 
 @media (max-width: 900px) {
   .login-page { grid-template-columns: 1fr; }

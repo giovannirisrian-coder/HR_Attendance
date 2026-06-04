@@ -592,9 +592,15 @@ const provisionLsUserAccount = async (
   // `sid` is the login credential. NPK (employee_id) and email are
   // optional — both are UNIQUE+NULLable so an empty value is stored as
   // NULL rather than blocking the insert.
+  //
+  // `is_first_login` is forced to 1 (TRUE): the account is created with
+  // the shared default password, so the user must change it on first
+  // sign-in (POST /api/auth/change-password clears the flag). The column
+  // also DEFAULTs to 1, but we set it explicitly so the intent is clear
+  // and never depends on the schema default.
   const [ins] = await conn.query(
-    `INSERT INTO users (name, employee_id, sid, email, password, role, vendor_id, supervisor_id, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO users (name, employee_id, sid, email, password, role, vendor_id, supervisor_id, is_active, is_first_login)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
     [name, npk || null, sid, email || null, passwordHash, DEFAULT_LS_ROLE, vendorId, supervisorId, isActive]
   );
   return ins.insertId;
