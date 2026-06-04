@@ -118,6 +118,13 @@ const MAX_LENGTHS = {
 // applied even though the underlying column is nullable.
 const SID_MAX_LENGTH = 64;
 
+// `email` is an OPTIONAL free-text field restored on the Create / Edit
+// Employee forms. When supplied it must look like a valid email address
+// so the value mirrored onto `users.email` stays clean; an empty value
+// is stored as NULL and never blocks the write (email is not a
+// credential — authentication is SID-based).
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 // Columns selected for every read (list + getById). We JOIN `vendors`
 // so the response always returns the master vendor's current code /
 // name — even when the denormalized `vendor_number` / `vendor_name`
@@ -329,6 +336,16 @@ const validateBody = (body, opts = {}) => {
       return { ok: false, error: `Field "${f}" is too long (max ${MAX_LENGTHS[f]} chars).` };
     }
     fields[f] = v === '' ? null : v;
+  }
+
+  // Email format check — OPTIONAL. Only validated when the field is
+  // present and non-empty; an empty submission stays NULL (set above)
+  // so the user can clear the value on either the Create or Edit form.
+  if (!(partial && body.email === undefined)) {
+    const email = sanitizeText(body.email);
+    if (email !== '' && !EMAIL_REGEX.test(email)) {
+      return { ok: false, error: 'Field "Email" must be a valid email address.' };
+    }
   }
 
   // SID — MANDATORY. On POST it is always validated; on a partial PUT
@@ -898,8 +915,9 @@ const getEmployeeById = async (req, res) => {
  * POST /api/employees
  *
  * Creates a new hr_employees row and — when the form supplies enough
- * identifying data (employee_name + NPK + email) — also provisions a
- * matching `users` row (role='ls') in the same DB transaction.
+ * identifying data (employee_name + SID) — also provisions a matching
+ * `users` row (role='ls') in the same DB transaction. The optional
+ * email is mirrored onto users.email when present.
  *
  * If the user-side insert fails the entire write rolls back, so the
  * caller never sees a half-finished personnel record.
@@ -912,16 +930,15 @@ const createEmployee = async (req, res) => {
 
   const f = v.fields;
 
-  // Hidden-field policy: the Create / Edit forms no longer expose Email
-  // or User Status to the PIC LS. The backend still owns these columns,
-  // so we force the agreed defaults regardless of what (if anything) the
-  // client sent:
-  //   • email          → NULL
+  // Field policy: Email is exposed on the Create / Edit forms again and
+  // is OPTIONAL — the validated value from validateBody flows through
+  // untouched (NULL when blank) and is mirrored onto users.email during
+  // account provisioning. User Status is still owned by the backend, so
+  // we force the agreed default:
   //   • user_status    → 'Active'
-  // `employee_group` (BC / MTL) IS exposed on the form again — the
-  // validated value from validateBody flows through untouched so the
-  // Automated Analytics step can bucket recap rows by group.
-  f.email = null;
+  // `employee_group` (BC / MTL) is also exposed on the form — the
+  // validated value flows through so the Automated Analytics step can
+  // bucket recap rows by group.
   f.user_status = 'Active';
 
   // Audit trail stores the requester's NAME (not the numeric id) so the
@@ -1058,15 +1075,17 @@ const updateEmployee = async (req, res) => {
 
   const fields = { ...v.fields };
 
-  // Hidden-field policy (mirrors createEmployee): Email and User Status
-  // are no longer editable from the form, so every update forces the
-  // agreed defaults so existing records are normalised on save:
-  //   • email          → NULL
+  // Field policy (mirrors createEmployee): Email is editable on the form
+  // again and OPTIONAL — when the form sends it, the validated value
+  // (NULL when blank) is persisted and synced to users.email; when the
+  // field is absent (partial PATCH) the existing value is left
+  // untouched. User Status is still backend-owned, so every update
+  // forces the agreed default so existing records are normalised on
+  // save:
   //   • user_status    → 'Active'
-  // `employee_group` (BC / MTL) IS editable again — when the form sends
-  // it, the validated value from validateBody is persisted; when the
-  // field is absent (partial PATCH) the existing value is left untouched.
-  fields.email = null;
+  // `employee_group` (BC / MTL) IS editable — when the form sends it,
+  // the validated value from validateBody is persisted; when the field
+  // is absent (partial PATCH) the existing value is left untouched.
   fields.user_status = 'Active';
 
   // Vendor lookup: same authoritative overwrite as in createEmployee.

@@ -73,6 +73,20 @@
           <input v-model="form.employee_name" type="text" class="form-control" />
         </div>
 
+        <div class="form-group form-group--full">
+          <label class="form-label">Email</label>
+          <input
+            v-model="form.email"
+            type="email"
+            class="form-control"
+            :class="{ 'form-control--error': emailError }"
+            maxlength="190"
+            @blur="validateEmail"
+            @input="emailError = ''"
+          />
+          <p v-if="emailError" class="field-error">{{ emailError }}</p>
+        </div>
+
         <div class="form-group">
           <label class="form-label">Position</label>
           <input v-model="form.position" type="text" class="form-control" />
@@ -88,9 +102,7 @@
             <option value="">— Select group —</option>
             <option v-for="g in EMPLOYEE_GROUP_OPTIONS" :key="g" :value="g">{{ g }}</option>
           </select>
-          <p class="text-sm text-muted" style="margin-top: 6px;">
-            Categorisation used for BAST checks and Salary Recap (BC or MTL).
-          </p>
+
         </div>
         <div class="form-group">
           <label class="form-label">Site</label>
@@ -118,9 +130,7 @@
           />
           <p class="text-sm text-muted" style="margin-top: 6px;">
             Optional. Search by Supervisor Name. Only users with the
-            <strong>LS Supervisor</strong> role appear in the list. The
-            employee record stores the supervisor's user ID so the
-            Managerial Review stage has a robust audit trail.
+            <strong>LS Supervisor</strong> role appear in the list.
           </p>
         </div>
       </div>
@@ -255,10 +265,30 @@ const validateSid = () => {
   return true;
 };
 
+// Email is OPTIONAL — only validate the format when a value is typed so
+// the user can leave the field empty on both Create and Edit.
+const emailError = ref('');
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const validateEmail = () => {
+  const email = String(form.email || '').trim();
+  if (email && !EMAIL_REGEX.test(email)) {
+    emailError.value = 'Please enter a valid email address.';
+    return false;
+  }
+  emailError.value = '';
+  return true;
+};
+
 const onSubmit = () => {
   if (props.submitting) return;
   if (!validateSid()) return;
-  emit('submit', { ...form, sid: String(form.sid || '').trim() });
+  if (!validateEmail()) return;
+  emit('submit', {
+    ...form,
+    sid: String(form.sid || '').trim(),
+    email: String(form.email || '').trim(),
+  });
 };
 
 const onCancel = () => {

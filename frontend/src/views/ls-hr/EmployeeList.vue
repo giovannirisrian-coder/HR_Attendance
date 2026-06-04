@@ -101,6 +101,7 @@
               <th>Employee ID (NPK)</th>
               <th>SID</th>
               <th>Employee Name</th>
+              <th>Email</th>
               <th>Position</th>
               <th>Position Group</th>
               <th>Employee Group</th>
@@ -112,7 +113,7 @@
           </thead>
           <tbody>
             <tr v-if="employees.length === 0">
-              <td :colspan="13">
+              <td :colspan="14">
                 <div class="empty-state">
                   <div class="empty-state-icon">👥</div>
                   <h3>No employees found</h3>
@@ -130,6 +131,10 @@
                 <span v-else class="text-muted">—</span>
               </td>
               <td class="font-bold">{{ emp.employee_name }}</td>
+              <td>
+                <span v-if="emp.email">{{ emp.email }}</span>
+                <span v-else class="text-muted">—</span>
+              </td>
               <td>{{ emp.position }}</td>
               <td>{{ emp.position_group }}</td>
               <td>
