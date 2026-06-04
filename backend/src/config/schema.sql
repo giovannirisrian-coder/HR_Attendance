@@ -114,8 +114,13 @@ CREATE TABLE IF NOT EXISTS hr_employees (
   user_status       ENUM('Active','Deactive') NOT NULL DEFAULT 'Active',
 
   -- Audit
-  created_by        INT           NULL,
-  updated_by        INT           NULL,
+  -- created_by / updated_by store the NAME (string) of the user who
+  -- performed the action, resolved from `users.name` at write time, so
+  -- the BAST Check / Document Check transparency reporting is
+  -- human-readable without an extra JOIN. (Previously these were INT FKs
+  -- into users(id); see migration_hr_employees_audit_name.sql.)
+  created_by        VARCHAR(150)  NULL,
+  updated_by        VARCHAR(150)  NULL,
   created_at        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
@@ -130,9 +135,7 @@ CREATE TABLE IF NOT EXISTS hr_employees (
 
   CONSTRAINT fk_hr_employees_user       FOREIGN KEY (user_id)    REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_hr_employees_vendor     FOREIGN KEY (vendor_id)  REFERENCES vendors(id) ON DELETE SET NULL,
-  CONSTRAINT fk_hr_employees_supervisor FOREIGN KEY (supervisor_id) REFERENCES users(id) ON DELETE SET NULL,
-  CONSTRAINT fk_hr_employees_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
-  CONSTRAINT fk_hr_employees_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+  CONSTRAINT fk_hr_employees_supervisor FOREIGN KEY (supervisor_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ──────────────────────────────────────────────

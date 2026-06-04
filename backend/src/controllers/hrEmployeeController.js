@@ -430,6 +430,35 @@ const resolveSupervisor = async (userId) => {
   }
 };
 
+/**
+ * Resolve the authenticated requester's display name from the `users`
+ * master so the audit columns (`created_by` / `updated_by`) can store a
+ * human-readable NAME instead of an opaque numeric user id. This makes
+ * the BAST Check / Document Check transparency reporting legible without
+ * an extra JOIN.
+ *
+ * Falls back to `null` when the id is missing or the user row cannot be
+ * found, so a failed lookup never blocks the personnel write — the audit
+ * column is simply left empty.
+ *
+ * @param {object} executor — a db pool or an active transaction connection.
+ * @param {number|null} userId
+ * @returns {Promise<string|null>}
+ */
+const resolveActorName = async (executor, userId) => {
+  if (!userId) return null;
+  try {
+    const [rows] = await executor.query(
+      'SELECT name FROM users WHERE id = ? LIMIT 1',
+      [userId]
+    );
+    return rows.length ? rows[0].name : null;
+  } catch (err) {
+    console.error('Resolve actor name error:', err);
+    return null;
+  }
+};
+
 // ── User-account sync helpers (LS role provisioning) ──────────────────────
 //
 // These helpers implement the "Seamless Integration" objective: every
@@ -849,7 +878,21 @@ const createEmployee = async (req, res) => {
   }
 
   const f = v.fields;
-  const createdBy = req.user?.id || null;
+
+  // Hidden-field policy: the Create / Edit forms no longer expose Email,
+  // Group (employee_group) or User Status to the PIC LS. The backend
+  // still owns these columns, so we force the agreed defaults regardless
+  // of what (if anything) the client sent:
+  //   • email          → NULL
+  //   • employee_group → NULL
+  //   • user_status    → 'Active'
+  f.email = null;
+  f.employee_group = null;
+  f.user_status = 'Active';
+
+  // Audit trail stores the requester's NAME (not the numeric id) so the
+  // BAST / Document Check reporting is human-readable.
+  const actorName = await resolveActorName(db, req.user?.id || null);
 
   // Vendor lookup: when a vendor_id is supplied we resolve the master
   // record and authoritatively overwrite the denormalized display
@@ -918,7 +961,7 @@ const createEmployee = async (req, res) => {
         vendorId,
         f.vendor_number, f.user_department, f.vendor_name,
         f.npk, f.sid, f.employee_name, f.email, f.position, f.position_group, f.employee_group, f.site,
-        supervisorId, f.user_status, createdBy, createdBy,
+        supervisorId, f.user_status, actorName, actorName,
       ]
     );
 
@@ -977,6 +1020,16 @@ const updateEmployee = async (req, res) => {
 
   const fields = { ...v.fields };
 
+  // Hidden-field policy (mirrors createEmployee): Email, Group and User
+  // Status are no longer editable from the form, so every update forces
+  // the agreed defaults so existing records are normalised on save:
+  //   • email          → NULL
+  //   • employee_group → NULL
+  //   • user_status    → 'Active'
+  fields.email = null;
+  fields.employee_group = null;
+  fields.user_status = 'Active';
+
   // Vendor lookup: same authoritative overwrite as in createEmployee.
   // An explicit `vendor_id: null` clears the FK and leaves the
   // denormalized display copies untouched (HR can still edit them
@@ -1034,7 +1087,10 @@ const updateEmployee = async (req, res) => {
 
     const setClause = keys.map((k) => `${k} = ?`).join(', ');
     const values = keys.map((k) => fields[k]);
-    const updatedBy = req.user?.id || null;
+    // Audit trail stores the requester's NAME (resolved from `users`)
+    // rather than the numeric id, for human-readable BAST / Document
+    // Check reporting.
+    const updatedBy = await resolveActorName(conn, req.user?.id || null);
 
     await conn.query(
       `UPDATE hr_employees SET ${setClause}, updated_by = ? WHERE id = ?`,
@@ -1156,6 +1212,9 @@ const updateEmployee = async (req, res) => {
  */
 const uploadEmployeesBulk = async (req, res) => {
   const uploaderId = req.user?.id || null;
+  // Audit columns now store the actor's NAME (see resolveActorName), so
+  // resolve the uploader's display name once and reuse it for every row.
+  const uploaderName = await resolveActorName(db, uploaderId);
   const uploadRequestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   try {
     const sourceSystem = sanitizeText(req.body?.source_system).toUpperCase();
@@ -1278,7 +1337,7 @@ const uploadEmployeesBulk = async (req, res) => {
           [
             f.vendor_id, f.nik, f.vendor_number, f.user_department, f.vendor_name,
             f.npk, f.employee_name, f.position, f.position_group, f.site,
-            f.supervisor_nik, f.supervisor_name, f.user_status, uploaderId, uploaderId,
+            f.supervisor_nik, f.supervisor_name, f.user_status, uploaderName, uploaderName,
           ]
         );
 
