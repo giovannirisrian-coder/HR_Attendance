@@ -101,16 +101,13 @@
           <thead>
             <tr>
               <th class="col-no">No</th>
-              <th>Vendor Number</th>
               <th>User Department</th>
               <th>Vendor Name</th>
               <th>Employee ID (NPK)</th>
               <th>SID</th>
               <th>Employee Name</th>
-              <th class="col-email">Email</th>
               <th>Position</th>
               <th>Position Group</th>
-              <th>Group</th>
               <th>Site</th>
               <th>Supervisor</th>
               <th>User Status</th>
@@ -119,7 +116,7 @@
           </thead>
           <tbody>
             <tr v-if="employees.length === 0">
-              <td :colspan="15">
+              <td :colspan="12">
                 <div class="empty-state">
                   <div class="empty-state-icon">👥</div>
                   <h3>No employees found</h3>
@@ -129,7 +126,6 @@
             </tr>
             <tr v-for="(emp, idx) in employees" :key="emp.id">
               <td class="col-no font-bold">{{ rowNumber(idx) }}</td>
-              <td><span class="text-sm font-mono">{{ emp.vendor_number }}</span></td>
               <td>{{ emp.user_department }}</td>
               <td class="font-bold">{{ emp.vendor_name }}</td>
               <td><span class="text-sm font-mono">{{ emp.npk }}</span></td>
@@ -138,21 +134,8 @@
                 <span v-else class="text-muted">—</span>
               </td>
               <td class="font-bold">{{ emp.employee_name }}</td>
-              <td class="col-email">
-                <a
-                  v-if="emp.email"
-                  :href="`mailto:${emp.email}`"
-                  class="email-link"
-                  :title="emp.email"
-                >{{ emp.email }}</a>
-                <span v-else class="text-muted">—</span>
-              </td>
               <td>{{ emp.position }}</td>
               <td>{{ emp.position_group }}</td>
-              <td>
-                <span v-if="emp.employee_group" class="badge badge-group">{{ emp.employee_group }}</span>
-                <span v-else class="text-muted">—</span>
-              </td>
               <td>{{ emp.site }}</td>
               <td>
                 <span v-if="emp.supervisor_name">{{ emp.supervisor_name }}</span>
@@ -300,7 +283,7 @@ onMounted(fetchData);
 }
 
 .employee-table {
-  min-width: 1500px;
+  min-width: 1100px;
 }
 
 .employee-table thead th,
@@ -316,28 +299,6 @@ onMounted(fetchData);
 .col-actions {
   width: 90px;
   text-align: center;
-}
-
-.col-email {
-  width: 220px;
-  max-width: 220px;
-}
-
-.col-email .email-link {
-  display: inline-block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  vertical-align: middle;
-  color: var(--bc-green-700);
-  text-decoration: none;
-  font-size: 13px;
-}
-
-.col-email .email-link:hover {
-  text-decoration: underline;
-  color: var(--bc-green-500);
 }
 
 .font-mono {
