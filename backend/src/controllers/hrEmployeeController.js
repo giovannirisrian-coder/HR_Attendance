@@ -678,6 +678,77 @@ const dupEntryResponse = (err) => {
   };
 };
 
+// ── Administrative password reset (PIC LS) ────────────────────────────────
+//
+// Lets an LS HR Officer reset a user's login password by SID so they can
+// quickly unblock Employee / Leader / Vendor accounts and keep the digital
+// workflow (Biometric Capture → … → Automated Analytics) moving. The route
+// is already gated to role='ls_hr' (see routes/hrEmployees.js), so this
+// handler only enforces input validation + the SID-exists check.
+//
+// The new password is bcrypt-hashed with the same cost factor as the rest
+// of the system, and `is_first_login` is cleared so the reset password is
+// usable immediately on the next sign-in (no forced change loop).
+const MIN_RESET_PASSWORD_LENGTH = 8;
+
+/**
+ * POST /api/employees/reset-password
+ * Body: { sid, newPassword, confirmPassword }
+ */
+const resetUserPassword = async (req, res) => {
+  try {
+    const sid = sanitizeText(req.body?.sid);
+    const newPassword = req.body?.newPassword;
+    const confirmPassword = req.body?.confirmPassword;
+
+    if (!sid) {
+      return res.status(400).json({ success: false, message: 'Field "SID" is required.' });
+    }
+
+    if (!newPassword || String(newPassword).length < MIN_RESET_PASSWORD_LENGTH) {
+      return res.status(400).json({
+        success: false,
+        message: `New password must be at least ${MIN_RESET_PASSWORD_LENGTH} characters.`,
+      });
+    }
+
+    if (String(newPassword) !== String(confirmPassword)) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password and confirmation do not match.',
+      });
+    }
+
+    // SID must exist in `users` (the login credential column).
+    const [rows] = await db.query(
+      'SELECT id, name FROM users WHERE sid = ? LIMIT 1',
+      [sid]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'SID not found in the system.',
+      });
+    }
+
+    const target = rows[0];
+    const passwordHash = await bcrypt.hash(String(newPassword), BCRYPT_COST);
+    await db.query(
+      'UPDATE users SET password = ?, is_first_login = 0 WHERE id = ?',
+      [passwordHash, target.id]
+    );
+
+    return res.json({
+      success: true,
+      message: 'Password has been successfully reset.',
+      data: { sid, name: target.name },
+    });
+  } catch (err) {
+    console.error('Reset user password error:', err);
+    return res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
 // ── Controller actions ─────────────────────────────────────────────────────
 
 /**
@@ -1481,4 +1552,5 @@ module.exports = {
   updateEmployee,
   uploadHrEmployeesMiddleware: uploadHrEmployeesMiddlewareSafe,
   uploadEmployeesBulk,
+  resetUserPassword,
 };

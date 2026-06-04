@@ -14,6 +14,7 @@ const {
   updateEmployee,
   uploadHrEmployeesMiddleware,
   uploadEmployeesBulk,
+  resetUserPassword,
 } = require('../controllers/hrEmployeeController');
 const { authenticate, authorize } = require('../middleware/auth');
 
@@ -23,6 +24,10 @@ router.use(authenticate, authorize('ls_hr'));
 // static path segments are not mistakenly parsed as an employee id.
 router.get('/vendors', listVendors);
 router.get('/supervisors', listSupervisors);
+
+// Administrative password reset by SID (PIC LS). Declared before the
+// `/:id` routes so the static segment is not parsed as an employee id.
+router.post('/reset-password', resetUserPassword);
 
 router.get('/', listEmployees);
 router.post('/upload', uploadHrEmployeesMiddleware, uploadEmployeesBulk);
