@@ -20,11 +20,22 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Handle 401 globally
+// Endpoints where a 401 is an expected business outcome (e.g. wrong
+// credentials during sign-in) rather than an expired session. For these we
+// must NOT force a redirect/reload — the calling component handles the error
+// inline so the message stays visible on screen.
+const AUTH_ENDPOINTS = ['/auth/login', '/auth/change-password'];
+
+// Handle 401 globally — but only for protected requests. A 401 from the
+// login flow is surfaced to the form's catch block instead of triggering a
+// full-page navigation that would wipe the error message.
 api.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
+    const requestUrl = err.config?.url || '';
+    const isAuthRequest = AUTH_ENDPOINTS.some((path) => requestUrl.includes(path));
+
+    if (err.response?.status === 401 && !isAuthRequest) {
       localStorage.removeItem('bc_token');
       localStorage.removeItem('bc_user');
       window.location.href = '/login';

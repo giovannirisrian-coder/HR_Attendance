@@ -100,13 +100,6 @@ const toast = ref('');
 
 const routeId = computed(() => route.params.id);
 
-/**
- * `po_period_1` / `po_period_2` are now stored as free-text strings (see
- * migration_hr_employees_optional_fields.sql). We pass the value through
- * unchanged so HR can enter any wording (e.g. "Jan 2026 – Dec 2026").
- */
-const toText = (raw) => (raw == null ? '' : String(raw));
-
 const fetchEmployee = async () => {
   loading.value = true;
   loadError.value = '';
@@ -118,11 +111,7 @@ const fetchEmployee = async () => {
       loadError.value = 'Employee not found.';
       return;
     }
-    employee.value = {
-      ...d,
-      po_period_1: toText(d.po_period_1),
-      po_period_2: toText(d.po_period_2),
-    };
+    employee.value = { ...d };
   } catch (err) {
     if (err?.response?.status === 404) {
       loadError.value = 'Employee not found.';
@@ -144,11 +133,7 @@ const onSubmit = async (data) => {
     const { data: res } = await api.put(`/employees/${employee.value.id}`, data);
     const updated = res?.data;
     if (updated) {
-      employee.value = {
-        ...updated,
-        po_period_1: toText(updated.po_period_1),
-        po_period_2: toText(updated.po_period_2),
-      };
+      employee.value = { ...updated };
     }
     toast.value = `Changes for "${data.employee_name}" saved successfully.`;
     setTimeout(() => {

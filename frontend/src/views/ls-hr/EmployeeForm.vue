@@ -3,11 +3,11 @@
     <div v-if="errorMessage" class="alert alert-error"><span>⚠️</span> {{ errorMessage }}</div>
     <div v-if="successMessage" class="alert alert-success"><span>✅</span> {{ successMessage }}</div>
 
-    <!-- ── Section: Vendor & Contract ─────────────────────────── -->
+    <!-- ── Section: Vendor ────────────────────────────────────── -->
     <section class="form-section">
       <div class="form-section-header">
-        <h2 class="form-section-title">Vendor &amp; Contract</h2>
-        <p class="form-section-sub">Vendor identity and purchase order assignment</p>
+        <h2 class="form-section-title">Vendor</h2>
+        <p class="form-section-sub">Vendor identity and placement</p>
       </div>
 
       <div class="form-grid">
@@ -33,43 +33,9 @@
           />
         </div>
 
-        <div class="form-group">
+        <div class="form-group form-group--full">
           <label class="form-label">User Department</label>
           <input v-model="form.user_department" type="text" class="form-control" />
-        </div>
-        <div class="form-group">
-          <label class="form-label">Department Title</label>
-          <input v-model="form.department_title" type="text" class="form-control" />
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">PO Number</label>
-          <input v-model="form.po_number" type="text" class="form-control" />
-        </div>
-        <div class="form-group">
-          <label class="form-label">DIC (HRO)</label>
-          <input v-model="form.dic_hro" type="text" class="form-control" />
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">PO Period 1</label>
-          <input v-model="form.po_period_1" type="text" class="form-control" />
-        </div>
-        <div class="form-group">
-          <label class="form-label">PO Period 2</label>
-          <input v-model="form.po_period_2" type="text" class="form-control" />
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">Cost Center</label>
-          <input v-model="form.cost_center" type="text" class="form-control" />
-        </div>
-        <div class="form-group">
-          <label class="form-label">Employment Status</label>
-          <select v-model="form.employment_status" class="form-control">
-            <option value=""></option>
-            <option v-for="o in employmentStatusOptions" :key="o" :value="o">{{ o }}</option>
-          </select>
         </div>
       </div>
     </section>
@@ -83,57 +49,64 @@
 
       <div class="form-grid">
         <div class="form-group">
+          <label class="form-label">SID <span class="required-mark" aria-hidden="true">*</span></label>
+          <input
+            v-model="form.sid"
+            type="text"
+            class="form-control"
+            :class="{ 'form-control--error': sidError }"
+            maxlength="64"
+            required
+            aria-required="true"
+            @blur="validateSid"
+            @input="sidError = ''"
+          />
+          <p v-if="sidError" class="field-error">{{ sidError }}</p>
+        </div>
+        <div class="form-group">
           <label class="form-label">Employee ID (NPK)</label>
           <input v-model="form.npk" type="text" class="form-control" />
         </div>
-        <div class="form-group">
+
+        <div class="form-group form-group--full">
           <label class="form-label">Employee Name</label>
           <input v-model="form.employee_name" type="text" class="form-control" />
         </div>
 
-        <div class="form-group">
+        <div class="form-group form-group--full">
           <label class="form-label">Email</label>
-          <input v-model="form.email" type="email" class="form-control" maxlength="190" autocomplete="email" />
+          <input
+            v-model="form.email"
+            type="email"
+            class="form-control"
+            :class="{ 'form-control--error': emailError }"
+            maxlength="190"
+            @blur="validateEmail"
+            @input="emailError = ''"
+          />
+          <p v-if="emailError" class="field-error">{{ emailError }}</p>
         </div>
+
         <div class="form-group">
           <label class="form-label">Position</label>
           <input v-model="form.position" type="text" class="form-control" />
         </div>
-
         <div class="form-group">
           <label class="form-label">Position Group</label>
           <input v-model="form.position_group" type="text" class="form-control" />
         </div>
-        <div class="form-group">
-          <label class="form-label">Category</label>
-          <input v-model="form.category" type="text" class="form-control" />
-        </div>
 
         <div class="form-group">
-          <label class="form-label">Group</label>
+          <label class="form-label">Employee Group</label>
           <select v-model="form.employee_group" class="form-control">
-            <option value=""></option>
-            <option v-for="o in employeeGroupOptions" :key="o" :value="o">{{ o }}</option>
+            <option value="">— Select group —</option>
+            <option v-for="g in EMPLOYEE_GROUP_OPTIONS" :key="g" :value="g">{{ g }}</option>
           </select>
+
         </div>
         <div class="form-group">
           <label class="form-label">Site</label>
           <input v-model="form.site" type="text" class="form-control" />
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">User Status</label>
-          <select v-model="form.user_status" class="form-control">
-            <option v-for="o in userStatusOptions" :key="o" :value="o">{{ o }}</option>
-          </select>
-          <p class="text-sm text-muted" style="margin-top: 6px;">
-            <span v-if="form.user_status === 'Active'" class="status-hint status-hint--active">
-              The user can be referenced in attendance and BAST checks.
-            </span>
-            <span v-else-if="form.user_status === 'Deactive'" class="status-hint status-hint--deactive">
-              The user is excluded from active attendance flows.
-            </span>
-          </p>
         </div>
       </div>
     </section>
@@ -157,9 +130,7 @@
           />
           <p class="text-sm text-muted" style="margin-top: 6px;">
             Optional. Search by Supervisor Name. Only users with the
-            <strong>LS Supervisor</strong> role appear in the list. The
-            employee record stores the supervisor's user ID so the
-            Managerial Review stage has a robust audit trail.
+            <strong>LS Supervisor</strong> role appear in the list.
           </p>
         </div>
       </div>
@@ -177,13 +148,8 @@
 </template>
 
 <script setup>
-import { reactive, computed, watch } from 'vue';
-import {
-  EMPTY_EMPLOYEE,
-  EMPLOYMENT_STATUS_OPTIONS,
-  EMPLOYEE_GROUP_OPTIONS,
-  USER_STATUS_OPTIONS,
-} from './mockEmployees';
+import { reactive, ref, computed, watch } from 'vue';
+import { EMPTY_EMPLOYEE, EMPLOYEE_GROUP_OPTIONS } from './mockEmployees';
 import VendorSearchSelect from '../../components/VendorSearchSelect.vue';
 import SupervisorSearchSelect from '../../components/SupervisorSearchSelect.vue';
 
@@ -211,10 +177,6 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['submit', 'cancel']);
-
-const employmentStatusOptions = EMPLOYMENT_STATUS_OPTIONS;
-const employeeGroupOptions = EMPLOYEE_GROUP_OPTIONS;
-const userStatusOptions = USER_STATUS_OPTIONS;
 
 const form = reactive({ ...EMPTY_EMPLOYEE, ...(props.initialData || {}) });
 
@@ -289,9 +251,44 @@ const onSupervisorSelected = (supervisor) => {
   }
 };
 
+// SID is the one mandatory field on this form. We validate on blur and
+// again on submit so the form can never be saved without it, mirroring
+// the backend's required check.
+const sidError = ref('');
+
+const validateSid = () => {
+  if (!String(form.sid || '').trim()) {
+    sidError.value = 'SID is required.';
+    return false;
+  }
+  sidError.value = '';
+  return true;
+};
+
+// Email is OPTIONAL — only validate the format when a value is typed so
+// the user can leave the field empty on both Create and Edit.
+const emailError = ref('');
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const validateEmail = () => {
+  const email = String(form.email || '').trim();
+  if (email && !EMAIL_REGEX.test(email)) {
+    emailError.value = 'Please enter a valid email address.';
+    return false;
+  }
+  emailError.value = '';
+  return true;
+};
+
 const onSubmit = () => {
   if (props.submitting) return;
-  emit('submit', { ...form });
+  if (!validateSid()) return;
+  if (!validateEmail()) return;
+  emit('submit', {
+    ...form,
+    sid: String(form.sid || '').trim(),
+    email: String(form.email || '').trim(),
+  });
 };
 
 const onCancel = () => {
@@ -347,17 +344,23 @@ const onCancel = () => {
   grid-column: 1 / -1;
 }
 
-.status-hint {
-  display: inline-flex;
-  align-items: center;
+.required-mark {
+  color: var(--bc-rejected, #ef4444);
+  font-weight: 700;
+  margin-left: 2px;
+}
+
+.form-control--error,
+.form-control--error:focus {
+  border-color: var(--bc-rejected, #ef4444);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
+}
+
+.field-error {
+  margin-top: 6px;
   font-size: 12.5px;
   font-weight: 500;
-}
-.status-hint--active {
-  color: var(--bc-green-700);
-}
-.status-hint--deactive {
-  color: var(--bc-rejected);
+  color: var(--bc-rejected, #ef4444);
 }
 
 .form-actions {

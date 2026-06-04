@@ -5,7 +5,7 @@
  * to maintain the BAST Check master data set.
  *
  * `hr_employees` is now the consolidated employee master table:
- *  • LS HR (PIC LS) maintains the BAST fields here (vendor, PO, NPK, etc.).
+ *  • LS HR (PIC LS) maintains the BAST fields here (vendor, NPK, etc.).
  *  • Attendance / Leave / Overtime reference the same row via the
  *    `user_id` column and the unified `npk` identifier (the legacy
  *    `nik` column has been retired by
@@ -36,20 +36,23 @@
  *    attendance / leave / overtime downstream.
  *
  * User account auto-provisioning ("Seamless Integration"):
- *  • Every hr_employees row that has both `email` and `npk` is paired
- *    with a row in `users` (role='ls') so the employee can log in and
+ *  • Authentication is SID-based. Every hr_employees row that has both
+ *    an `employee_name` and a `sid` is paired with a row in `users`
+ *    (role='ls') so the employee can log in (SID + password) and
  *    participate in the digital workflow (Biometric Capture, Overtime,
  *    Correction, …). Create/update both rows in a single DB
  *    transaction — if the users-side write fails the hr_employees
  *    write rolls back, preventing orphan records.
  *  • The link is materialised as `hr_employees.user_id → users.id`.
- *    `npk` mirrors `users.employee_id` (the same value used for login)
- *    so the join is unambiguous and stable. The default password
- *    ("password") is bcrypt-hashed using the same cost factor as the
- *    seed users so first-login UX is identical.
- *  • If a draft employee is created without email/npk (legacy
- *    permissive UX), the account is auto-provisioned the next time
- *    those fields are filled in via an update — no manual step needed.
+ *    `sid` mirrors `users.sid` (the login credential) and `npk` mirrors
+ *    `users.employee_id`. Email is OPTIONAL (stored NULL by default)
+ *    and is no longer a credential, so a missing email never blocks the
+ *    insert. The default password ("password") is bcrypt-hashed using
+ *    the same cost factor as the seed users so first-login UX is
+ *    identical.
+ *  • If a draft employee is created without name/SID (legacy permissive
+ *    UX), the account is auto-provisioned the next time those fields are
+ *    filled in via an update — no manual step needed.
  *
  * The end-to-end approval workflow (LS → Supervisor → Vendor → PIC LS →
  * SSU) is unchanged — only the vendor and supervisor references are
@@ -74,29 +77,18 @@ const { normalizeCalendarYmdFromBody, compareYmd } = require('../utils/calendarD
 //      `vendors` when supplied. On a valid match the controller also
 //      overwrites vendor_number / vendor_name with the master values.
 //
-// PO Period 1 / PO Period 2 are intentionally treated as free-text strings
-// (see migration_hr_employees_optional_fields.sql) so HR can enter wording
-// like "Jan 2026 - Dec 2026" instead of being forced into a calendar picker.
 const TEXT_FIELDS = [
   'vendor_number',
   'user_department',
-  'department_title',
   'vendor_name',
-  'po_number',
-  'po_period_1',
-  'po_period_2',
-  'dic_hro',
-  'cost_center',
   'npk',
   'employee_name',
   'email',
   'position',
   'position_group',
-  'category',
   'site',
 ];
 const ENUM_FIELDS = {
-  employment_status: ['Permanent', 'Contract'],
   // Coarse classification used by the Automated Analytics step to
   // bucket recap rows for audit / payroll reporting. Optional — an
   // empty submission is stored as NULL so legacy / draft records
@@ -109,21 +101,29 @@ const ENUM_FIELDS = {
 const MAX_LENGTHS = {
   vendor_number: 64,
   user_department: 150,
-  department_title: 150,
   vendor_name: 200,
-  po_number: 64,
-  po_period_1: 100,
-  po_period_2: 100,
-  dic_hro: 150,
-  cost_center: 64,
   npk: 64,
   employee_name: 200,
   email: 190,
   position: 150,
   position_group: 150,
-  category: 100,
   site: 100,
 };
+
+// `sid` (System ID) is the one MANDATORY free-text field on the
+// Create / Edit Employee forms. Unlike the optional fields above it is
+// validated as required so the Automated Analytics step always has a
+// unique identifier for BAST / Salary Recap reporting. Handled
+// separately from TEXT_FIELDS so the "must not be empty" rule is
+// applied even though the underlying column is nullable.
+const SID_MAX_LENGTH = 64;
+
+// `email` is an OPTIONAL free-text field restored on the Create / Edit
+// Employee forms. When supplied it must look like a valid email address
+// so the value mirrored onto `users.email` stays clean; an empty value
+// is stored as NULL and never blocks the write (email is not a
+// credential — authentication is SID-based).
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Columns selected for every read (list + getById). We JOIN `vendors`
 // so the response always returns the master vendor's current code /
@@ -138,12 +138,10 @@ const MAX_LENGTHS = {
 const SELECT_COLS = `
   h.id, h.user_id, h.vendor_id,
   COALESCE(v.code, h.vendor_number) AS vendor_number,
-  h.user_department, h.department_title,
+  h.user_department,
   COALESCE(v.name, h.vendor_name) AS vendor_name,
-  h.employment_status, h.po_number, h.po_period_1, h.po_period_2,
-  h.dic_hro, h.cost_center,
-  h.npk, h.employee_name, h.email, h.position, h.position_group,
-  h.category, h.employee_group, h.site,
+  h.npk, h.sid, h.employee_name, h.email, h.position, h.position_group,
+  h.employee_group, h.site,
   h.supervisor_id, s.name AS supervisor_name, s.employee_id AS supervisor_employee_id,
   h.user_status,
   h.created_by, h.updated_by, h.created_at, h.updated_at
@@ -199,127 +197,12 @@ const TEMPLATE_HEADER_TO_FIELD = {
   'nama atasan': 'supervisor_name',
 };
 
-const REQUIRED_FIELDS_FOR_UPLOAD = [
-  'vendor_number',
-  'user_department',
-  'department_title',
-  'vendor_name',
-  'employment_status',
-  'po_number',
-  'po_period_1',
-  'po_period_2',
-  'dic_hro',
-  'cost_center',
-  'npk',
-  'employee_name',
-  'position',
-  'position_group',
-  'category',
-  'site',
-  'supervisor_nik',
-  'supervisor_name',
-];
-
 const normalizeUploadHeader = (value) =>
   String(value || '')
     .replace(/\s+/g, ' ')
     .replace(/\u00a0/g, ' ')
     .trim()
     .toLowerCase();
-
-const monthMap = {
-  jan: 1,
-  feb: 2,
-  mar: 3,
-  apr: 4,
-  may: 5,
-  jun: 6,
-  jul: 7,
-  aug: 8,
-  sep: 9,
-  oct: 10,
-  nov: 11,
-  dec: 12,
-};
-
-const pad2 = (n) => String(n).padStart(2, '0');
-
-const ymd = (year, month, day) => `${year}-${pad2(month)}-${pad2(day)}`;
-
-const lastDayOfMonth = (year, month) => new Date(Date.UTC(year, month, 0)).getUTCDate();
-
-const parseMonthYear = (raw) => {
-  const s = sanitizeText(raw).replace(/[^A-Za-z0-9]/g, '');
-  const m = /^([A-Za-z]{3})(\d{4})$/.exec(s);
-  if (!m) return null;
-  const mo = monthMap[m[1].slice(0, 3).toLowerCase()];
-  const y = parseInt(m[2], 10);
-  if (!mo || y < 1900 || y > 2200) return null;
-  return { year: y, month: mo };
-};
-
-const parseExcelDateValue = (raw) => {
-  if (raw instanceof Date && !Number.isNaN(raw.getTime())) {
-    const year = raw.getUTCFullYear();
-    const month = raw.getUTCMonth() + 1;
-    const day = raw.getUTCDate();
-    return { start: ymd(year, month, day), end: ymd(year, month, day) };
-  }
-
-  const s = sanitizeText(raw);
-  if (!s) return null;
-
-  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
-  if (iso) {
-    const year = parseInt(iso[1], 10);
-    const month = parseInt(iso[2], 10);
-    const day = parseInt(iso[3], 10);
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      return { start: ymd(year, month, day), end: ymd(year, month, day) };
-    }
-  }
-
-  const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
-  if (dmy) {
-    const day = parseInt(dmy[1], 10);
-    const month = parseInt(dmy[2], 10);
-    const year = parseInt(dmy[3], 10);
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      return { start: ymd(year, month, day), end: ymd(year, month, day) };
-    }
-  }
-
-  const monthRange = /^([A-Za-z]{3})\s*-\s*([A-Za-z]{3})\s*(\d{4})$/.exec(s);
-  if (monthRange) {
-    const m1 = monthMap[monthRange[1].slice(0, 3).toLowerCase()];
-    const m2 = monthMap[monthRange[2].slice(0, 3).toLowerCase()];
-    const year = parseInt(monthRange[3], 10);
-    if (m1 && m2 && m1 <= m2) {
-      return {
-        start: ymd(year, m1, 1),
-        end: ymd(year, m2, lastDayOfMonth(year, m2)),
-      };
-    }
-  }
-
-  const monthYear = parseMonthYear(s);
-  if (monthYear) {
-    return {
-      start: ymd(monthYear.year, monthYear.month, 1),
-      end: ymd(monthYear.year, monthYear.month, lastDayOfMonth(monthYear.year, monthYear.month)),
-    };
-  }
-
-  return null;
-};
-
-const normalizeEmploymentStatus = (value) => {
-  const s = sanitizeText(value).toLowerCase();
-  if (!s) return '';
-  if (s.includes('perman')) return 'Permanent';
-  if (s.includes('contract') || s.includes('kontrak')) return 'Contract';
-  return '';
-};
 
 const findHeaderRow = (rows) => {
   for (let i = 0; i < Math.min(rows.length, 30); i += 1) {
@@ -352,16 +235,6 @@ const summarizeLineError = (line, msg) => ({ line_no: line, error: msg });
 const nonEmptyOrDash = (value) => sanitizeText(value) || '-';
 
 const normalizeUploadRowForUpsert = (body) => {
-  const today = new Date();
-  const y = today.getFullYear();
-  const m = String(today.getMonth() + 1).padStart(2, '0');
-  const d = String(today.getDate()).padStart(2, '0');
-  const todayYmd = `${y}-${m}-${d}`;
-
-  const po1 = '';
-  const po2 = '';
-  const finalPo1 = po1 || po2 || todayYmd;
-  const finalPo2 = po2 || po1 || todayYmd;
   const nik = sanitizeText(body.nik);
   const npk = sanitizeText(body.npk || body.nik);
   const department = sanitizeText(body.user_department);
@@ -372,18 +245,10 @@ const normalizeUploadRowForUpsert = (body) => {
     vendor_id: null,
     vendor_number: '-',
     user_department: nonEmptyOrDash(department),
-    department_title: nonEmptyOrDash(department),
     vendor_name: nonEmptyOrDash(body.company_name),
-    employment_status: 'Contract',
-    po_number: '-',
-    po_period_1: finalPo1,
-    po_period_2: finalPo2,
-    dic_hro: '-',
-    cost_center: '-',
     employee_name: nonEmptyOrDash(body.employee_name),
     position: nonEmptyOrDash(body.position),
     position_group: '-',
-    category: '-',
     site: nonEmptyOrDash(body.site),
     supervisor_nik: nonEmptyOrDash(body.supervisor_nik),
     supervisor_name: nonEmptyOrDash(body.supervisor_name),
@@ -471,6 +336,30 @@ const validateBody = (body, opts = {}) => {
       return { ok: false, error: `Field "${f}" is too long (max ${MAX_LENGTHS[f]} chars).` };
     }
     fields[f] = v === '' ? null : v;
+  }
+
+  // Email format check — OPTIONAL. Only validated when the field is
+  // present and non-empty; an empty submission stays NULL (set above)
+  // so the user can clear the value on either the Create or Edit form.
+  if (!(partial && body.email === undefined)) {
+    const email = sanitizeText(body.email);
+    if (email !== '' && !EMAIL_REGEX.test(email)) {
+      return { ok: false, error: 'Field "Email" must be a valid email address.' };
+    }
+  }
+
+  // SID — MANDATORY. On POST it is always validated; on a partial PUT
+  // we only validate when the key is present (the Edit form always
+  // sends it), but if it IS present it must be a non-empty value.
+  if (!(partial && body.sid === undefined)) {
+    const sid = sanitizeText(body.sid);
+    if (sid === '') {
+      return { ok: false, error: 'Field "SID" is required.' };
+    }
+    if (sid.length > SID_MAX_LENGTH) {
+      return { ok: false, error: `Field "SID" is too long (max ${SID_MAX_LENGTH} chars).` };
+    }
+    fields.sid = sid;
   }
 
   for (const [f, allowed] of Object.entries(ENUM_FIELDS)) {
@@ -561,6 +450,35 @@ const resolveSupervisor = async (userId) => {
   }
 };
 
+/**
+ * Resolve the authenticated requester's display name from the `users`
+ * master so the audit columns (`created_by` / `updated_by`) can store a
+ * human-readable NAME instead of an opaque numeric user id. This makes
+ * the BAST Check / Document Check transparency reporting legible without
+ * an extra JOIN.
+ *
+ * Falls back to `null` when the id is missing or the user row cannot be
+ * found, so a failed lookup never blocks the personnel write — the audit
+ * column is simply left empty.
+ *
+ * @param {object} executor — a db pool or an active transaction connection.
+ * @param {number|null} userId
+ * @returns {Promise<string|null>}
+ */
+const resolveActorName = async (executor, userId) => {
+  if (!userId) return null;
+  try {
+    const [rows] = await executor.query(
+      'SELECT name FROM users WHERE id = ? LIMIT 1',
+      [userId]
+    );
+    return rows.length ? rows[0].name : null;
+  } catch (err) {
+    console.error('Resolve actor name error:', err);
+    return null;
+  }
+};
+
 // ── User-account sync helpers (LS role provisioning) ──────────────────────
 //
 // These helpers implement the "Seamless Integration" objective: every
@@ -579,13 +497,16 @@ const BCRYPT_COST = 10;
 
 /**
  * Pre-check whether the LS user row has the minimum fields required
- * to create / sync a login account. We need the employee_name (used
- * as users.name), the NPK (users.employee_id — UNIQUE) and the email
- * (users.email — NOT NULL UNIQUE). Anything less and we skip the
- * account step so legacy "draft" hr_employees rows keep working.
+ * to create / sync a login account. Authentication is now SID-based,
+ * so the credentials we need are the employee_name (used as
+ * users.name, which is NOT NULL) and the SID (users.sid — the login
+ * identifier). NPK (users.employee_id) and email are OPTIONAL: NPK is
+ * synced when present and email is no longer a credential. Anything
+ * less than name + SID and we skip the account step so legacy / draft
+ * hr_employees rows keep working.
  */
-const hasUserAccountFields = (employeeName, npk, email) =>
-  Boolean(employeeName && npk && email);
+const hasUserAccountFields = (employeeName, sid) =>
+  Boolean(employeeName && sid);
 
 /**
  * Map `hr_employees.user_status` (Active / Deactive) onto the
@@ -605,30 +526,44 @@ const hasUserAccountFields = (employeeName, npk, email) =>
 const userStatusToIsActive = (userStatus) => (userStatus === 'Deactive' ? 0 : 1);
 
 /**
- * Detect an existing `users` row that would collide with the email
- * or NPK we are about to write. Returns:
- *   { conflict: 'email' | 'employee_id' | null, user?: row }
+ * Detect an existing `users` row that would collide with the SID
+ * or NPK we are about to write. Authentication is SID-based, so the
+ * SID (the login identifier) is the primary uniqueness axis; NPK
+ * (users.employee_id) is still UNIQUE and checked when present.
+ * Returns:
+ *   { conflict: 'sid' | 'employee_id' | null, user?: row }
  *
  * On the update path pass `excludeUserId` to ignore the row we are
  * synchronising into — otherwise it would always conflict with itself.
  *
- * The `employee_id IS NOT NULL` guard prevents legacy users created
- * without an employee_id from matching a fresh NPK.
+ * The `IS NOT NULL` guards prevent legacy users created without a SID
+ * or employee_id from matching a fresh value.
  */
-const findUserConflict = async (conn, { email, npk, excludeUserId = null }) => {
-  const params = [email, npk];
-  let where = 'WHERE (email = ? OR (employee_id IS NOT NULL AND employee_id = ?))';
+const findUserConflict = async (conn, { sid, npk, excludeUserId = null }) => {
+  const conditions = [];
+  const params = [];
+  if (sid) {
+    conditions.push('(sid IS NOT NULL AND sid = ?)');
+    params.push(sid);
+  }
+  if (npk) {
+    conditions.push('(employee_id IS NOT NULL AND employee_id = ?)');
+    params.push(npk);
+  }
+  if (conditions.length === 0) return { conflict: null };
+
+  let where = `WHERE (${conditions.join(' OR ')})`;
   if (excludeUserId) {
     where += ' AND id <> ?';
     params.push(excludeUserId);
   }
   const [rows] = await conn.query(
-    `SELECT id, email, employee_id FROM users ${where} LIMIT 1`,
+    `SELECT id, sid, employee_id FROM users ${where} LIMIT 1`,
     params
   );
   if (rows.length === 0) return { conflict: null };
   const u = rows[0];
-  if (u.email === email) return { conflict: 'email', user: u };
+  if (sid && u.sid === sid) return { conflict: 'sid', user: u };
   return { conflict: 'employee_id', user: u };
 };
 
@@ -651,13 +586,22 @@ const findUserConflict = async (conn, { email, npk, excludeUserId = null }) => {
  */
 const provisionLsUserAccount = async (
   conn,
-  { name, npk, email, vendorId, supervisorId, isActive }
+  { name, npk, email, sid, vendorId, supervisorId, isActive }
 ) => {
   const passwordHash = await bcrypt.hash(DEFAULT_LS_PASSWORD, BCRYPT_COST);
+  // `sid` is the login credential. NPK (employee_id) and email are
+  // optional — both are UNIQUE+NULLable so an empty value is stored as
+  // NULL rather than blocking the insert.
+  //
+  // `is_first_login` is forced to 1 (TRUE): the account is created with
+  // the shared default password, so the user must change it on first
+  // sign-in (POST /api/auth/change-password clears the flag). The column
+  // also DEFAULTs to 1, but we set it explicitly so the intent is clear
+  // and never depends on the schema default.
   const [ins] = await conn.query(
-    `INSERT INTO users (name, employee_id, email, password, role, vendor_id, supervisor_id, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [name, npk, email, passwordHash, DEFAULT_LS_ROLE, vendorId, supervisorId, isActive]
+    `INSERT INTO users (name, employee_id, sid, email, password, role, vendor_id, supervisor_id, is_active, is_first_login)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    [name, npk || null, sid, email || null, passwordHash, DEFAULT_LS_ROLE, vendorId, supervisorId, isActive]
   );
   return ins.insertId;
 };
@@ -665,8 +609,9 @@ const provisionLsUserAccount = async (
 /**
  * Propagate the LS HR-edited fields onto the linked `users` row.
  *
- * Per spec we sync: name, employee_id (NPK), email, vendor_id,
- * supervisor_id, and is_active. is_active is derived from
+ * Per spec we sync: name, employee_id (NPK), sid, email, vendor_id,
+ * supervisor_id, and is_active. `sid` is the login credential, kept in
+ * lock-step with hr_employees.sid. is_active is derived from
  * hr_employees.user_status via `userStatusToIsActive`, so toggling
  * a row to "Deactive" on the Employee List immediately locks the
  * paired login out via authController's `WHERE u.is_active = 1`
@@ -678,14 +623,14 @@ const provisionLsUserAccount = async (
 const syncLsUserAccount = async (
   conn,
   userId,
-  { name, npk, email, vendorId, supervisorId, isActive }
+  { name, npk, email, sid, vendorId, supervisorId, isActive }
 ) => {
   await conn.query(
     `UPDATE users
-        SET name = ?, employee_id = ?, email = ?,
+        SET name = ?, employee_id = ?, sid = ?, email = ?,
             vendor_id = ?, supervisor_id = ?, is_active = ?
       WHERE id = ?`,
-    [name, npk, email, vendorId, supervisorId, isActive, userId]
+    [name, npk || null, sid, email || null, vendorId, supervisorId, isActive, userId]
   );
 };
 
@@ -697,6 +642,15 @@ const syncLsUserAccount = async (
  */
 const dupEntryResponse = (err) => {
   const message = String(err && err.message ? err.message : '').toLowerCase();
+  if (message.includes('sid')) {
+    return {
+      status: 409,
+      body: {
+        success: false,
+        message: 'SID already exists. Please use a unique SID.',
+      },
+    };
+  }
   if (message.includes('email')) {
     return {
       status: 409,
@@ -722,6 +676,77 @@ const dupEntryResponse = (err) => {
       message: 'NPK already exists. Please use a unique Employee ID.',
     },
   };
+};
+
+// ── Administrative password reset (PIC LS) ────────────────────────────────
+//
+// Lets an LS HR Officer reset a user's login password by SID so they can
+// quickly unblock Employee / Leader / Vendor accounts and keep the digital
+// workflow (Biometric Capture → … → Automated Analytics) moving. The route
+// is already gated to role='ls_hr' (see routes/hrEmployees.js), so this
+// handler only enforces input validation + the SID-exists check.
+//
+// The new password is bcrypt-hashed with the same cost factor as the rest
+// of the system, and `is_first_login` is cleared so the reset password is
+// usable immediately on the next sign-in (no forced change loop).
+const MIN_RESET_PASSWORD_LENGTH = 8;
+
+/**
+ * POST /api/employees/reset-password
+ * Body: { sid, newPassword, confirmPassword }
+ */
+const resetUserPassword = async (req, res) => {
+  try {
+    const sid = sanitizeText(req.body?.sid);
+    const newPassword = req.body?.newPassword;
+    const confirmPassword = req.body?.confirmPassword;
+
+    if (!sid) {
+      return res.status(400).json({ success: false, message: 'Field "SID" is required.' });
+    }
+
+    if (!newPassword || String(newPassword).length < MIN_RESET_PASSWORD_LENGTH) {
+      return res.status(400).json({
+        success: false,
+        message: `New password must be at least ${MIN_RESET_PASSWORD_LENGTH} characters.`,
+      });
+    }
+
+    if (String(newPassword) !== String(confirmPassword)) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password and confirmation do not match.',
+      });
+    }
+
+    // SID must exist in `users` (the login credential column).
+    const [rows] = await db.query(
+      'SELECT id, name FROM users WHERE sid = ? LIMIT 1',
+      [sid]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'SID not found in the system.',
+      });
+    }
+
+    const target = rows[0];
+    const passwordHash = await bcrypt.hash(String(newPassword), BCRYPT_COST);
+    await db.query(
+      'UPDATE users SET password = ?, is_first_login = 0 WHERE id = ?',
+      [passwordHash, target.id]
+    );
+
+    return res.json({
+      success: true,
+      message: 'Password has been successfully reset.',
+      data: { sid, name: target.name },
+    });
+  } catch (err) {
+    console.error('Reset user password error:', err);
+    return res.status(500).json({ success: false, message: 'Server error.' });
+  }
 };
 
 // ── Controller actions ─────────────────────────────────────────────────────
@@ -967,8 +992,9 @@ const getEmployeeById = async (req, res) => {
  * POST /api/employees
  *
  * Creates a new hr_employees row and — when the form supplies enough
- * identifying data (employee_name + NPK + email) — also provisions a
- * matching `users` row (role='ls') in the same DB transaction.
+ * identifying data (employee_name + SID) — also provisions a matching
+ * `users` row (role='ls') in the same DB transaction. The optional
+ * email is mirrored onto users.email when present.
  *
  * If the user-side insert fails the entire write rolls back, so the
  * caller never sees a half-finished personnel record.
@@ -980,7 +1006,21 @@ const createEmployee = async (req, res) => {
   }
 
   const f = v.fields;
-  const createdBy = req.user?.id || null;
+
+  // Field policy: Email is exposed on the Create / Edit forms again and
+  // is OPTIONAL — the validated value from validateBody flows through
+  // untouched (NULL when blank) and is mirrored onto users.email during
+  // account provisioning. User Status is still owned by the backend, so
+  // we force the agreed default:
+  //   • user_status    → 'Active'
+  // `employee_group` (BC / MTL) is also exposed on the form — the
+  // validated value flows through so the Automated Analytics step can
+  // bucket recap rows by group.
+  f.user_status = 'Active';
+
+  // Audit trail stores the requester's NAME (not the numeric id) so the
+  // BAST / Document Check reporting is human-readable.
+  const actorName = await resolveActorName(db, req.user?.id || null);
 
   // Vendor lookup: when a vendor_id is supplied we resolve the master
   // record and authoritatively overwrite the denormalized display
@@ -1014,17 +1054,20 @@ const createEmployee = async (req, res) => {
     await conn.beginTransaction();
 
     // Auto-provision an LS user account when the registration form
-    // supplies the minimum credentials. Drafts that omit email or NPK
-    // skip this step — the account is auto-created later when an
-    // update fills in the missing fields (see updateEmployee).
+    // supplies the minimum credentials (employee_name + SID). Since
+    // authentication is SID-based, email is no longer required — this
+    // is what previously blocked account creation when email was sent
+    // as NULL. Drafts that omit the name or SID skip this step; the
+    // account is auto-created later when an update fills them in (see
+    // updateEmployee).
     let provisionedUserId = null;
-    if (hasUserAccountFields(f.employee_name, f.npk, f.email)) {
-      const conflict = await findUserConflict(conn, { email: f.email, npk: f.npk });
+    if (hasUserAccountFields(f.employee_name, f.sid)) {
+      const conflict = await findUserConflict(conn, { sid: f.sid, npk: f.npk });
       if (conflict.conflict) {
         await conn.rollback();
         const message =
-          conflict.conflict === 'email'
-            ? 'A user account with this email already exists. Please use a different email.'
+          conflict.conflict === 'sid'
+            ? 'A user account with this SID already exists. Please use a different SID.'
             : 'A user account with this Employee ID (NPK) already exists. Please use a unique NPK.';
         return res.status(409).json({ success: false, message });
       }
@@ -1032,6 +1075,7 @@ const createEmployee = async (req, res) => {
         name: f.employee_name,
         npk: f.npk,
         email: f.email,
+        sid: f.sid,
         vendorId,
         supervisorId,
         isActive: userStatusToIsActive(f.user_status),
@@ -1040,18 +1084,16 @@ const createEmployee = async (req, res) => {
 
     const [ins] = await conn.query(
       `INSERT INTO hr_employees (
-         user_id, vendor_id, vendor_number, user_department, department_title, vendor_name,
-         employment_status, po_number, po_period_1, po_period_2, dic_hro, cost_center,
-         npk, employee_name, email, position, position_group, category, employee_group, site,
+         user_id, vendor_id, vendor_number, user_department, vendor_name,
+         npk, sid, employee_name, email, position, position_group, employee_group, site,
          supervisor_id, user_status, created_by, updated_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         provisionedUserId,
         vendorId,
-        f.vendor_number, f.user_department, f.department_title, f.vendor_name,
-        f.employment_status, f.po_number, f.po_period_1, f.po_period_2, f.dic_hro, f.cost_center,
-        f.npk, f.employee_name, f.email, f.position, f.position_group, f.category, f.employee_group, f.site,
-        supervisorId, f.user_status, createdBy, createdBy,
+        f.vendor_number, f.user_department, f.vendor_name,
+        f.npk, f.sid, f.employee_name, f.email, f.position, f.position_group, f.employee_group, f.site,
+        supervisorId, f.user_status, actorName, actorName,
       ]
     );
 
@@ -1066,7 +1108,7 @@ const createEmployee = async (req, res) => {
       success: true,
       message: provisionedUserId
         ? 'Employee created successfully and LS login account provisioned.'
-        : 'Employee saved as draft. Add an email and NPK to enable LS login.',
+        : 'Employee saved as draft. Add an Employee Name and SID to enable LS login.',
       data: rows[0],
     });
   } catch (err) {
@@ -1110,6 +1152,19 @@ const updateEmployee = async (req, res) => {
 
   const fields = { ...v.fields };
 
+  // Field policy (mirrors createEmployee): Email is editable on the form
+  // again and OPTIONAL — when the form sends it, the validated value
+  // (NULL when blank) is persisted and synced to users.email; when the
+  // field is absent (partial PATCH) the existing value is left
+  // untouched. User Status is still backend-owned, so every update
+  // forces the agreed default so existing records are normalised on
+  // save:
+  //   • user_status    → 'Active'
+  // `employee_group` (BC / MTL) IS editable — when the form sends it,
+  // the validated value from validateBody is persisted; when the field
+  // is absent (partial PATCH) the existing value is left untouched.
+  fields.user_status = 'Active';
+
   // Vendor lookup: same authoritative overwrite as in createEmployee.
   // An explicit `vendor_id: null` clears the FK and leaves the
   // denormalized display copies untouched (HR can still edit them
@@ -1152,7 +1207,7 @@ const updateEmployee = async (req, res) => {
     // we can mirror it onto users.is_active even when the current
     // PATCH leaves it untouched.
     const [existingRows] = await conn.query(
-      `SELECT id, user_id, employee_name, npk, email,
+      `SELECT id, user_id, employee_name, npk, sid, email,
               vendor_id, supervisor_id, user_status
          FROM hr_employees
         WHERE id = ?
@@ -1167,7 +1222,10 @@ const updateEmployee = async (req, res) => {
 
     const setClause = keys.map((k) => `${k} = ?`).join(', ');
     const values = keys.map((k) => fields[k]);
-    const updatedBy = req.user?.id || null;
+    // Audit trail stores the requester's NAME (resolved from `users`)
+    // rather than the numeric id, for human-readable BAST / Document
+    // Check reporting.
+    const updatedBy = await resolveActorName(conn, req.user?.id || null);
 
     await conn.query(
       `UPDATE hr_employees SET ${setClause}, updated_by = ? WHERE id = ?`,
@@ -1181,6 +1239,7 @@ const updateEmployee = async (req, res) => {
       employee_name:
         fields.employee_name !== undefined ? fields.employee_name : existing.employee_name,
       npk: fields.npk !== undefined ? fields.npk : existing.npk,
+      sid: fields.sid !== undefined ? fields.sid : existing.sid,
       email: fields.email !== undefined ? fields.email : existing.email,
       vendor_id:
         fields.vendor_id !== undefined ? fields.vendor_id : existing.vendor_id,
@@ -1197,17 +1256,17 @@ const updateEmployee = async (req, res) => {
       // when the row still has the required identification; if HR
       // deliberately cleared email or NPK we leave the linked users
       // row untouched (next edit that restores them will resync).
-      if (hasUserAccountFields(merged.employee_name, merged.npk, merged.email)) {
+      if (hasUserAccountFields(merged.employee_name, merged.sid)) {
         const conflict = await findUserConflict(conn, {
-          email: merged.email,
+          sid: merged.sid,
           npk: merged.npk,
           excludeUserId: existing.user_id,
         });
         if (conflict.conflict) {
           await conn.rollback();
           const message =
-            conflict.conflict === 'email'
-              ? 'A different user account already uses this email. Please choose another.'
+            conflict.conflict === 'sid'
+              ? 'A different user account already uses this SID. Please choose another.'
               : 'A different user account already uses this Employee ID (NPK). Please choose another.';
           return res.status(409).json({ success: false, message });
         }
@@ -1215,6 +1274,7 @@ const updateEmployee = async (req, res) => {
           name: merged.employee_name,
           npk: merged.npk,
           email: merged.email,
+          sid: merged.sid,
           vendorId: merged.vendor_id,
           supervisorId: merged.supervisor_id,
           isActive: mergedIsActive,
@@ -1229,18 +1289,18 @@ const updateEmployee = async (req, res) => {
           [mergedIsActive, existing.user_id]
         );
       }
-    } else if (hasUserAccountFields(merged.employee_name, merged.npk, merged.email)) {
-      // Self-healing: a legacy draft row now has enough data to be
-      // promoted into a real LS account.
+    } else if (hasUserAccountFields(merged.employee_name, merged.sid)) {
+      // Self-healing: a legacy draft row now has enough data (name +
+      // SID) to be promoted into a real LS account.
       const conflict = await findUserConflict(conn, {
-        email: merged.email,
+        sid: merged.sid,
         npk: merged.npk,
       });
       if (conflict.conflict) {
         await conn.rollback();
         const message =
-          conflict.conflict === 'email'
-            ? 'A user account with this email already exists. Please use a different email.'
+          conflict.conflict === 'sid'
+            ? 'A user account with this SID already exists. Please use a different SID.'
             : 'A user account with this Employee ID (NPK) already exists. Please use a unique NPK.';
         return res.status(409).json({ success: false, message });
       }
@@ -1248,6 +1308,7 @@ const updateEmployee = async (req, res) => {
         name: merged.employee_name,
         npk: merged.npk,
         email: merged.email,
+        sid: merged.sid,
         vendorId: merged.vendor_id,
         supervisorId: merged.supervisor_id,
         isActive: mergedIsActive,
@@ -1289,6 +1350,9 @@ const updateEmployee = async (req, res) => {
  */
 const uploadEmployeesBulk = async (req, res) => {
   const uploaderId = req.user?.id || null;
+  // Audit columns now store the actor's NAME (see resolveActorName), so
+  // resolve the uploader's display name once and reuse it for every row.
+  const uploaderName = await resolveActorName(db, uploaderId);
   const uploadRequestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   try {
     const sourceSystem = sanitizeText(req.body?.source_system).toUpperCase();
@@ -1390,38 +1454,28 @@ const uploadEmployeesBulk = async (req, res) => {
       try {
         const [upsert] = await db.query(
           `INSERT INTO hr_employees (
-             vendor_id, nik, vendor_number, user_department, department_title, vendor_name,
-             employment_status, po_number, po_period_1, po_period_2, dic_hro, cost_center,
-             npk, employee_name, position, position_group, category, site,
+             vendor_id, nik, vendor_number, user_department, vendor_name,
+             npk, employee_name, position, position_group, site,
              supervisor_nik, supervisor_name, user_status, created_by, updated_by
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
              vendor_id = VALUES(vendor_id),
              nik = VALUES(nik),
              vendor_number = VALUES(vendor_number),
              user_department = VALUES(user_department),
-             department_title = VALUES(department_title),
              vendor_name = VALUES(vendor_name),
-             employment_status = VALUES(employment_status),
-             po_number = VALUES(po_number),
-             po_period_1 = VALUES(po_period_1),
-             po_period_2 = VALUES(po_period_2),
-             dic_hro = VALUES(dic_hro),
-             cost_center = VALUES(cost_center),
              employee_name = VALUES(employee_name),
              position = VALUES(position),
              position_group = VALUES(position_group),
-             category = VALUES(category),
              site = VALUES(site),
              supervisor_nik = VALUES(supervisor_nik),
              supervisor_name = VALUES(supervisor_name),
              user_status = VALUES(user_status),
              updated_by = VALUES(updated_by)`,
           [
-            f.vendor_id, f.nik, f.vendor_number, f.user_department, f.department_title, f.vendor_name,
-            f.employment_status, f.po_number, f.po_period_1, f.po_period_2, f.dic_hro, f.cost_center,
-            f.npk, f.employee_name, f.position, f.position_group, f.category, f.site,
-            f.supervisor_nik, f.supervisor_name, f.user_status, uploaderId, uploaderId,
+            f.vendor_id, f.nik, f.vendor_number, f.user_department, f.vendor_name,
+            f.npk, f.employee_name, f.position, f.position_group, f.site,
+            f.supervisor_nik, f.supervisor_name, f.user_status, uploaderName, uploaderName,
           ]
         );
 
@@ -1498,4 +1552,5 @@ module.exports = {
   updateEmployee,
   uploadHrEmployeesMiddleware: uploadHrEmployeesMiddlewareSafe,
   uploadEmployeesBulk,
+  resetUserPassword,
 };

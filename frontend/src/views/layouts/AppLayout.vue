@@ -141,6 +141,10 @@
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M8 8l4-4 4 4M4 20h16"/></svg>
             <span v-if="!sidebarCollapsed">Upload Attendance Log</span>
           </router-link>
+          <router-link to="/ls-hr/reset-password" class="nav-item" active-class="active" title="Reset password akun pengguna berdasarkan SID">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+            <span v-if="!sidebarCollapsed">Reset Password</span>
+          </router-link>
         </template>
 
         <template v-if="user?.role === 'ssu'">
@@ -322,6 +326,7 @@ const pageTitle = computed(() => {
   if (path.includes('/vendor/reports')) return 'Report List';
   if (path.match(/\/ls-hr\/employees\/[^/]+\/edit$/)) return 'Edit Employee';
   if (path.includes('/ls-hr/employees/create')) return 'Create Employee';
+  if (path.includes('/ls-hr/reset-password')) return 'Reset Password';
   if (path.includes('/ls-hr/employees')) return 'Employee List';
   if (path.includes('/ls-hr/approvals')) return 'LS HR Approvals';
   if (path.includes('/ssu/approvals')) return 'SSU Approvals';

@@ -5,7 +5,6 @@
  * only contains UI-side constants reused by the Create / Edit forms.
  */
 
-export const EMPLOYMENT_STATUS_OPTIONS = ['Permanent', 'Contract'];
 export const USER_STATUS_OPTIONS = ['Active', 'Deactive'];
 // Coarse "Group" classification used by the Automated Analytics
 // step to bucket recap rows for audit / payroll reporting.
@@ -16,20 +15,14 @@ export const EMPTY_EMPLOYEE = {
   vendor_id: null,
   vendor_number: '',
   user_department: '',
-  department_title: '',
   vendor_name: '',
-  employment_status: '',
-  po_number: '',
-  po_period_1: '',
-  po_period_2: '',
-  dic_hro: '',
-  cost_center: '',
   npk: '',
+  // SID (System ID) — mandatory free-text identifier (see EmployeeForm).
+  sid: '',
   employee_name: '',
   email: '',
   position: '',
   position_group: '',
-  category: '',
   employee_group: '',
   site: '',
   // Supervisor is now a FK into the `users` master (role =

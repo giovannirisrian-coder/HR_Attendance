@@ -64,6 +64,7 @@ const routes = [
       { path: 'employees', component: () => import('../views/ls-hr/EmployeeList.vue') },
       { path: 'employees/create', component: () => import('../views/ls-hr/EmployeeCreate.vue') },
       { path: 'employees/:id/edit', component: () => import('../views/ls-hr/EmployeeEdit.vue') },
+      { path: 'reset-password', component: () => import('../views/ls-hr/ResetPassword.vue') },
     ],
   },
 

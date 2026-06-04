@@ -24,11 +24,11 @@
     </div>
 
     <!-- Stats -->
-    <div class="stat-grid">
+    <div class="stat-grid stat-grid-3">
       <div class="stat-card">
         <div class="stat-card-label">Total Employees</div>
         <div class="stat-card-value">{{ summary.total }}</div>
-        <div class="stat-card-sub">All vendors</div>
+        <div class="stat-card-sub">All employees</div>
       </div>
       <div class="stat-card">
         <div class="stat-card-label">Active</div>
@@ -39,11 +39,6 @@
         <div class="stat-card-label">Deactive</div>
         <div class="stat-card-value" style="color: var(--bc-rejected)">{{ summary.deactive }}</div>
         <div class="stat-card-sub">Not active</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-card-label">Vendors</div>
-        <div class="stat-card-value" style="color: var(--bc-gray-700)">{{ summary.vendors }}</div>
-        <div class="stat-card-sub">Registered vendors</div>
       </div>
     </div>
 
@@ -101,23 +96,15 @@
           <thead>
             <tr>
               <th class="col-no">No</th>
-              <th>Vendor Number</th>
               <th>User Department</th>
-              <th>Department Title</th>
               <th>Vendor Name</th>
-              <th>Employment Status</th>
-              <th>PO Number</th>
-              <th>PO Period 1</th>
-              <th>PO Period 2</th>
-              <th>DIC (HRO)</th>
-              <th>Cost Center</th>
               <th>Employee ID (NPK)</th>
+              <th>SID</th>
               <th>Employee Name</th>
-              <th class="col-email">Email</th>
+              <th>Email</th>
               <th>Position</th>
               <th>Position Group</th>
-              <th>Category</th>
-              <th>Group</th>
+              <th>Employee Group</th>
               <th>Site</th>
               <th>Supervisor</th>
               <th>User Status</th>
@@ -126,7 +113,7 @@
           </thead>
           <tbody>
             <tr v-if="employees.length === 0">
-              <td :colspan="22">
+              <td :colspan="14">
                 <div class="empty-state">
                   <div class="empty-state-icon">👥</div>
                   <h3>No employees found</h3>
@@ -136,30 +123,20 @@
             </tr>
             <tr v-for="(emp, idx) in employees" :key="emp.id">
               <td class="col-no font-bold">{{ rowNumber(idx) }}</td>
-              <td><span class="text-sm font-mono">{{ emp.vendor_number }}</span></td>
               <td>{{ emp.user_department }}</td>
-              <td>{{ emp.department_title }}</td>
               <td class="font-bold">{{ emp.vendor_name }}</td>
-              <td>{{ emp.employment_status }}</td>
-              <td><span class="text-sm font-mono">{{ emp.po_number }}</span></td>
-              <td class="text-sm">{{ emp.po_period_1 || '—' }}</td>
-              <td class="text-sm">{{ emp.po_period_2 || '—' }}</td>
-              <td>{{ emp.dic_hro }}</td>
-              <td><span class="text-sm font-mono">{{ emp.cost_center }}</span></td>
               <td><span class="text-sm font-mono">{{ emp.npk }}</span></td>
+              <td>
+                <span v-if="emp.sid" class="text-sm font-mono">{{ emp.sid }}</span>
+                <span v-else class="text-muted">—</span>
+              </td>
               <td class="font-bold">{{ emp.employee_name }}</td>
-              <td class="col-email">
-                <a
-                  v-if="emp.email"
-                  :href="`mailto:${emp.email}`"
-                  class="email-link"
-                  :title="emp.email"
-                >{{ emp.email }}</a>
+              <td>
+                <span v-if="emp.email">{{ emp.email }}</span>
                 <span v-else class="text-muted">—</span>
               </td>
               <td>{{ emp.position }}</td>
               <td>{{ emp.position_group }}</td>
-              <td>{{ emp.category }}</td>
               <td>
                 <span v-if="emp.employee_group" class="badge badge-group">{{ emp.employee_group }}</span>
                 <span v-else class="text-muted">—</span>
@@ -222,7 +199,7 @@ const siteOptions = ref([]);
 const vendorOptions = ref([]);
 
 const pagination = reactive({ total: 0, page: 1, limit: 25 });
-const summary = reactive({ total: 0, active: 0, deactive: 0, vendors: 0 });
+const summary = reactive({ total: 0, active: 0, deactive: 0 });
 
 const filters = reactive({
   search: '',
@@ -269,7 +246,7 @@ const fetchData = async () => {
 
     siteOptions.value = data?.meta?.sites || [];
     vendorOptions.value = data?.meta?.vendors || [];
-    Object.assign(summary, data?.meta?.summary || { total: 0, active: 0, deactive: 0, vendors: 0 });
+    Object.assign(summary, data?.meta?.summary || { total: 0, active: 0, deactive: 0 });
   } catch (err) {
     employees.value = [];
     errorMsg.value =
@@ -304,6 +281,14 @@ onMounted(fetchData);
 </script>
 
 <style scoped>
+/* Keep the three summary cards evenly balanced (Total / Active / Deactive) */
+.stat-grid-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+@media (max-width: 768px) {
+  .stat-grid-3 { grid-template-columns: 1fr; }
+}
+
 .employee-table-wrapper {
   overflow-x: auto;
   position: relative;
@@ -311,7 +296,7 @@ onMounted(fetchData);
 }
 
 .employee-table {
-  min-width: 2500px;
+  min-width: 1100px;
 }
 
 .employee-table thead th,
@@ -327,28 +312,6 @@ onMounted(fetchData);
 .col-actions {
   width: 90px;
   text-align: center;
-}
-
-.col-email {
-  width: 220px;
-  max-width: 220px;
-}
-
-.col-email .email-link {
-  display: inline-block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  vertical-align: middle;
-  color: var(--bc-green-700);
-  text-decoration: none;
-  font-size: 13px;
-}
-
-.col-email .email-link:hover {
-  text-decoration: underline;
-  color: var(--bc-green-500);
 }
 
 .font-mono {

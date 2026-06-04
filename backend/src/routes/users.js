@@ -14,7 +14,7 @@ router.get('/', authenticate, authorize('ls_supervisor', 'vendor'), async (req, 
     if (vendor_id) { where += ' AND u.vendor_id = ?'; params.push(vendor_id); }
 
     const [rows] = await db.query(
-      `SELECT u.id, u.name, u.employee_id, u.email, u.role, u.vendor_id, u.supervisor_id,
+      `SELECT u.id, u.name, u.employee_id, u.sid, u.email, u.role, u.vendor_id, u.supervisor_id,
               u.is_active, u.created_at, v.name AS vendor_name, s.name AS supervisor_name
        FROM users u
        LEFT JOIN vendors v ON u.vendor_id = v.id
@@ -31,16 +31,18 @@ router.get('/', authenticate, authorize('ls_supervisor', 'vendor'), async (req, 
 // Create user
 router.post('/', authenticate, authorize('ls_supervisor', 'vendor'), async (req, res) => {
   try {
-    const { name, employee_id, email, password, role, vendor_id, supervisor_id } = req.body;
+    // Authentication is SID-based, so `sid` is the login credential here.
+    // `email` is optional (NULLable) and no longer required to sign in.
+    const { name, employee_id, sid, email, password, role, vendor_id, supervisor_id } = req.body;
     const hash = await bcrypt.hash(password, 10);
     await db.query(
-      'INSERT INTO users (name, employee_id, email, password, role, vendor_id, supervisor_id) VALUES (?,?,?,?,?,?,?)',
-      [name, employee_id || null, email, hash, role, vendor_id || null, supervisor_id || null]
+      'INSERT INTO users (name, employee_id, sid, email, password, role, vendor_id, supervisor_id) VALUES (?,?,?,?,?,?,?,?)',
+      [name, employee_id || null, sid || null, email || null, hash, role, vendor_id || null, supervisor_id || null]
     );
     res.json({ success: true, message: 'User created.' });
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ success: false, message: 'Email or employee ID already exists.' });
+      return res.status(409).json({ success: false, message: 'SID, email or employee ID already exists.' });
     }
     res.status(500).json({ success: false, message: 'Server error.' });
   }
