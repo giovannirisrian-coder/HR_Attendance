@@ -24,11 +24,11 @@
     </div>
 
     <!-- Stats -->
-    <div class="stat-grid">
+    <div class="stat-grid stat-grid-3">
       <div class="stat-card">
         <div class="stat-card-label">Total Employees</div>
         <div class="stat-card-value">{{ summary.total }}</div>
-        <div class="stat-card-sub">All vendors</div>
+        <div class="stat-card-sub">All employees</div>
       </div>
       <div class="stat-card">
         <div class="stat-card-label">Active</div>
@@ -39,11 +39,6 @@
         <div class="stat-card-label">Deactive</div>
         <div class="stat-card-value" style="color: var(--bc-rejected)">{{ summary.deactive }}</div>
         <div class="stat-card-sub">Not active</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-card-label">Vendors</div>
-        <div class="stat-card-value" style="color: var(--bc-gray-700)">{{ summary.vendors }}</div>
-        <div class="stat-card-sub">Registered vendors</div>
       </div>
     </div>
 
@@ -194,7 +189,7 @@ const siteOptions = ref([]);
 const vendorOptions = ref([]);
 
 const pagination = reactive({ total: 0, page: 1, limit: 25 });
-const summary = reactive({ total: 0, active: 0, deactive: 0, vendors: 0 });
+const summary = reactive({ total: 0, active: 0, deactive: 0 });
 
 const filters = reactive({
   search: '',
@@ -241,7 +236,7 @@ const fetchData = async () => {
 
     siteOptions.value = data?.meta?.sites || [];
     vendorOptions.value = data?.meta?.vendors || [];
-    Object.assign(summary, data?.meta?.summary || { total: 0, active: 0, deactive: 0, vendors: 0 });
+    Object.assign(summary, data?.meta?.summary || { total: 0, active: 0, deactive: 0 });
   } catch (err) {
     employees.value = [];
     errorMsg.value =
@@ -276,6 +271,14 @@ onMounted(fetchData);
 </script>
 
 <style scoped>
+/* Keep the three summary cards evenly balanced (Total / Active / Deactive) */
+.stat-grid-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+@media (max-width: 768px) {
+  .stat-grid-3 { grid-template-columns: 1fr; }
+}
+
 .employee-table-wrapper {
   overflow-x: auto;
   position: relative;
