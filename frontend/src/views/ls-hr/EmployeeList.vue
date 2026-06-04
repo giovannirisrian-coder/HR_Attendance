@@ -103,20 +103,12 @@
               <th class="col-no">No</th>
               <th>Vendor Number</th>
               <th>User Department</th>
-              <th>Department Title</th>
               <th>Vendor Name</th>
-              <th>Employment Status</th>
-              <th>PO Number</th>
-              <th>PO Period 1</th>
-              <th>PO Period 2</th>
-              <th>DIC (HRO)</th>
-              <th>Cost Center</th>
               <th>Employee ID (NPK)</th>
               <th>Employee Name</th>
               <th class="col-email">Email</th>
               <th>Position</th>
               <th>Position Group</th>
-              <th>Category</th>
               <th>Group</th>
               <th>Site</th>
               <th>Supervisor</th>
@@ -126,7 +118,7 @@
           </thead>
           <tbody>
             <tr v-if="employees.length === 0">
-              <td :colspan="22">
+              <td :colspan="14">
                 <div class="empty-state">
                   <div class="empty-state-icon">👥</div>
                   <h3>No employees found</h3>
@@ -138,14 +130,7 @@
               <td class="col-no font-bold">{{ rowNumber(idx) }}</td>
               <td><span class="text-sm font-mono">{{ emp.vendor_number }}</span></td>
               <td>{{ emp.user_department }}</td>
-              <td>{{ emp.department_title }}</td>
               <td class="font-bold">{{ emp.vendor_name }}</td>
-              <td>{{ emp.employment_status }}</td>
-              <td><span class="text-sm font-mono">{{ emp.po_number }}</span></td>
-              <td class="text-sm">{{ emp.po_period_1 || '—' }}</td>
-              <td class="text-sm">{{ emp.po_period_2 || '—' }}</td>
-              <td>{{ emp.dic_hro }}</td>
-              <td><span class="text-sm font-mono">{{ emp.cost_center }}</span></td>
               <td><span class="text-sm font-mono">{{ emp.npk }}</span></td>
               <td class="font-bold">{{ emp.employee_name }}</td>
               <td class="col-email">
@@ -159,7 +144,6 @@
               </td>
               <td>{{ emp.position }}</td>
               <td>{{ emp.position_group }}</td>
-              <td>{{ emp.category }}</td>
               <td>
                 <span v-if="emp.employee_group" class="badge badge-group">{{ emp.employee_group }}</span>
                 <span v-else class="text-muted">—</span>
@@ -311,7 +295,7 @@ onMounted(fetchData);
 }
 
 .employee-table {
-  min-width: 2500px;
+  min-width: 1500px;
 }
 
 .employee-table thead th,

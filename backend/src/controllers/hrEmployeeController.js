@@ -5,7 +5,7 @@
  * to maintain the BAST Check master data set.
  *
  * `hr_employees` is now the consolidated employee master table:
- *  • LS HR (PIC LS) maintains the BAST fields here (vendor, PO, NPK, etc.).
+ *  • LS HR (PIC LS) maintains the BAST fields here (vendor, NPK, etc.).
  *  • Attendance / Leave / Overtime reference the same row via the
  *    `user_id` column and the unified `npk` identifier (the legacy
  *    `nik` column has been retired by
@@ -74,29 +74,18 @@ const { normalizeCalendarYmdFromBody, compareYmd } = require('../utils/calendarD
 //      `vendors` when supplied. On a valid match the controller also
 //      overwrites vendor_number / vendor_name with the master values.
 //
-// PO Period 1 / PO Period 2 are intentionally treated as free-text strings
-// (see migration_hr_employees_optional_fields.sql) so HR can enter wording
-// like "Jan 2026 - Dec 2026" instead of being forced into a calendar picker.
 const TEXT_FIELDS = [
   'vendor_number',
   'user_department',
-  'department_title',
   'vendor_name',
-  'po_number',
-  'po_period_1',
-  'po_period_2',
-  'dic_hro',
-  'cost_center',
   'npk',
   'employee_name',
   'email',
   'position',
   'position_group',
-  'category',
   'site',
 ];
 const ENUM_FIELDS = {
-  employment_status: ['Permanent', 'Contract'],
   // Coarse classification used by the Automated Analytics step to
   // bucket recap rows for audit / payroll reporting. Optional — an
   // empty submission is stored as NULL so legacy / draft records
@@ -109,19 +98,12 @@ const ENUM_FIELDS = {
 const MAX_LENGTHS = {
   vendor_number: 64,
   user_department: 150,
-  department_title: 150,
   vendor_name: 200,
-  po_number: 64,
-  po_period_1: 100,
-  po_period_2: 100,
-  dic_hro: 150,
-  cost_center: 64,
   npk: 64,
   employee_name: 200,
   email: 190,
   position: 150,
   position_group: 150,
-  category: 100,
   site: 100,
 };
 
@@ -138,12 +120,10 @@ const MAX_LENGTHS = {
 const SELECT_COLS = `
   h.id, h.user_id, h.vendor_id,
   COALESCE(v.code, h.vendor_number) AS vendor_number,
-  h.user_department, h.department_title,
+  h.user_department,
   COALESCE(v.name, h.vendor_name) AS vendor_name,
-  h.employment_status, h.po_number, h.po_period_1, h.po_period_2,
-  h.dic_hro, h.cost_center,
   h.npk, h.employee_name, h.email, h.position, h.position_group,
-  h.category, h.employee_group, h.site,
+  h.employee_group, h.site,
   h.supervisor_id, s.name AS supervisor_name, s.employee_id AS supervisor_employee_id,
   h.user_status,
   h.created_by, h.updated_by, h.created_at, h.updated_at
@@ -199,127 +179,12 @@ const TEMPLATE_HEADER_TO_FIELD = {
   'nama atasan': 'supervisor_name',
 };
 
-const REQUIRED_FIELDS_FOR_UPLOAD = [
-  'vendor_number',
-  'user_department',
-  'department_title',
-  'vendor_name',
-  'employment_status',
-  'po_number',
-  'po_period_1',
-  'po_period_2',
-  'dic_hro',
-  'cost_center',
-  'npk',
-  'employee_name',
-  'position',
-  'position_group',
-  'category',
-  'site',
-  'supervisor_nik',
-  'supervisor_name',
-];
-
 const normalizeUploadHeader = (value) =>
   String(value || '')
     .replace(/\s+/g, ' ')
     .replace(/\u00a0/g, ' ')
     .trim()
     .toLowerCase();
-
-const monthMap = {
-  jan: 1,
-  feb: 2,
-  mar: 3,
-  apr: 4,
-  may: 5,
-  jun: 6,
-  jul: 7,
-  aug: 8,
-  sep: 9,
-  oct: 10,
-  nov: 11,
-  dec: 12,
-};
-
-const pad2 = (n) => String(n).padStart(2, '0');
-
-const ymd = (year, month, day) => `${year}-${pad2(month)}-${pad2(day)}`;
-
-const lastDayOfMonth = (year, month) => new Date(Date.UTC(year, month, 0)).getUTCDate();
-
-const parseMonthYear = (raw) => {
-  const s = sanitizeText(raw).replace(/[^A-Za-z0-9]/g, '');
-  const m = /^([A-Za-z]{3})(\d{4})$/.exec(s);
-  if (!m) return null;
-  const mo = monthMap[m[1].slice(0, 3).toLowerCase()];
-  const y = parseInt(m[2], 10);
-  if (!mo || y < 1900 || y > 2200) return null;
-  return { year: y, month: mo };
-};
-
-const parseExcelDateValue = (raw) => {
-  if (raw instanceof Date && !Number.isNaN(raw.getTime())) {
-    const year = raw.getUTCFullYear();
-    const month = raw.getUTCMonth() + 1;
-    const day = raw.getUTCDate();
-    return { start: ymd(year, month, day), end: ymd(year, month, day) };
-  }
-
-  const s = sanitizeText(raw);
-  if (!s) return null;
-
-  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
-  if (iso) {
-    const year = parseInt(iso[1], 10);
-    const month = parseInt(iso[2], 10);
-    const day = parseInt(iso[3], 10);
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      return { start: ymd(year, month, day), end: ymd(year, month, day) };
-    }
-  }
-
-  const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
-  if (dmy) {
-    const day = parseInt(dmy[1], 10);
-    const month = parseInt(dmy[2], 10);
-    const year = parseInt(dmy[3], 10);
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      return { start: ymd(year, month, day), end: ymd(year, month, day) };
-    }
-  }
-
-  const monthRange = /^([A-Za-z]{3})\s*-\s*([A-Za-z]{3})\s*(\d{4})$/.exec(s);
-  if (monthRange) {
-    const m1 = monthMap[monthRange[1].slice(0, 3).toLowerCase()];
-    const m2 = monthMap[monthRange[2].slice(0, 3).toLowerCase()];
-    const year = parseInt(monthRange[3], 10);
-    if (m1 && m2 && m1 <= m2) {
-      return {
-        start: ymd(year, m1, 1),
-        end: ymd(year, m2, lastDayOfMonth(year, m2)),
-      };
-    }
-  }
-
-  const monthYear = parseMonthYear(s);
-  if (monthYear) {
-    return {
-      start: ymd(monthYear.year, monthYear.month, 1),
-      end: ymd(monthYear.year, monthYear.month, lastDayOfMonth(monthYear.year, monthYear.month)),
-    };
-  }
-
-  return null;
-};
-
-const normalizeEmploymentStatus = (value) => {
-  const s = sanitizeText(value).toLowerCase();
-  if (!s) return '';
-  if (s.includes('perman')) return 'Permanent';
-  if (s.includes('contract') || s.includes('kontrak')) return 'Contract';
-  return '';
-};
 
 const findHeaderRow = (rows) => {
   for (let i = 0; i < Math.min(rows.length, 30); i += 1) {
@@ -352,16 +217,6 @@ const summarizeLineError = (line, msg) => ({ line_no: line, error: msg });
 const nonEmptyOrDash = (value) => sanitizeText(value) || '-';
 
 const normalizeUploadRowForUpsert = (body) => {
-  const today = new Date();
-  const y = today.getFullYear();
-  const m = String(today.getMonth() + 1).padStart(2, '0');
-  const d = String(today.getDate()).padStart(2, '0');
-  const todayYmd = `${y}-${m}-${d}`;
-
-  const po1 = '';
-  const po2 = '';
-  const finalPo1 = po1 || po2 || todayYmd;
-  const finalPo2 = po2 || po1 || todayYmd;
   const nik = sanitizeText(body.nik);
   const npk = sanitizeText(body.npk || body.nik);
   const department = sanitizeText(body.user_department);
@@ -372,18 +227,10 @@ const normalizeUploadRowForUpsert = (body) => {
     vendor_id: null,
     vendor_number: '-',
     user_department: nonEmptyOrDash(department),
-    department_title: nonEmptyOrDash(department),
     vendor_name: nonEmptyOrDash(body.company_name),
-    employment_status: 'Contract',
-    po_number: '-',
-    po_period_1: finalPo1,
-    po_period_2: finalPo2,
-    dic_hro: '-',
-    cost_center: '-',
     employee_name: nonEmptyOrDash(body.employee_name),
     position: nonEmptyOrDash(body.position),
     position_group: '-',
-    category: '-',
     site: nonEmptyOrDash(body.site),
     supervisor_nik: nonEmptyOrDash(body.supervisor_nik),
     supervisor_name: nonEmptyOrDash(body.supervisor_name),
@@ -1040,17 +887,15 @@ const createEmployee = async (req, res) => {
 
     const [ins] = await conn.query(
       `INSERT INTO hr_employees (
-         user_id, vendor_id, vendor_number, user_department, department_title, vendor_name,
-         employment_status, po_number, po_period_1, po_period_2, dic_hro, cost_center,
-         npk, employee_name, email, position, position_group, category, employee_group, site,
+         user_id, vendor_id, vendor_number, user_department, vendor_name,
+         npk, employee_name, email, position, position_group, employee_group, site,
          supervisor_id, user_status, created_by, updated_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         provisionedUserId,
         vendorId,
-        f.vendor_number, f.user_department, f.department_title, f.vendor_name,
-        f.employment_status, f.po_number, f.po_period_1, f.po_period_2, f.dic_hro, f.cost_center,
-        f.npk, f.employee_name, f.email, f.position, f.position_group, f.category, f.employee_group, f.site,
+        f.vendor_number, f.user_department, f.vendor_name,
+        f.npk, f.employee_name, f.email, f.position, f.position_group, f.employee_group, f.site,
         supervisorId, f.user_status, createdBy, createdBy,
       ]
     );
@@ -1390,37 +1235,27 @@ const uploadEmployeesBulk = async (req, res) => {
       try {
         const [upsert] = await db.query(
           `INSERT INTO hr_employees (
-             vendor_id, nik, vendor_number, user_department, department_title, vendor_name,
-             employment_status, po_number, po_period_1, po_period_2, dic_hro, cost_center,
-             npk, employee_name, position, position_group, category, site,
+             vendor_id, nik, vendor_number, user_department, vendor_name,
+             npk, employee_name, position, position_group, site,
              supervisor_nik, supervisor_name, user_status, created_by, updated_by
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
              vendor_id = VALUES(vendor_id),
              nik = VALUES(nik),
              vendor_number = VALUES(vendor_number),
              user_department = VALUES(user_department),
-             department_title = VALUES(department_title),
              vendor_name = VALUES(vendor_name),
-             employment_status = VALUES(employment_status),
-             po_number = VALUES(po_number),
-             po_period_1 = VALUES(po_period_1),
-             po_period_2 = VALUES(po_period_2),
-             dic_hro = VALUES(dic_hro),
-             cost_center = VALUES(cost_center),
              employee_name = VALUES(employee_name),
              position = VALUES(position),
              position_group = VALUES(position_group),
-             category = VALUES(category),
              site = VALUES(site),
              supervisor_nik = VALUES(supervisor_nik),
              supervisor_name = VALUES(supervisor_name),
              user_status = VALUES(user_status),
              updated_by = VALUES(updated_by)`,
           [
-            f.vendor_id, f.nik, f.vendor_number, f.user_department, f.department_title, f.vendor_name,
-            f.employment_status, f.po_number, f.po_period_1, f.po_period_2, f.dic_hro, f.cost_center,
-            f.npk, f.employee_name, f.position, f.position_group, f.category, f.site,
+            f.vendor_id, f.nik, f.vendor_number, f.user_department, f.vendor_name,
+            f.npk, f.employee_name, f.position, f.position_group, f.site,
             f.supervisor_nik, f.supervisor_name, f.user_status, uploaderId, uploaderId,
           ]
         );

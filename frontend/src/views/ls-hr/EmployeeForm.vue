@@ -3,11 +3,11 @@
     <div v-if="errorMessage" class="alert alert-error"><span>⚠️</span> {{ errorMessage }}</div>
     <div v-if="successMessage" class="alert alert-success"><span>✅</span> {{ successMessage }}</div>
 
-    <!-- ── Section: Vendor & Contract ─────────────────────────── -->
+    <!-- ── Section: Vendor ────────────────────────────────────── -->
     <section class="form-section">
       <div class="form-section-header">
-        <h2 class="form-section-title">Vendor &amp; Contract</h2>
-        <p class="form-section-sub">Vendor identity and purchase order assignment</p>
+        <h2 class="form-section-title">Vendor</h2>
+        <p class="form-section-sub">Vendor identity and placement</p>
       </div>
 
       <div class="form-grid">
@@ -33,43 +33,9 @@
           />
         </div>
 
-        <div class="form-group">
+        <div class="form-group form-group--full">
           <label class="form-label">User Department</label>
           <input v-model="form.user_department" type="text" class="form-control" />
-        </div>
-        <div class="form-group">
-          <label class="form-label">Department Title</label>
-          <input v-model="form.department_title" type="text" class="form-control" />
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">PO Number</label>
-          <input v-model="form.po_number" type="text" class="form-control" />
-        </div>
-        <div class="form-group">
-          <label class="form-label">DIC (HRO)</label>
-          <input v-model="form.dic_hro" type="text" class="form-control" />
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">PO Period 1</label>
-          <input v-model="form.po_period_1" type="text" class="form-control" />
-        </div>
-        <div class="form-group">
-          <label class="form-label">PO Period 2</label>
-          <input v-model="form.po_period_2" type="text" class="form-control" />
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">Cost Center</label>
-          <input v-model="form.cost_center" type="text" class="form-control" />
-        </div>
-        <div class="form-group">
-          <label class="form-label">Employment Status</label>
-          <select v-model="form.employment_status" class="form-control">
-            <option value=""></option>
-            <option v-for="o in employmentStatusOptions" :key="o" :value="o">{{ o }}</option>
-          </select>
         </div>
       </div>
     </section>
@@ -104,11 +70,6 @@
           <label class="form-label">Position Group</label>
           <input v-model="form.position_group" type="text" class="form-control" />
         </div>
-        <div class="form-group">
-          <label class="form-label">Category</label>
-          <input v-model="form.category" type="text" class="form-control" />
-        </div>
-
         <div class="form-group">
           <label class="form-label">Group</label>
           <select v-model="form.employee_group" class="form-control">
@@ -199,7 +160,6 @@
 import { reactive, computed, watch } from 'vue';
 import {
   EMPTY_EMPLOYEE,
-  EMPLOYMENT_STATUS_OPTIONS,
   EMPLOYEE_GROUP_OPTIONS,
   USER_STATUS_OPTIONS,
 } from './mockEmployees';
@@ -231,7 +191,6 @@ const props = defineProps({
 
 const emit = defineEmits(['submit', 'cancel']);
 
-const employmentStatusOptions = EMPLOYMENT_STATUS_OPTIONS;
 const employeeGroupOptions = EMPLOYEE_GROUP_OPTIONS;
 const userStatusOptions = USER_STATUS_OPTIONS;
 

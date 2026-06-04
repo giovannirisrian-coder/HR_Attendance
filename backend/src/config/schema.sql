@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS users (
 -- 2b. HR_EMPLOYEES (consolidated employee master)
 --
 -- Single source of truth for ALL employee data in the system:
---   • LS HR ➜ Employee List (BAST master fields: vendor, PO, NPK, …)
+--   • LS HR ➜ Employee List (BAST master fields: vendor, NPK, …)
 --   • Attendance / Leave / Overtime (linked via user_id; NPK is the
 --     unified identitas karyawan that travels with each request).
 --
@@ -80,14 +80,7 @@ CREATE TABLE IF NOT EXISTS hr_employees (
   -- Vendor / contract block (all OPTIONAL — HR can complete later)
   vendor_number     VARCHAR(64)   NULL,
   user_department   VARCHAR(150)  NULL,
-  department_title  VARCHAR(150)  NULL,
   vendor_name       VARCHAR(200)  NULL,
-  employment_status ENUM('Permanent','Contract') NULL,
-  po_number         VARCHAR(64)   NULL,
-  po_period_1       VARCHAR(100)  NULL,
-  po_period_2       VARCHAR(100)  NULL,
-  dic_hro           VARCHAR(150)  NULL,
-  cost_center       VARCHAR(64)   NULL,
 
   -- Personal identity block
   npk               VARCHAR(64)   NULL,
@@ -95,7 +88,6 @@ CREATE TABLE IF NOT EXISTS hr_employees (
   email             VARCHAR(190)  NULL,
   position          VARCHAR(150)  NULL,
   position_group    VARCHAR(150)  NULL,
-  category          VARCHAR(100)  NULL,
   -- Coarse "Group" classification used by the Automated Analytics
   -- step to bucket recap rows for audit / payroll reporting. The
   -- SQL identifier is `employee_group` (not `group`) because
