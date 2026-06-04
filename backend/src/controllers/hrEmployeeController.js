@@ -107,6 +107,14 @@ const MAX_LENGTHS = {
   site: 100,
 };
 
+// `sid` (System ID) is the one MANDATORY free-text field on the
+// Create / Edit Employee forms. Unlike the optional fields above it is
+// validated as required so the Automated Analytics step always has a
+// unique identifier for BAST / Salary Recap reporting. Handled
+// separately from TEXT_FIELDS so the "must not be empty" rule is
+// applied even though the underlying column is nullable.
+const SID_MAX_LENGTH = 64;
+
 // Columns selected for every read (list + getById). We JOIN `vendors`
 // so the response always returns the master vendor's current code /
 // name — even when the denormalized `vendor_number` / `vendor_name`
@@ -122,7 +130,7 @@ const SELECT_COLS = `
   COALESCE(v.code, h.vendor_number) AS vendor_number,
   h.user_department,
   COALESCE(v.name, h.vendor_name) AS vendor_name,
-  h.npk, h.employee_name, h.email, h.position, h.position_group,
+  h.npk, h.sid, h.employee_name, h.email, h.position, h.position_group,
   h.employee_group, h.site,
   h.supervisor_id, s.name AS supervisor_name, s.employee_id AS supervisor_employee_id,
   h.user_status,
@@ -318,6 +326,20 @@ const validateBody = (body, opts = {}) => {
       return { ok: false, error: `Field "${f}" is too long (max ${MAX_LENGTHS[f]} chars).` };
     }
     fields[f] = v === '' ? null : v;
+  }
+
+  // SID — MANDATORY. On POST it is always validated; on a partial PUT
+  // we only validate when the key is present (the Edit form always
+  // sends it), but if it IS present it must be a non-empty value.
+  if (!(partial && body.sid === undefined)) {
+    const sid = sanitizeText(body.sid);
+    if (sid === '') {
+      return { ok: false, error: 'Field "SID" is required.' };
+    }
+    if (sid.length > SID_MAX_LENGTH) {
+      return { ok: false, error: `Field "SID" is too long (max ${SID_MAX_LENGTH} chars).` };
+    }
+    fields.sid = sid;
   }
 
   for (const [f, allowed] of Object.entries(ENUM_FIELDS)) {
@@ -888,14 +910,14 @@ const createEmployee = async (req, res) => {
     const [ins] = await conn.query(
       `INSERT INTO hr_employees (
          user_id, vendor_id, vendor_number, user_department, vendor_name,
-         npk, employee_name, email, position, position_group, employee_group, site,
+         npk, sid, employee_name, email, position, position_group, employee_group, site,
          supervisor_id, user_status, created_by, updated_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         provisionedUserId,
         vendorId,
         f.vendor_number, f.user_department, f.vendor_name,
-        f.npk, f.employee_name, f.email, f.position, f.position_group, f.employee_group, f.site,
+        f.npk, f.sid, f.employee_name, f.email, f.position, f.position_group, f.employee_group, f.site,
         supervisorId, f.user_status, createdBy, createdBy,
       ]
     );

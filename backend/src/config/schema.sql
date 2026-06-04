@@ -84,6 +84,13 @@ CREATE TABLE IF NOT EXISTS hr_employees (
 
   -- Personal identity block
   npk               VARCHAR(64)   NULL,
+  -- System ID (SID): mandatory free-text identifier captured by the
+  -- PIC LS so every employee carries a unique key for error-free BAST
+  -- Check / Salary Recap analytics. Stored NULLable at the DB level so
+  -- legacy / bulk-uploaded rows remain valid; the "required" rule is
+  -- enforced by the backend validateBody() and the Create / Edit forms.
+  -- See migration_hr_employees_add_sid.sql.
+  sid               VARCHAR(64)   NULL,
   employee_name     VARCHAR(200)  NULL,
   email             VARCHAR(190)  NULL,
   position          VARCHAR(150)  NULL,

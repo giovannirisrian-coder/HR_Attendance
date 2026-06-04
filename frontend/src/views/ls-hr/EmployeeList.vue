@@ -105,6 +105,7 @@
               <th>User Department</th>
               <th>Vendor Name</th>
               <th>Employee ID (NPK)</th>
+              <th>SID</th>
               <th>Employee Name</th>
               <th class="col-email">Email</th>
               <th>Position</th>
@@ -118,7 +119,7 @@
           </thead>
           <tbody>
             <tr v-if="employees.length === 0">
-              <td :colspan="14">
+              <td :colspan="15">
                 <div class="empty-state">
                   <div class="empty-state-icon">👥</div>
                   <h3>No employees found</h3>
@@ -132,6 +133,10 @@
               <td>{{ emp.user_department }}</td>
               <td class="font-bold">{{ emp.vendor_name }}</td>
               <td><span class="text-sm font-mono">{{ emp.npk }}</span></td>
+              <td>
+                <span v-if="emp.sid" class="text-sm font-mono">{{ emp.sid }}</span>
+                <span v-else class="text-muted">—</span>
+              </td>
               <td class="font-bold">{{ emp.employee_name }}</td>
               <td class="col-email">
                 <a

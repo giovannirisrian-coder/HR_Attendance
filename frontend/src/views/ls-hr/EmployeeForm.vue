@@ -49,6 +49,21 @@
 
       <div class="form-grid">
         <div class="form-group">
+          <label class="form-label">SID <span class="required-mark" aria-hidden="true">*</span></label>
+          <input
+            v-model="form.sid"
+            type="text"
+            class="form-control"
+            :class="{ 'form-control--error': sidError }"
+            maxlength="64"
+            required
+            aria-required="true"
+            @blur="validateSid"
+            @input="sidError = ''"
+          />
+          <p v-if="sidError" class="field-error">{{ sidError }}</p>
+        </div>
+        <div class="form-group">
           <label class="form-label">Employee ID (NPK)</label>
           <input v-model="form.npk" type="text" class="form-control" />
         </div>
@@ -157,7 +172,7 @@
 </template>
 
 <script setup>
-import { reactive, computed, watch } from 'vue';
+import { reactive, ref, computed, watch } from 'vue';
 import {
   EMPTY_EMPLOYEE,
   EMPLOYEE_GROUP_OPTIONS,
@@ -267,9 +282,24 @@ const onSupervisorSelected = (supervisor) => {
   }
 };
 
+// SID is the one mandatory field on this form. We validate on blur and
+// again on submit so the form can never be saved without it, mirroring
+// the backend's required check.
+const sidError = ref('');
+
+const validateSid = () => {
+  if (!String(form.sid || '').trim()) {
+    sidError.value = 'SID is required.';
+    return false;
+  }
+  sidError.value = '';
+  return true;
+};
+
 const onSubmit = () => {
   if (props.submitting) return;
-  emit('submit', { ...form });
+  if (!validateSid()) return;
+  emit('submit', { ...form, sid: String(form.sid || '').trim() });
 };
 
 const onCancel = () => {
@@ -323,6 +353,25 @@ const onCancel = () => {
 }
 .form-group--full {
   grid-column: 1 / -1;
+}
+
+.required-mark {
+  color: var(--bc-rejected, #ef4444);
+  font-weight: 700;
+  margin-left: 2px;
+}
+
+.form-control--error,
+.form-control--error:focus {
+  border-color: var(--bc-rejected, #ef4444);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
+}
+
+.field-error {
+  margin-top: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--bc-rejected, #ef4444);
 }
 
 .status-radio-group {

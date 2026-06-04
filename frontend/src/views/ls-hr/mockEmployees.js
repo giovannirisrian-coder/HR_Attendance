@@ -17,6 +17,8 @@ export const EMPTY_EMPLOYEE = {
   user_department: '',
   vendor_name: '',
   npk: '',
+  // SID (System ID) — mandatory free-text identifier (see EmployeeForm).
+  sid: '',
   employee_name: '',
   email: '',
   position: '',
