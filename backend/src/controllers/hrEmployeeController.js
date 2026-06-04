@@ -36,20 +36,23 @@
  *    attendance / leave / overtime downstream.
  *
  * User account auto-provisioning ("Seamless Integration"):
- *  • Every hr_employees row that has both `email` and `npk` is paired
- *    with a row in `users` (role='ls') so the employee can log in and
+ *  • Authentication is SID-based. Every hr_employees row that has both
+ *    an `employee_name` and a `sid` is paired with a row in `users`
+ *    (role='ls') so the employee can log in (SID + password) and
  *    participate in the digital workflow (Biometric Capture, Overtime,
  *    Correction, …). Create/update both rows in a single DB
  *    transaction — if the users-side write fails the hr_employees
  *    write rolls back, preventing orphan records.
  *  • The link is materialised as `hr_employees.user_id → users.id`.
- *    `npk` mirrors `users.employee_id` (the same value used for login)
- *    so the join is unambiguous and stable. The default password
- *    ("password") is bcrypt-hashed using the same cost factor as the
- *    seed users so first-login UX is identical.
- *  • If a draft employee is created without email/npk (legacy
- *    permissive UX), the account is auto-provisioned the next time
- *    those fields are filled in via an update — no manual step needed.
+ *    `sid` mirrors `users.sid` (the login credential) and `npk` mirrors
+ *    `users.employee_id`. Email is OPTIONAL (stored NULL by default)
+ *    and is no longer a credential, so a missing email never blocks the
+ *    insert. The default password ("password") is bcrypt-hashed using
+ *    the same cost factor as the seed users so first-login UX is
+ *    identical.
+ *  • If a draft employee is created without name/SID (legacy permissive
+ *    UX), the account is auto-provisioned the next time those fields are
+ *    filled in via an update — no manual step needed.
  *
  * The end-to-end approval workflow (LS → Supervisor → Vendor → PIC LS →
  * SSU) is unchanged — only the vendor and supervisor references are
@@ -477,13 +480,16 @@ const BCRYPT_COST = 10;
 
 /**
  * Pre-check whether the LS user row has the minimum fields required
- * to create / sync a login account. We need the employee_name (used
- * as users.name), the NPK (users.employee_id — UNIQUE) and the email
- * (users.email — NOT NULL UNIQUE). Anything less and we skip the
- * account step so legacy "draft" hr_employees rows keep working.
+ * to create / sync a login account. Authentication is now SID-based,
+ * so the credentials we need are the employee_name (used as
+ * users.name, which is NOT NULL) and the SID (users.sid — the login
+ * identifier). NPK (users.employee_id) and email are OPTIONAL: NPK is
+ * synced when present and email is no longer a credential. Anything
+ * less than name + SID and we skip the account step so legacy / draft
+ * hr_employees rows keep working.
  */
-const hasUserAccountFields = (employeeName, npk, email) =>
-  Boolean(employeeName && npk && email);
+const hasUserAccountFields = (employeeName, sid) =>
+  Boolean(employeeName && sid);
 
 /**
  * Map `hr_employees.user_status` (Active / Deactive) onto the
@@ -503,30 +509,44 @@ const hasUserAccountFields = (employeeName, npk, email) =>
 const userStatusToIsActive = (userStatus) => (userStatus === 'Deactive' ? 0 : 1);
 
 /**
- * Detect an existing `users` row that would collide with the email
- * or NPK we are about to write. Returns:
- *   { conflict: 'email' | 'employee_id' | null, user?: row }
+ * Detect an existing `users` row that would collide with the SID
+ * or NPK we are about to write. Authentication is SID-based, so the
+ * SID (the login identifier) is the primary uniqueness axis; NPK
+ * (users.employee_id) is still UNIQUE and checked when present.
+ * Returns:
+ *   { conflict: 'sid' | 'employee_id' | null, user?: row }
  *
  * On the update path pass `excludeUserId` to ignore the row we are
  * synchronising into — otherwise it would always conflict with itself.
  *
- * The `employee_id IS NOT NULL` guard prevents legacy users created
- * without an employee_id from matching a fresh NPK.
+ * The `IS NOT NULL` guards prevent legacy users created without a SID
+ * or employee_id from matching a fresh value.
  */
-const findUserConflict = async (conn, { email, npk, excludeUserId = null }) => {
-  const params = [email, npk];
-  let where = 'WHERE (email = ? OR (employee_id IS NOT NULL AND employee_id = ?))';
+const findUserConflict = async (conn, { sid, npk, excludeUserId = null }) => {
+  const conditions = [];
+  const params = [];
+  if (sid) {
+    conditions.push('(sid IS NOT NULL AND sid = ?)');
+    params.push(sid);
+  }
+  if (npk) {
+    conditions.push('(employee_id IS NOT NULL AND employee_id = ?)');
+    params.push(npk);
+  }
+  if (conditions.length === 0) return { conflict: null };
+
+  let where = `WHERE (${conditions.join(' OR ')})`;
   if (excludeUserId) {
     where += ' AND id <> ?';
     params.push(excludeUserId);
   }
   const [rows] = await conn.query(
-    `SELECT id, email, employee_id FROM users ${where} LIMIT 1`,
+    `SELECT id, sid, employee_id FROM users ${where} LIMIT 1`,
     params
   );
   if (rows.length === 0) return { conflict: null };
   const u = rows[0];
-  if (u.email === email) return { conflict: 'email', user: u };
+  if (sid && u.sid === sid) return { conflict: 'sid', user: u };
   return { conflict: 'employee_id', user: u };
 };
 
@@ -549,13 +569,16 @@ const findUserConflict = async (conn, { email, npk, excludeUserId = null }) => {
  */
 const provisionLsUserAccount = async (
   conn,
-  { name, npk, email, vendorId, supervisorId, isActive }
+  { name, npk, email, sid, vendorId, supervisorId, isActive }
 ) => {
   const passwordHash = await bcrypt.hash(DEFAULT_LS_PASSWORD, BCRYPT_COST);
+  // `sid` is the login credential. NPK (employee_id) and email are
+  // optional — both are UNIQUE+NULLable so an empty value is stored as
+  // NULL rather than blocking the insert.
   const [ins] = await conn.query(
-    `INSERT INTO users (name, employee_id, email, password, role, vendor_id, supervisor_id, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [name, npk, email, passwordHash, DEFAULT_LS_ROLE, vendorId, supervisorId, isActive]
+    `INSERT INTO users (name, employee_id, sid, email, password, role, vendor_id, supervisor_id, is_active)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [name, npk || null, sid, email || null, passwordHash, DEFAULT_LS_ROLE, vendorId, supervisorId, isActive]
   );
   return ins.insertId;
 };
@@ -563,8 +586,9 @@ const provisionLsUserAccount = async (
 /**
  * Propagate the LS HR-edited fields onto the linked `users` row.
  *
- * Per spec we sync: name, employee_id (NPK), email, vendor_id,
- * supervisor_id, and is_active. is_active is derived from
+ * Per spec we sync: name, employee_id (NPK), sid, email, vendor_id,
+ * supervisor_id, and is_active. `sid` is the login credential, kept in
+ * lock-step with hr_employees.sid. is_active is derived from
  * hr_employees.user_status via `userStatusToIsActive`, so toggling
  * a row to "Deactive" on the Employee List immediately locks the
  * paired login out via authController's `WHERE u.is_active = 1`
@@ -576,14 +600,14 @@ const provisionLsUserAccount = async (
 const syncLsUserAccount = async (
   conn,
   userId,
-  { name, npk, email, vendorId, supervisorId, isActive }
+  { name, npk, email, sid, vendorId, supervisorId, isActive }
 ) => {
   await conn.query(
     `UPDATE users
-        SET name = ?, employee_id = ?, email = ?,
+        SET name = ?, employee_id = ?, sid = ?, email = ?,
             vendor_id = ?, supervisor_id = ?, is_active = ?
       WHERE id = ?`,
-    [name, npk, email, vendorId, supervisorId, isActive, userId]
+    [name, npk || null, sid, email || null, vendorId, supervisorId, isActive, userId]
   );
 };
 
@@ -595,6 +619,15 @@ const syncLsUserAccount = async (
  */
 const dupEntryResponse = (err) => {
   const message = String(err && err.message ? err.message : '').toLowerCase();
+  if (message.includes('sid')) {
+    return {
+      status: 409,
+      body: {
+        success: false,
+        message: 'SID already exists. Please use a unique SID.',
+      },
+    };
+  }
   if (message.includes('email')) {
     return {
       status: 409,
@@ -926,17 +959,20 @@ const createEmployee = async (req, res) => {
     await conn.beginTransaction();
 
     // Auto-provision an LS user account when the registration form
-    // supplies the minimum credentials. Drafts that omit email or NPK
-    // skip this step — the account is auto-created later when an
-    // update fills in the missing fields (see updateEmployee).
+    // supplies the minimum credentials (employee_name + SID). Since
+    // authentication is SID-based, email is no longer required — this
+    // is what previously blocked account creation when email was sent
+    // as NULL. Drafts that omit the name or SID skip this step; the
+    // account is auto-created later when an update fills them in (see
+    // updateEmployee).
     let provisionedUserId = null;
-    if (hasUserAccountFields(f.employee_name, f.npk, f.email)) {
-      const conflict = await findUserConflict(conn, { email: f.email, npk: f.npk });
+    if (hasUserAccountFields(f.employee_name, f.sid)) {
+      const conflict = await findUserConflict(conn, { sid: f.sid, npk: f.npk });
       if (conflict.conflict) {
         await conn.rollback();
         const message =
-          conflict.conflict === 'email'
-            ? 'A user account with this email already exists. Please use a different email.'
+          conflict.conflict === 'sid'
+            ? 'A user account with this SID already exists. Please use a different SID.'
             : 'A user account with this Employee ID (NPK) already exists. Please use a unique NPK.';
         return res.status(409).json({ success: false, message });
       }
@@ -944,6 +980,7 @@ const createEmployee = async (req, res) => {
         name: f.employee_name,
         npk: f.npk,
         email: f.email,
+        sid: f.sid,
         vendorId,
         supervisorId,
         isActive: userStatusToIsActive(f.user_status),
@@ -976,7 +1013,7 @@ const createEmployee = async (req, res) => {
       success: true,
       message: provisionedUserId
         ? 'Employee created successfully and LS login account provisioned.'
-        : 'Employee saved as draft. Add an email and NPK to enable LS login.',
+        : 'Employee saved as draft. Add an Employee Name and SID to enable LS login.',
       data: rows[0],
     });
   } catch (err) {
@@ -1072,7 +1109,7 @@ const updateEmployee = async (req, res) => {
     // we can mirror it onto users.is_active even when the current
     // PATCH leaves it untouched.
     const [existingRows] = await conn.query(
-      `SELECT id, user_id, employee_name, npk, email,
+      `SELECT id, user_id, employee_name, npk, sid, email,
               vendor_id, supervisor_id, user_status
          FROM hr_employees
         WHERE id = ?
@@ -1104,6 +1141,7 @@ const updateEmployee = async (req, res) => {
       employee_name:
         fields.employee_name !== undefined ? fields.employee_name : existing.employee_name,
       npk: fields.npk !== undefined ? fields.npk : existing.npk,
+      sid: fields.sid !== undefined ? fields.sid : existing.sid,
       email: fields.email !== undefined ? fields.email : existing.email,
       vendor_id:
         fields.vendor_id !== undefined ? fields.vendor_id : existing.vendor_id,
@@ -1120,17 +1158,17 @@ const updateEmployee = async (req, res) => {
       // when the row still has the required identification; if HR
       // deliberately cleared email or NPK we leave the linked users
       // row untouched (next edit that restores them will resync).
-      if (hasUserAccountFields(merged.employee_name, merged.npk, merged.email)) {
+      if (hasUserAccountFields(merged.employee_name, merged.sid)) {
         const conflict = await findUserConflict(conn, {
-          email: merged.email,
+          sid: merged.sid,
           npk: merged.npk,
           excludeUserId: existing.user_id,
         });
         if (conflict.conflict) {
           await conn.rollback();
           const message =
-            conflict.conflict === 'email'
-              ? 'A different user account already uses this email. Please choose another.'
+            conflict.conflict === 'sid'
+              ? 'A different user account already uses this SID. Please choose another.'
               : 'A different user account already uses this Employee ID (NPK). Please choose another.';
           return res.status(409).json({ success: false, message });
         }
@@ -1138,6 +1176,7 @@ const updateEmployee = async (req, res) => {
           name: merged.employee_name,
           npk: merged.npk,
           email: merged.email,
+          sid: merged.sid,
           vendorId: merged.vendor_id,
           supervisorId: merged.supervisor_id,
           isActive: mergedIsActive,
@@ -1152,18 +1191,18 @@ const updateEmployee = async (req, res) => {
           [mergedIsActive, existing.user_id]
         );
       }
-    } else if (hasUserAccountFields(merged.employee_name, merged.npk, merged.email)) {
-      // Self-healing: a legacy draft row now has enough data to be
-      // promoted into a real LS account.
+    } else if (hasUserAccountFields(merged.employee_name, merged.sid)) {
+      // Self-healing: a legacy draft row now has enough data (name +
+      // SID) to be promoted into a real LS account.
       const conflict = await findUserConflict(conn, {
-        email: merged.email,
+        sid: merged.sid,
         npk: merged.npk,
       });
       if (conflict.conflict) {
         await conn.rollback();
         const message =
-          conflict.conflict === 'email'
-            ? 'A user account with this email already exists. Please use a different email.'
+          conflict.conflict === 'sid'
+            ? 'A user account with this SID already exists. Please use a different SID.'
             : 'A user account with this Employee ID (NPK) already exists. Please use a unique NPK.';
         return res.status(409).json({ success: false, message });
       }
@@ -1171,6 +1210,7 @@ const updateEmployee = async (req, res) => {
         name: merged.employee_name,
         npk: merged.npk,
         email: merged.email,
+        sid: merged.sid,
         vendorId: merged.vendor_id,
         supervisorId: merged.supervisor_id,
         isActive: mergedIsActive,

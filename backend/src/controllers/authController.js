@@ -5,10 +5,15 @@ require('dotenv').config();
 
 const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    // Authentication is SID-based: users sign in with their System ID
+    // (sid) + password. `email` is no longer a credential. We still
+    // accept it under the legacy `email` key for backward-compatible
+    // clients, but `sid` is the canonical field.
+    const { sid, password } = req.body;
+    const loginSid = sid !== undefined && sid !== null ? sid : req.body.email;
 
-    if (!email || !password) {
-      return res.status(400).json({ success: false, message: 'Email and password are required.' });
+    if (!loginSid || !password) {
+      return res.status(400).json({ success: false, message: 'SID and password are required.' });
     }
 
     const [rows] = await db.query(
@@ -16,8 +21,8 @@ const login = async (req, res) => {
        FROM users u
        LEFT JOIN vendors v  ON u.vendor_id = v.id
        LEFT JOIN hr_employees e ON e.user_id = u.id
-       WHERE u.email = ? AND u.is_active = 1`,
-      [email]
+       WHERE u.sid = ? AND u.is_active = 1`,
+      [loginSid]
     );
 
     if (rows.length === 0) {
@@ -34,6 +39,7 @@ const login = async (req, res) => {
     const payload = {
       id: user.id,
       name: user.name,
+      sid: user.sid,
       email: user.email,
       role: user.role,
       vendor_id: user.vendor_id,
@@ -51,6 +57,7 @@ const login = async (req, res) => {
       user: {
         id: user.id,
         name: user.name,
+        sid: user.sid,
         email: user.email,
         role: user.role,
         employee_id: user.employee_id,
@@ -69,7 +76,7 @@ const login = async (req, res) => {
 const getProfile = async (req, res) => {
   try {
     const [rows] = await db.query(
-      `SELECT u.id, u.name, u.email, u.role, u.employee_id, u.vendor_id, u.supervisor_id,
+      `SELECT u.id, u.name, u.sid, u.email, u.role, u.employee_id, u.vendor_id, u.supervisor_id,
               v.name AS vendor_name,
               e.npk  AS npk
        FROM users u

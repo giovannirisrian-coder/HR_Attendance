@@ -40,13 +40,13 @@
 
         <form @submit.prevent="handleLogin">
           <div class="form-group">
-            <label class="form-label">Email Address</label>
+            <label class="form-label">SID</label>
             <input
-              v-model="form.email"
-              type="email"
+              v-model="form.sid"
+              type="text"
               class="form-control"
-              placeholder="your@email.com"
-              autocomplete="email"
+              placeholder="Your System ID (SID)"
+              autocomplete="username"
               required
             />
           </div>
@@ -106,10 +106,10 @@ const router = useRouter();
 const loading = ref(false);
 const errorMsg = ref('');
 const showPassword = ref(false);
-const form = reactive({ email: '', password: '' });
+const form = reactive({ sid: '', password: '' });
 
-const fillDemo = (email) => {
-  form.email = email;
+const fillDemo = (sid) => {
+  form.sid = sid;
   form.password = 'password';
 };
 

@@ -27,12 +27,25 @@ CREATE TABLE IF NOT EXISTS vendors (
 -- ──────────────────────────────────────────────
 -- 2. USERS
 -- roles: ls | ls_supervisor | vendor | ls_hr | ssu
+--
+-- Authentication is SID-based: users sign in with `sid` + password (no
+-- longer email + password). `sid` mirrors `hr_employees.sid` (the System
+-- ID captured by the PIC LS) so the same unique identitas travels from
+-- Biometric Capture through to Automated Analytics. It is UNIQUE +
+-- indexed for fast login lookups; NULL is allowed for legacy rows
+-- (MySQL treats multiple NULLs as non-equal).
+--
+-- `email` is intentionally NULLable: it is no longer a credential, so an
+-- LS account can be auto-provisioned from the Employee List without an
+-- email. The UNIQUE index is preserved (multiple NULLs are allowed).
+-- See migration_users_add_sid.sql.
 -- ──────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS users (
   id              INT AUTO_INCREMENT PRIMARY KEY,
   name            VARCHAR(150) NOT NULL,
   employee_id     VARCHAR(50)  UNIQUE,
-  email           VARCHAR(150) NOT NULL UNIQUE,
+  sid             VARCHAR(64)  NULL,
+  email           VARCHAR(150) NULL UNIQUE,
   password        VARCHAR(255) NOT NULL,
   role            ENUM('ls','ls_supervisor','vendor','ls_hr','ssu') NOT NULL,
   vendor_id       INT          NULL,
@@ -40,6 +53,7 @@ CREATE TABLE IF NOT EXISTS users (
   is_active       TINYINT(1)   NOT NULL DEFAULT 1,
   created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_users_sid (sid),
   CONSTRAINT fk_user_vendor     FOREIGN KEY (vendor_id)    REFERENCES vendors(id) ON DELETE SET NULL,
   CONSTRAINT fk_user_supervisor FOREIGN KEY (supervisor_id) REFERENCES users(id)  ON DELETE SET NULL
 ) ENGINE=InnoDB;
@@ -328,16 +342,19 @@ INSERT IGNORE INTO vendors (name, code, address, phone, email) VALUES
   ('PT Mitra Karya Utama', 'MKU001', 'Jl. Pertambangan No. 1, Berau', '0551-1234567', 'mku@vendor.com'),
   ('CV Sumber Daya Mandiri', 'SDM002', 'Jl. Industri No. 5, Berau',   '0551-7654321', 'sdm@vendor.com');
 
-INSERT IGNORE INTO users (name, employee_id, email, password, role, vendor_id, supervisor_id) VALUES
-  ('Admin MKU',  'VND001', 'vendor1@beraucoal.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'vendor', 1, NULL),
-  ('Admin SDM',  'VND002', 'vendor2@beraucoal.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'vendor', 2, NULL),
-  ('Budi Santoso',  'SPV001', 'supervisor1@beraucoal.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'ls_supervisor', 1, NULL),
-  ('Dewi Rahayu',   'SPV002', 'supervisor2@beraucoal.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'ls_supervisor', 2, NULL),
-  ('Ahmad Fauzi',   'LS001', 'ls1@beraucoal.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'ls', 1, NULL),
-  ('Siti Nurhaliza','LS002', 'ls2@beraucoal.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'ls', 1, NULL),
-  ('Rudi Hartono',  'LS003', 'ls3@beraucoal.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'ls', 2, NULL),
-  ('LS HR Officer', 'HR001', 'lshr@beraucoal.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'ls_hr', NULL, NULL),
-  ('SSU Officer',   'SSU001', 'ssu@beraucoal.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'ssu', NULL, NULL);
+-- `sid` is the new login credential (sign in with SID + password). For
+-- the demo accounts it mirrors `employee_id` so QA / UAT can sign in with
+-- e.g. SID "LS001" / password "password".
+INSERT IGNORE INTO users (name, employee_id, sid, email, password, role, vendor_id, supervisor_id) VALUES
+  ('Admin MKU',  'VND001', 'VND001', 'vendor1@beraucoal.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'vendor', 1, NULL),
+  ('Admin SDM',  'VND002', 'VND002', 'vendor2@beraucoal.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'vendor', 2, NULL),
+  ('Budi Santoso',  'SPV001', 'SPV001', 'supervisor1@beraucoal.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'ls_supervisor', 1, NULL),
+  ('Dewi Rahayu',   'SPV002', 'SPV002', 'supervisor2@beraucoal.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'ls_supervisor', 2, NULL),
+  ('Ahmad Fauzi',   'LS001', 'LS001', 'ls1@beraucoal.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'ls', 1, NULL),
+  ('Siti Nurhaliza','LS002', 'LS002', 'ls2@beraucoal.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'ls', 1, NULL),
+  ('Rudi Hartono',  'LS003', 'LS003', 'ls3@beraucoal.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'ls', 2, NULL),
+  ('LS HR Officer', 'HR001', 'HR001', 'lshr@beraucoal.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'ls_hr', NULL, NULL),
+  ('SSU Officer',   'SSU001', 'SSU001', 'ssu@beraucoal.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'ssu', NULL, NULL);
 
 UPDATE users SET supervisor_id = (SELECT id FROM (SELECT id FROM users WHERE employee_id='SPV001') t) WHERE employee_id IN ('LS001','LS002');
 UPDATE users SET supervisor_id = (SELECT id FROM (SELECT id FROM users WHERE employee_id='SPV002') t) WHERE employee_id = 'LS003';
@@ -350,10 +367,11 @@ UPDATE users SET supervisor_id = (SELECT id FROM (SELECT id FROM users WHERE emp
 -- NPK mirrors the seed `users.employee_id` (LS001 / LS002 / LS003) so the
 -- account auto-provisioning sync in hrEmployeeController stays trivially
 -- consistent: `hr_employees.npk` ⇔ `users.employee_id`.
-INSERT INTO hr_employees (user_id, vendor_id, npk, employee_name, vendor_number, vendor_name, supervisor_id, user_status)
+INSERT INTO hr_employees (user_id, vendor_id, npk, sid, employee_name, vendor_number, vendor_name, supervisor_id, user_status)
 SELECT u.id,
   v.id,
   u.employee_id AS npk,
+  u.sid,
   u.name,
   v.code,
   v.name,
