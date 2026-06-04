@@ -103,6 +103,7 @@
               <th>Employee Name</th>
               <th>Position</th>
               <th>Position Group</th>
+              <th>Employee Group</th>
               <th>Site</th>
               <th>Supervisor</th>
               <th>User Status</th>
@@ -111,7 +112,7 @@
           </thead>
           <tbody>
             <tr v-if="employees.length === 0">
-              <td :colspan="12">
+              <td :colspan="13">
                 <div class="empty-state">
                   <div class="empty-state-icon">👥</div>
                   <h3>No employees found</h3>
@@ -131,6 +132,10 @@
               <td class="font-bold">{{ emp.employee_name }}</td>
               <td>{{ emp.position }}</td>
               <td>{{ emp.position_group }}</td>
+              <td>
+                <span v-if="emp.employee_group" class="badge badge-group">{{ emp.employee_group }}</span>
+                <span v-else class="text-muted">—</span>
+              </td>
               <td>{{ emp.site }}</td>
               <td>
                 <span v-if="emp.supervisor_name">{{ emp.supervisor_name }}</span>

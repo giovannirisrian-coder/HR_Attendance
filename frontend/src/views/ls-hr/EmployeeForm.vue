@@ -82,7 +82,17 @@
           <input v-model="form.position_group" type="text" class="form-control" />
         </div>
 
-        <div class="form-group form-group--full">
+        <div class="form-group">
+          <label class="form-label">Employee Group</label>
+          <select v-model="form.employee_group" class="form-control">
+            <option value="">— Select group —</option>
+            <option v-for="g in EMPLOYEE_GROUP_OPTIONS" :key="g" :value="g">{{ g }}</option>
+          </select>
+          <p class="text-sm text-muted" style="margin-top: 6px;">
+            Categorisation used for BAST checks and Salary Recap (BC or MTL).
+          </p>
+        </div>
+        <div class="form-group">
           <label class="form-label">Site</label>
           <input v-model="form.site" type="text" class="form-control" />
         </div>
@@ -129,7 +139,7 @@
 
 <script setup>
 import { reactive, ref, computed, watch } from 'vue';
-import { EMPTY_EMPLOYEE } from './mockEmployees';
+import { EMPTY_EMPLOYEE, EMPLOYEE_GROUP_OPTIONS } from './mockEmployees';
 import VendorSearchSelect from '../../components/VendorSearchSelect.vue';
 import SupervisorSearchSelect from '../../components/SupervisorSearchSelect.vue';
 

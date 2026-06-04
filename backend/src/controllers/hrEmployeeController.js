@@ -912,15 +912,16 @@ const createEmployee = async (req, res) => {
 
   const f = v.fields;
 
-  // Hidden-field policy: the Create / Edit forms no longer expose Email,
-  // Group (employee_group) or User Status to the PIC LS. The backend
-  // still owns these columns, so we force the agreed defaults regardless
-  // of what (if anything) the client sent:
+  // Hidden-field policy: the Create / Edit forms no longer expose Email
+  // or User Status to the PIC LS. The backend still owns these columns,
+  // so we force the agreed defaults regardless of what (if anything) the
+  // client sent:
   //   • email          → NULL
-  //   • employee_group → NULL
   //   • user_status    → 'Active'
+  // `employee_group` (BC / MTL) IS exposed on the form again — the
+  // validated value from validateBody flows through untouched so the
+  // Automated Analytics step can bucket recap rows by group.
   f.email = null;
-  f.employee_group = null;
   f.user_status = 'Active';
 
   // Audit trail stores the requester's NAME (not the numeric id) so the
@@ -1057,14 +1058,15 @@ const updateEmployee = async (req, res) => {
 
   const fields = { ...v.fields };
 
-  // Hidden-field policy (mirrors createEmployee): Email, Group and User
-  // Status are no longer editable from the form, so every update forces
-  // the agreed defaults so existing records are normalised on save:
+  // Hidden-field policy (mirrors createEmployee): Email and User Status
+  // are no longer editable from the form, so every update forces the
+  // agreed defaults so existing records are normalised on save:
   //   • email          → NULL
-  //   • employee_group → NULL
   //   • user_status    → 'Active'
+  // `employee_group` (BC / MTL) IS editable again — when the form sends
+  // it, the validated value from validateBody is persisted; when the
+  // field is absent (partial PATCH) the existing value is left untouched.
   fields.email = null;
-  fields.employee_group = null;
   fields.user_status = 'Active';
 
   // Vendor lookup: same authoritative overwrite as in createEmployee.
