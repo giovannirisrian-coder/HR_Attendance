@@ -1,4 +1,12 @@
 const { queryFingerspot, closeFingerspotPool, isFingerspotDatabaseConfigured } = require('../config/fingerspotDatabase');
+const {
+  toSqlDate,
+  toSqlTime,
+  shiftDurationMinutes,
+  upsertAttendanceFromGlogDailyRow,
+  tallyUpsertStats,
+  emptyAttendanceSyncStats,
+} = require('./glogAttendanceService');
 
 const PAGE_SIZE = 5000;
 const SYNC_CHUNK = 500;
