@@ -1,5 +1,3 @@
-const bcrypt = require('bcryptjs');
-
 /** YYYY-MM-DD for SQL binding (hindari drift timezone dari objek Date mysql2). */
 function toSqlDate(value) {
   if (value == null) return null;
@@ -41,6 +39,11 @@ function shiftDurationMinutes(timeIn, timeOut) {
   return mins;
 }
 
+/**
+ * Cocokkan identitas dari file glog (kolom "NIK") ke master hr_employees.
+ * Setelah konsolidasi nik → npk, nilai file dicocokkan ke npk / employee_id /
+ * sid agar baris lama yang masih memakai SID atau employee_id tetap valid.
+ */
 async function resolveEmployeeForGlogNik(conn, rawNik) {
   const trimmed = String(rawNik || '').trim();
   if (!trimmed) return { employee: null, reason: 'empty_nik' };
@@ -48,9 +51,11 @@ async function resolveEmployeeForGlogNik(conn, rawNik) {
     `SELECT e.id AS employee_id, e.user_id, e.npk
      FROM hr_employees e
      INNER JOIN users u ON u.id = e.user_id AND u.role = 'ls' AND u.is_active = 1
-     WHERE e.npk = ? AND e.user_status = 'Active'
+     WHERE e.user_status = 'Active'
+       AND e.user_id IS NOT NULL
+       AND (e.npk = ? OR u.employee_id = ? OR e.sid = ? OR u.sid = ?)
      LIMIT 1`,
-    [trimmed]
+    [trimmed, trimmed, trimmed, trimmed]
   );
   if (rows.length === 0) return { employee: null, reason: 'unmatched_nik' };
   return { employee: rows[0], reason: null };
@@ -68,8 +73,8 @@ async function upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnm
     employeeCreated: false,
   };
 
-  let empMatch = await resolveEmployeeForGlogNik(conn, row.nik);
-  let { employee, reason } = empMatch;
+  const empMatch = await resolveEmployeeForGlogNik(conn, row.nik);
+  const { employee, reason } = empMatch;
 
   const attendanceDate = toSqlDate(row.attendance_date);
   const clockIn = toSqlTime(row.time_in);
@@ -79,17 +84,22 @@ async function upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnm
     return out;
   }
 
-  if(employee === null){
-    out.skipReason = 'unmatched_nik';
+  if (!employee) {
+    out.skipReason = reason === 'empty_nik' ? 'invalid_time' : 'unmatched_nik';
     return out;
   }
 
   const canonicalNpk = String(employee.npk || '').trim().slice(0, 64);
+  if (!canonicalNpk) {
+    out.skipReason = 'unmatched_nik';
+    return out;
+  }
 
   const [existing] = await conn.query(
-    `SELECT id, status, source_type, is_effective, clock_in_time, clock_out_time
+    `SELECT id, status, clock_in_time, clock_out_time
      FROM attendance
-     WHERE user_id = ? AND attendance_date = ? AND is_effective = 1
+     WHERE user_id = ? AND attendance_date = ?
+       AND status IN ('approved', 'pending')
      ORDER BY id DESC
      LIMIT 1`,
     [employee.user_id, attendanceDate]
@@ -103,15 +113,15 @@ async function upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnm
          clock_in_lat, clock_in_lng, clock_in_address,
          clock_out_lat, clock_out_lng, clock_out_address,
          ot_start_time, ot_end_time, ot_summary,
-         status, source_type, is_effective
-       ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'approved', 'machine', 1)`,
+         status
+       ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'approved')`,
       [employee.user_id, employee.employee_id, canonicalNpk, attendanceDate, clockIn, clockOut]
     );
     out.result = 'insert';
     return out;
   }
 
-  if (existing[0].source_type !== 'machine' || Number(existing[0].is_effective) !== 1) {
+  if (existing[0].status === 'pending') {
     out.skipReason = 'non_pending';
     return out;
   }
@@ -128,8 +138,6 @@ async function upsertAttendanceFromGlogDailyRow(conn, row, { createEmployeeIfUnm
        clock_in_time = ?,
        clock_out_time = ?,
        status = 'approved',
-       source_type = 'machine',
-       is_effective = 1,
        updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
     [employee.employee_id, canonicalNpk, clockIn, clockOut, existing[0].id]

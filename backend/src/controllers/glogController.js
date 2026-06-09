@@ -141,7 +141,9 @@ function buildStagingRow(batchId, { line_no, cells }) {
   if (cells.length < 5) {
     parseError = `Kolom tidak lengkap (perlu 5 kolom, dapat ${cells.length}).`;
   } else if (!nik) {
-    parseError = 'NIK kosong.';
+    parseError = 'NIK/NPK kosong.';
+  } else if (nik.length > 32) {
+    parseError = 'NIK/NPK melebihi 32 karakter.';
   } else if (!employeeName) {
     parseError = 'Nama Karyawan kosong.';
   }
@@ -239,10 +241,10 @@ async function getDailyRowsChunk(conn, batchId, lastId, limit) {
 
 /**
  * Sinkronkan baris glog_import_daily batch ini ke attendance.
- * - INSERT jika belum ada (user_id + attendance_date).
- * - UPDATE clock_in_time / clock_out_time + employee_id + nik kanonik hanya jika status = pending.
- * - Lewati jika sudah approved/rejected (jaga alur persetujuan).
- * - Lewati update jika pending sudah sama dengan glog (nik+tanggal+t jam sama).
+ * - INSERT jika belum ada baris aktif (user_id + attendance_date).
+ * - UPDATE clock_in_time / clock_out_time + employee_id + nik (NPK) hanya jika status = approved.
+ * - Lewati jika ada koreksi pending (status pending) agar alur persetujuan tidak tertimpa.
+ * - Lewati update jika jam sudah sama dengan glog (nik+tanggal+jam sama).
  * - Lewati jika NIK/NPK tidak ada di hr_employees (tidak dibuat placeholder).
  * Geo & lembur (OT) tidak diubah pada UPDATE (tetap seperti data aplikasi).
  */
@@ -674,7 +676,7 @@ const getProcessJobStatus = async (req, res) => {
   }
 };
 
-/** Patch attendance dari glog_import_daily (NIK + tanggal): insert/update pending; lewati approved; abaikan NIK tanpa hr_employees. */
+/** Patch attendance dari glog_import_daily (NIK/NPK + tanggal): insert/update approved; lewati pending; abaikan NIK tanpa hr_employees. */
 const patchAttendanceFromBatch = async (req, res) => {
   const conn = await db.getConnection();
   try {

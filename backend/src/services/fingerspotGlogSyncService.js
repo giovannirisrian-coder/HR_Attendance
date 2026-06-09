@@ -1,4 +1,9 @@
-const { queryFingerspot, closeFingerspotPool, isFingerspotDatabaseConfigured } = require('../config/fingerspotDatabase');
+const {
+  sql,
+  queryFingerspot,
+  closeFingerspotPool,
+  isFingerspotDatabaseConfigured,
+} = require('../config/fingerspotDatabase');
 const {
   toSqlDate,
   toSqlTime,
@@ -71,23 +76,23 @@ function parseFingerspotAccessEvent(dateRaw, timeRaw) {
 async function fetchDataAccessPage({ dateFrom, dateTo, offset, limit }) {
   const sqlText = `
     SELECT
-      TRIM(da.USER_ID) AS nik,
-      DATE(da.\`DATE\`) AS access_date,
-      TIME(da.\`TIME\`) AS access_time
+      LTRIM(RTRIM(da.USER_ID)) AS nik,
+      CAST(da.[DATE] AS DATE) AS access_date,
+      CAST(da.[TIME] AS TIME) AS access_time
     FROM ${T_DATA_ACCESS} da
-    WHERE da.\`DATE\` >= ?
-      AND da.\`DATE\` < DATE_ADD(?, INTERVAL 1 DAY)
+    WHERE da.[DATE] >= @dateFrom
+      AND da.[DATE] < DATEADD(DAY, 1, @dateTo)
       AND da.USER_ID IS NOT NULL
-      AND TRIM(da.USER_ID) <> ''
-    ORDER BY da.\`DATE\`, da.\`TIME\`, da.USER_ID
-    LIMIT ? OFFSET ?`;
+      AND LTRIM(RTRIM(da.USER_ID)) <> ''
+    ORDER BY da.[DATE], da.[TIME], da.USER_ID
+    OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`;
 
-  return queryFingerspot(sqlText, [
-    `${dateFrom} 00:00:00`,
-    dateTo,
-    limit,
-    offset,
-  ]);
+  return queryFingerspot(sqlText, {
+    dateFrom: { type: sql.DateTime2, value: `${dateFrom} 00:00:00` },
+    dateTo: { type: sql.Date, value: dateTo },
+    offset: { type: sql.Int, value: offset },
+    limit: { type: sql.Int, value: limit },
+  });
 }
 
 async function loadAllDataAccessTaps(dateFrom, dateTo) {
