@@ -4,6 +4,7 @@ const {
   closeFingerspotPool,
   isFingerspotDatabaseConfigured,
 } = require('../config/fingerspotDatabase');
+const db = require('../config/database');
 const {
   toSqlDate,
   toSqlTime,
