@@ -73,24 +73,6 @@
             <span>{{ loading ? 'Signing in…' : 'Sign In' }}</span>
           </button>
         </form>
-
-        <div class="demo-accounts">
-          <p class="demo-title">Demo Accounts (Password: <code>password</code>)</p>
-          <div class="demo-grid">
-            <button type="button" class="demo-btn" @click="fillDemo('ls1@beraucoal.com')">
-              <span class="demo-role">LS</span> Ahmad Fauzi
-            </button>
-            <button type="button" class="demo-btn" @click="fillDemo('supervisor1@beraucoal.com')">
-              <span class="demo-role">Supervisor</span> Budi Santoso
-            </button>
-            <button type="button" class="demo-btn" @click="fillDemo('vendor1@beraucoal.com')">
-              <span class="demo-role">Vendor</span> Admin MKU
-            </button>
-            <button type="button" class="demo-btn" @click="fillDemo('lshr@beraucoal.com')">
-              <span class="demo-role">LS HR</span> LS HR Officer
-            </button>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -185,11 +167,6 @@ const firstLogin = reactive({
   saving: false,
   error: '',
 });
-
-const fillDemo = (sid) => {
-  form.sid = sid;
-  form.password = 'password';
-};
 
 // Resolve the post-login landing route for a role.
 const routeForRole = (role) => {
@@ -341,30 +318,6 @@ const handleChangePassword = async () => {
   transition: opacity .15s;
 }
 .pw-toggle:hover { opacity: 1; }
-
-/* ── Demo accounts ─ */
-.demo-accounts { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--bc-gray-100); }
-.demo-title { font-size: 12px; color: var(--bc-gray-400); text-align: center; margin-bottom: 12px; }
-.demo-title code { background: var(--bc-gray-100); padding: 1px 6px; border-radius: 4px; font-family: monospace; }
-.demo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; max-width: 520px; margin: 0 auto; }
-.demo-btn {
-  display: flex; flex-direction: column; align-items: center; gap: 4px;
-  padding: 10px 8px;
-  background: var(--bc-gray-50);
-  border: 1.5px solid var(--bc-gray-200);
-  border-radius: var(--radius);
-  cursor: pointer;
-  font-size: 11.5px;
-  color: var(--bc-gray-600);
-  transition: all .15s;
-  font-weight: 600;
-}
-.demo-btn:hover { border-color: var(--bc-green-400); background: var(--bc-green-50); color: var(--bc-green-700); }
-.demo-role {
-  font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em;
-  background: var(--bc-green-100); color: var(--bc-green-700);
-  padding: 2px 7px; border-radius: var(--radius-full);
-}
 
 /* ── First-time login dialog ─ */
 .fl-intro {
