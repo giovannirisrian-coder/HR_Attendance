@@ -17,7 +17,7 @@
         <p class="text-sm text-muted" style="margin:0 0 8px;">
           Header wajib sesuai template:
         </p>
-        <pre class="format-sample">NIK,NAMA,JABATAN,DEPARTEMEN,SITE,PERUSAHAAN,NIK ATASAN,NAMA ATASAN</pre>
+        <pre class="format-sample">No, SID No, NPK, Nama Karyawan, Jabatan, Kelompok Jabatan, Departemen, Site, NIK Atasan, Nama Atasan, Vendor, BU</pre>
       </div>
     </div>
 
@@ -27,11 +27,6 @@
       </div>
       <div class="card-body">
         <div class="upload-row">
-          <select v-model="sourceSystem" class="form-control" style="max-width:160px;">
-            <option value="">Pilih Site</option>
-            <option value="MTL">MTL</option>
-            <option value="BC">BC</option>
-          </select>
           <input
             ref="fileInput"
             type="file"
@@ -40,7 +35,7 @@
             style="max-width:360px;"
             @change="onFile"
           />
-          <button class="btn btn-primary" :disabled="!sourceSystem || !selectedFile || uploading" @click="doUpload">
+          <button class="btn btn-primary" :disabled="!selectedFile || uploading" @click="doUpload">
             {{ uploading ? 'On Progress...' : 'Preview & Upload' }}
           </button>
         </div>
@@ -59,7 +54,7 @@
     </div>
 
     <p v-if="summary" class="text-sm text-muted" style="margin-top:8px;">
-      Hanya baris dengan NIK/NPK terisi yang diproses. Kolom PERUSAHAAN harus cocok dengan master vendor.
+      Hanya baris dengan NPK terisi yang diproses. Kolom Vendor harus cocok dengan master vendor.
     </p>
   </div>
 </template>
@@ -73,7 +68,6 @@ const selectedFile = ref(null);
 const uploading = ref(false);
 const uploadMessage = ref('');
 const uploadOk = ref(false);
-const sourceSystem = ref('');
 const summary = ref(null);
 
 function onFile(e) {
@@ -90,7 +84,6 @@ async function doUpload() {
   try {
     const fd = new FormData();
     fd.append('file', selectedFile.value);
-    fd.append('source_system', sourceSystem.value);
     const { data } = await api.post('/employees/upload', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 120000,

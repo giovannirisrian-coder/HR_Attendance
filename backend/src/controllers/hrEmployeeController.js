@@ -186,16 +186,20 @@ const uploadHrEmployeesMiddlewareSafe = (req, res, next) => {
   });
 };
 
-const TEMPLATE_HEADER_TO_FIELD = {
-  nik: 'nik',
-  nama: 'employee_name',
-  jabatan: 'position',
-  departemen: 'user_department',
-  site: 'site',
-  perusahaan: 'company_name',
-  'nik atasan': 'supervisor_nik',
-  'nama atasan': 'supervisor_name',
-};
+// Excel template: No, SID No, NPK, Nama Karyawan, Jabatan, Kelompok Jabatan,
+// Departemen, Site, NIK Atasan, Nama Atasan, Vendor, BU
+const UPLOAD_HEADER_SPECS = [
+  { field: 'sid', labels: ['sid no', 'sid'] },
+  { field: 'npk', labels: ['npk'] },
+  { field: 'employee_name', labels: ['nama karyawan'] },
+  { field: 'position', labels: ['jabatan'] },
+  { field: 'position_group', labels: ['kelompok jabatan'] },
+  { field: 'user_department', labels: ['departemen', 'departement'] },
+  { field: 'site', labels: ['site'] },
+  { field: 'supervisor_ref', labels: ['nik atasan'] },
+  { field: 'company_name', labels: ['vendor'] },
+  { field: 'employee_group', labels: ['bu'] },
+];
 
 const normalizeUploadHeader = (value) =>
   String(value || '')
@@ -204,21 +208,40 @@ const normalizeUploadHeader = (value) =>
     .trim()
     .toLowerCase();
 
+const resolveUploadHeaderIndex = (headers, labels) => {
+  for (const label of labels) {
+    const index = headers.findIndex((h) => h === normalizeUploadHeader(label));
+    if (index >= 0) return index;
+  }
+  return -1;
+};
+
 const findHeaderRow = (rows) => {
   for (let i = 0; i < Math.min(rows.length, 30); i += 1) {
     const headers = rows[i].map(normalizeUploadHeader);
-    if (
-      headers.includes('nik') &&
-      headers.includes('nama') &&
-      headers.includes('jabatan') &&
-      headers.includes('departemen') &&
-      headers.includes('site') &&
-      headers.includes('perusahaan')
-    ) {
+    const hasRequired = UPLOAD_HEADER_SPECS.every(
+      (spec) => resolveUploadHeaderIndex(headers, spec.labels) >= 0
+    );
+    if (hasRequired) {
       return { headerRowIndex: i, headers };
     }
   }
   return null;
+};
+
+const buildUploadHeaderMap = (headers) => {
+  const headerMap = {};
+  for (const spec of UPLOAD_HEADER_SPECS) {
+    const index = resolveUploadHeaderIndex(headers, spec.labels);
+    if (index < 0) {
+      return {
+        ok: false,
+        message: `Kolom wajib "${spec.labels[0]}" tidak ditemukan pada header file.`,
+      };
+    }
+    headerMap[spec.field] = index;
+  }
+  return { ok: true, headerMap };
 };
 
 const mapSheetRowToEmployeeBody = (cells, headerMap) => {
@@ -232,28 +255,195 @@ const mapSheetRowToEmployeeBody = (cells, headerMap) => {
 
 const summarizeLineError = (line, msg) => ({ line_no: line, error: msg });
 
-const nonEmptyOrDash = (value) => sanitizeText(value) || '-';
+const nullableUploadText = (value) => {
+  const v = sanitizeText(value);
+  return v === '' ? null : v;
+};
 
-const normalizeUploadRowForUpsert = (body) => {
-  const nik = sanitizeText(body.nik);
-  const npk = sanitizeText(body.npk || body.nik);
-  const department = sanitizeText(body.user_department);
+const normalizeEmployeeGroupForUpload = (raw) => {
+  const value = sanitizeText(raw).toUpperCase();
+  if (!value) return null;
+  return ENUM_FIELDS.employee_group.includes(value) ? value : null;
+};
 
-  return {
-    nik,
-    npk,
-    vendor_id: null,
-    vendor_number: '-',
-    user_department: nonEmptyOrDash(department),
-    vendor_name: nonEmptyOrDash(body.company_name),
-    employee_name: nonEmptyOrDash(body.employee_name),
-    position: nonEmptyOrDash(body.position),
-    position_group: '-',
-    site: nonEmptyOrDash(body.site),
-    supervisor_nik: nonEmptyOrDash(body.supervisor_nik),
-    supervisor_name: nonEmptyOrDash(body.supervisor_name),
-    user_status: 'Active',
-  };
+const normalizeUploadRowForUpsert = (body) => ({
+  npk: sanitizeText(body.npk),
+  sid: nullableUploadText(body.sid),
+  vendor_id: null,
+  vendor_number: null,
+  user_department: nullableUploadText(body.user_department),
+  vendor_name: null,
+  employee_name: nullableUploadText(body.employee_name),
+  email: null,
+  position: nullableUploadText(body.position),
+  position_group: nullableUploadText(body.position_group),
+  employee_group: normalizeEmployeeGroupForUpload(body.employee_group),
+  site: nullableUploadText(body.site),
+  supervisor_id: null,
+  supervisor_ref: nullableUploadText(body.supervisor_ref),
+  user_status: 'Active',
+});
+
+/**
+ * Resolve NIK Atasan from the upload sheet to an LS Supervisor users.id.
+ * The reference may match users.employee_id (NPK) or users.sid.
+ */
+const resolveSupervisorForUpload = async (executor, supervisorRef) => {
+  const ref = sanitizeText(supervisorRef);
+  if (!ref) return null;
+  const [rows] = await executor.query(
+    `SELECT id
+       FROM users
+      WHERE role = 'ls_supervisor'
+        AND (employee_id = ? OR sid = ?)
+      LIMIT 1`,
+    [ref, ref]
+  );
+  return rows.length ? rows[0].id : null;
+};
+
+const uploadUserConflictMessage = (conflict) =>
+  conflict === 'sid'
+    ? 'Akun login dengan SID ini sudah ada. Gunakan SID yang berbeda.'
+    : 'Akun login dengan NPK ini sudah ada. Gunakan NPK yang unik.';
+
+/**
+ * Insert or update one hr_employees row from bulk upload and keep the
+ * paired users row in sync (mirrors createEmployee / updateEmployee).
+ */
+const upsertUploadEmployeeRow = async (conn, row, uploaderName) => {
+  const isActive = userStatusToIsActive(row.user_status);
+
+  const [existingRows] = await conn.query(
+    `SELECT id, user_id, employee_name, npk, sid, email,
+            vendor_id, supervisor_id, user_status
+       FROM hr_employees
+      WHERE npk = ?
+      LIMIT 1
+      FOR UPDATE`,
+    [row.npk]
+  );
+
+  if (existingRows.length > 0) {
+    const existing = existingRows[0];
+    let userId = existing.user_id;
+
+    if (userId && hasUserAccountFields(row.employee_name, row.sid)) {
+      const conflict = await findUserConflict(conn, {
+        sid: row.sid,
+        npk: row.npk,
+        excludeUserId: userId,
+      });
+      if (conflict.conflict) {
+        throw new Error(uploadUserConflictMessage(conflict.conflict));
+      }
+      await syncLsUserAccount(conn, userId, {
+        name: row.employee_name,
+        npk: row.npk,
+        email: row.email,
+        sid: row.sid,
+        vendorId: row.vendor_id,
+        supervisorId: row.supervisor_id,
+        isActive,
+      });
+    } else if (!userId && hasUserAccountFields(row.employee_name, row.sid)) {
+      const conflict = await findUserConflict(conn, { sid: row.sid, npk: row.npk });
+      if (conflict.conflict) {
+        throw new Error(uploadUserConflictMessage(conflict.conflict));
+      }
+      userId = await provisionLsUserAccount(conn, {
+        name: row.employee_name,
+        npk: row.npk,
+        email: row.email,
+        sid: row.sid,
+        vendorId: row.vendor_id,
+        supervisorId: row.supervisor_id,
+        isActive,
+      });
+    }
+
+    await conn.query(
+      `UPDATE hr_employees
+          SET user_id = ?,
+              vendor_id = ?,
+              vendor_number = ?,
+              user_department = ?,
+              vendor_name = ?,
+              sid = ?,
+              employee_name = ?,
+              position = ?,
+              position_group = ?,
+              employee_group = ?,
+              site = ?,
+              supervisor_id = ?,
+              user_status = ?,
+              updated_by = ?
+        WHERE id = ?`,
+      [
+        userId,
+        row.vendor_id,
+        row.vendor_number,
+        row.user_department,
+        row.vendor_name,
+        row.sid,
+        row.employee_name,
+        row.position,
+        row.position_group,
+        row.employee_group,
+        row.site,
+        row.supervisor_id,
+        row.user_status,
+        uploaderName,
+        existing.id,
+      ]
+    );
+    return 'updated';
+  }
+
+  let userId = null;
+  if (hasUserAccountFields(row.employee_name, row.sid)) {
+    const conflict = await findUserConflict(conn, { sid: row.sid, npk: row.npk });
+    if (conflict.conflict) {
+      throw new Error(uploadUserConflictMessage(conflict.conflict));
+    }
+    userId = await provisionLsUserAccount(conn, {
+      name: row.employee_name,
+      npk: row.npk,
+      email: row.email,
+      sid: row.sid,
+      vendorId: row.vendor_id,
+      supervisorId: row.supervisor_id,
+      isActive,
+    });
+  }
+
+  await conn.query(
+    `INSERT INTO hr_employees (
+       user_id, vendor_id, vendor_number, user_department, vendor_name,
+       npk, sid, employee_name, email, position, position_group, employee_group, site,
+       supervisor_id, user_status, created_by, updated_by
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      userId,
+      row.vendor_id,
+      row.vendor_number,
+      row.user_department,
+      row.vendor_name,
+      row.npk,
+      row.sid,
+      row.employee_name,
+      row.email,
+      row.position,
+      row.position_group,
+      row.employee_group,
+      row.site,
+      row.supervisor_id,
+      row.user_status,
+      uploaderName,
+      uploaderName,
+    ]
+  );
+  return 'inserted';
 };
 
 const buildVendorLookupMap = (vendorRows) => {
@@ -1355,12 +1545,9 @@ const uploadEmployeesBulk = async (req, res) => {
   const uploaderName = await resolveActorName(db, uploaderId);
   const uploadRequestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   try {
-    const sourceSystem = sanitizeText(req.body?.source_system).toUpperCase();
-
     console.info('HR employee bulk upload started:', {
       request_id: uploadRequestId,
       user_id: uploaderId,
-      source_system: sourceSystem,
       filename: req.file?.originalname || null,
       size: req.file?.size || null,
     });
@@ -1394,22 +1581,19 @@ const uploadEmployeesBulk = async (req, res) => {
     if (!headerInfo) {
       return res.status(400).json({
         success: false,
-        message: 'Header template tidak ditemukan. Pastikan memakai file Data LS_for sistem.xlsx.',
+        message: 'Header template tidak ditemukan. Pastikan memakai file template yang disediakan.',
       });
     }
 
     const { headerRowIndex, headers } = headerInfo;
-    const headerMap = {};
-    for (const [templateHeader, field] of Object.entries(TEMPLATE_HEADER_TO_FIELD)) {
-      const index = headers.findIndex((h) => h === normalizeUploadHeader(templateHeader));
-      if (index < 0) {
-        return res.status(400).json({
-          success: false,
-          message: `Kolom wajib "${templateHeader}" tidak ditemukan pada header file.`,
-        });
-      }
-      headerMap[field] = index;
+    const headerMapResult = buildUploadHeaderMap(headers);
+    if (!headerMapResult.ok) {
+      return res.status(400).json({
+        success: false,
+        message: headerMapResult.message,
+      });
     }
+    const { headerMap } = headerMapResult;
 
     const [vendorRows] = await db.query(`SELECT id, code, name FROM vendors`);
     const vendorLookup = buildVendorLookupMap(vendorRows);
@@ -1430,9 +1614,9 @@ const uploadEmployeesBulk = async (req, res) => {
 
       totalRows += 1;
       const body = mapSheetRowToEmployeeBody(cells, headerMap);
-      const rowNpk = sanitizeText(body.nik || body.npk);
+      const rowNpk = sanitizeText(body.npk);
 
-      // Validasi utama tetap berbasis NIK/NPK.
+      // Validasi utama berbasis NPK.
       if (!rowNpk) {
         skipped += 1;
         skippedNpkEmpty += 1;
@@ -1444,44 +1628,24 @@ const uploadEmployeesBulk = async (req, res) => {
         skipped += 1;
         skippedError += 1;
         errors.push(
-          summarizeLineError(lineNo, 'PERUSAHAAN tidak ditemukan di master vendor (kolom vendors.name/code).')
+          summarizeLineError(lineNo, 'Vendor tidak ditemukan di master vendor (kolom vendors.name/code).')
         );
         continue;
       }
       f.vendor_id = vendor.id;
-      f.vendor_number = sanitizeText(vendor.code) || '-';
-      f.vendor_name = sanitizeText(vendor.name) || nonEmptyOrDash(body.company_name);
-      try {
-        const [upsert] = await db.query(
-          `INSERT INTO hr_employees (
-             vendor_id, nik, vendor_number, user_department, vendor_name,
-             npk, employee_name, position, position_group, site,
-             supervisor_nik, supervisor_name, user_status, created_by, updated_by
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE
-             vendor_id = VALUES(vendor_id),
-             nik = VALUES(nik),
-             vendor_number = VALUES(vendor_number),
-             user_department = VALUES(user_department),
-             vendor_name = VALUES(vendor_name),
-             employee_name = VALUES(employee_name),
-             position = VALUES(position),
-             position_group = VALUES(position_group),
-             site = VALUES(site),
-             supervisor_nik = VALUES(supervisor_nik),
-             supervisor_name = VALUES(supervisor_name),
-             user_status = VALUES(user_status),
-             updated_by = VALUES(updated_by)`,
-          [
-            f.vendor_id, f.nik, f.vendor_number, f.user_department, f.vendor_name,
-            f.npk, f.employee_name, f.position, f.position_group, f.site,
-            f.supervisor_nik, f.supervisor_name, f.user_status, uploaderName, uploaderName,
-          ]
-        );
+      f.vendor_number = sanitizeText(vendor.code) || null;
+      f.vendor_name = sanitizeText(vendor.name) || nullableUploadText(body.company_name);
+      f.supervisor_id = await resolveSupervisorForUpload(db, f.supervisor_ref);
 
-        if (upsert.affectedRows === 1) inserted += 1;
-        else if (upsert.affectedRows >= 2) updated += 1;
+      const conn = await db.getConnection();
+      try {
+        await conn.beginTransaction();
+        const result = await upsertUploadEmployeeRow(conn, f, uploaderName);
+        await conn.commit();
+        if (result === 'inserted') inserted += 1;
+        else if (result === 'updated') updated += 1;
       } catch (err) {
+        try { await conn.rollback(); } catch (_) { /* no-op */ }
         console.error('HR employee bulk upload row upsert error:', {
           request_id: uploadRequestId,
           line_no: lineNo,
@@ -1493,13 +1657,14 @@ const uploadEmployeesBulk = async (req, res) => {
         skipped += 1;
         skippedError += 1;
         errors.push(summarizeLineError(lineNo, err?.message || 'Gagal menyimpan baris.'));
+      } finally {
+        conn.release();
       }
     }
 
     console.info('HR employee bulk upload finished:', {
       request_id: uploadRequestId,
       user_id: uploaderId,
-      source_system: sourceSystem,
       total_rows: totalRows,
       inserted,
       updated,
@@ -1513,7 +1678,6 @@ const uploadEmployeesBulk = async (req, res) => {
       success: true,
       message: 'Upload data karyawan selesai diproses.',
       data: {
-        source_system: sourceSystem,
         total_rows: totalRows,
         inserted,
         updated,
@@ -1529,7 +1693,6 @@ const uploadEmployeesBulk = async (req, res) => {
     console.error('Bulk upload hr_employees error:', {
       request_id: uploadRequestId,
       user_id: uploaderId,
-      source_system: sanitizeText(req.body?.source_system).toUpperCase() || null,
       filename: req.file?.originalname || null,
       size: req.file?.size || null,
       code: err?.code || null,
