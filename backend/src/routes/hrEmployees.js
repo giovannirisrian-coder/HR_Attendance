@@ -14,6 +14,7 @@ const {
   updateEmployee,
   uploadHrEmployeesMiddleware,
   uploadEmployeesBulk,
+  downloadEmployeeTemplate,
   resetUserPassword,
 } = require('../controllers/hrEmployeeController');
 const { authenticate, authorize } = require('../middleware/auth');
@@ -28,6 +29,10 @@ router.get('/supervisors', listSupervisors);
 // Administrative password reset by SID (PIC LS). Declared before the
 // `/:id` routes so the static segment is not parsed as an employee id.
 router.post('/reset-password', resetUserPassword);
+
+// Bulk-upload Excel template download. Declared before the `/:id` route
+// so the static segment is not parsed as an employee id.
+router.get('/template', downloadEmployeeTemplate);
 
 router.get('/', listEmployees);
 router.post('/upload', uploadHrEmployeesMiddleware, uploadEmployeesBulk);
