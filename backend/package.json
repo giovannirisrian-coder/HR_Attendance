@@ -6,8 +6,6 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "sync:fingerspot": "node scripts/fingerspot-glog-sync.js",
-    "sync:ftm": "node scripts/ftm-glog-sync.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -21,7 +19,6 @@
     "express": "^5.2.1",
     "express-validator": "^7.3.2",
     "jsonwebtoken": "^9.0.3",
-    "mssql": "10.0.4",
     "multer": "^2.1.1",
     "mysql2": "^3.22.1",
     "pdfkit": "^0.18.0",

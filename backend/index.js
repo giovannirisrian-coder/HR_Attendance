@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
-const { startAttendanceSyncSchedulers } = require('./src/services/attendanceSyncSchedulerService');
 
 const app = express();
 
@@ -40,7 +39,7 @@ app.use('/api/reports',    require('./src/routes/reports'));
 app.use('/api/users',      require('./src/routes/users'));
 app.use('/api/glog',       require('./src/routes/glog'));
 app.use('/api/employees',  require('./src/routes/hrEmployees'));
-app.use('/api/attendance-sync', require('./src/routes/attendanceSyncScheduler'));
+app.use('/api/attendance-sync', require('./src/routes/attendanceSyncIngest'));
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString(), service: 'Berau Coal Attendance API' });
@@ -58,7 +57,6 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
 app.listen(PORT, HOST, () => {
-  startAttendanceSyncSchedulers();
   console.log(`Berau Coal Attendance API running on http://${HOST}:${PORT}`);
 });
 
