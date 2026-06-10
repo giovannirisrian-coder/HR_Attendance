@@ -62,12 +62,14 @@
       <div class="card-body" style="padding-bottom:0;">
         <!-- Filter bar -->
         <div class="filter-bar">
-          <div class="search-wrap">
-            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-            <input v-model="filters.search" @input="debouncedFetch" class="form-control" placeholder="Search date or NPK…" style="max-width:240px;" />
-          </div>
-          <input v-model="filters.start_date" @change="fetchData" type="date" class="form-control" style="max-width:160px;" placeholder="Start date" />
-          <input v-model="filters.end_date"   @change="fetchData" type="date" class="form-control" style="max-width:160px;" placeholder="End date" />
+          <label class="filter-field">
+            <span class="filter-label">Start date</span>
+            <input v-model="filters.start_date" @change="fetchData" type="date" class="form-control" style="max-width:160px;" />
+          </label>
+          <label class="filter-field">
+            <span class="filter-label">End date</span>
+            <input v-model="filters.end_date" @change="fetchData" type="date" class="form-control" style="max-width:160px;" />
+          </label>
           <button class="btn btn-outline btn-sm" @click="clearFilters">Reset</button>
         </div>
       </div>
@@ -223,7 +225,7 @@ import { formatCalendarDateLocale } from '../../utils/calendarDate';
 const loading = ref(false);
 const records = ref([]);
 const pagination = reactive({ total: 0, page: 1, limit: 15 });
-const filters = reactive({ search: '', start_date: '', end_date: '' });
+const filters = reactive({ start_date: '', end_date: '' });
 const summary = reactive({ overtime_hours: 0, cuti_days: 0, izin_days: 0, sakit_days: 0 });
 const actionId = ref(null);
 const lifecycleModal = reactive({ show: false, id: null, action: 'cancel', label: '' });
@@ -234,17 +236,10 @@ const stats = computed(() => ({
   rejected: records.value.filter(r => r.status === 'rejected').length,
 }));
 
-let debounceTimer;
-const debouncedFetch = () => {
-  clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(() => { pagination.page = 1; fetchData(); }, 400);
-};
-
 const fetchData = async () => {
   loading.value = true;
   try {
     const params = { page: pagination.page, limit: pagination.limit };
-    if (filters.search.trim()) params.search = filters.search.trim();
     if (filters.start_date) params.start_date = filters.start_date;
     if (filters.end_date)   params.end_date   = filters.end_date;
     const { data } = await api.get('/attendance/my', { params });
@@ -267,7 +262,7 @@ const fetchData = async () => {
 
 const changePage = (p) => { pagination.page = p; fetchData(); };
 const clearFilters = () => {
-  filters.search = ''; filters.start_date = ''; filters.end_date = '';
+  filters.start_date = ''; filters.end_date = '';
   pagination.page = 1; fetchData();
 };
 
@@ -333,6 +328,16 @@ onMounted(fetchData);
 </script>
 
 <style scoped>
+.filter-bar { align-items: flex-end; }
+.filter-field { display: flex; flex-direction: column; gap: 4px; }
+.filter-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--bc-gray-500);
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+
 .time-cell { font-size: 14px; font-weight: 700; }
 .clock-in  { color: var(--bc-green-600); }
 .clock-out { color: var(--bc-rejected); }

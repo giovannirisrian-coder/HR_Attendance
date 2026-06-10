@@ -654,8 +654,16 @@ const getMonthlyAttendanceRecap = async (req, res) => {
     //  • `rejected_attendance` keeps reporting visibility on rejections only.
     //  • `total_attendance_records` is now the sum of the actionable buckets
     //    so the cancelled / withdrawn rows are excluded from the headline.
-    //  • `leave_*` counts approved leave requests overlapping the month and
-    //    intentionally skips cancelled / withdrawn rows.
+    //  • `leave_*` sums the inclusive DAY DURATION of approved leave
+    //    requests overlapping the month (date range clamped to the month),
+    //    not the number of request records, and intentionally skips
+    //    cancelled / withdrawn rows. This mirrors the Timesheet PDF so the
+    //    on-screen recap and the exported PDF never disagree on Cuti / Izin
+    //    / Sakit day counts.
+    const firstDay = `${year}-${String(month).padStart(2, '0')}-01`;
+    const lastDayNum = new Date(year, month, 0).getDate();
+    const lastDay = `${year}-${String(month).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
+
     const [rows] = await db.query(
       `SELECT
          u.id AS user_id,
@@ -712,24 +720,24 @@ const getMonthlyAttendanceRecap = async (req, res) => {
        LEFT JOIN (
          SELECT
            user_id,
-           SUM(CASE WHEN request_type = 'cuti' THEN 1 ELSE 0 END) AS leave_cuti,
-           SUM(CASE WHEN request_type = 'izin' THEN 1 ELSE 0 END) AS leave_izin,
-           SUM(CASE WHEN request_type = 'sakit' THEN 1 ELSE 0 END) AS leave_sakit
+           SUM(CASE WHEN request_type = 'cuti'  THEN DATEDIFF(LEAST(end_date, ?), GREATEST(start_date, ?)) + 1 ELSE 0 END) AS leave_cuti,
+           SUM(CASE WHEN request_type = 'izin'  THEN DATEDIFF(LEAST(end_date, ?), GREATEST(start_date, ?)) + 1 ELSE 0 END) AS leave_izin,
+           SUM(CASE WHEN request_type = 'sakit' THEN DATEDIFF(LEAST(end_date, ?), GREATEST(start_date, ?)) + 1 ELSE 0 END) AS leave_sakit
          FROM leave_requests
          WHERE status = 'approved'
-           AND (
-             (YEAR(start_date) = ? AND MONTH(start_date) = ?)
-           )
+           AND start_date <= ?
+           AND end_date >= ?
          GROUP BY user_id
        ) lv ON lv.user_id = u.id
        WHERE u.supervisor_id = ? AND u.role = 'ls'
        ORDER BY u.name ASC`,
-      [year, month, year, month, year, month, year, month, supervisorId]
+      [
+        year, month, year, month, year, month,
+        lastDay, firstDay, lastDay, firstDay, lastDay, firstDay,
+        lastDay, firstDay,
+        supervisorId,
+      ]
     );
-
-    const firstDay = `${year}-${String(month).padStart(2, '0')}-01`;
-    const lastDayNum = new Date(year, month, 0).getDate();
-    const lastDay = `${year}-${String(month).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
 
     // Cancelled / withdrawn leave rows are LS-driven retractions and must
     // not appear in the Supervisor's Monthly Recap drill-down either —

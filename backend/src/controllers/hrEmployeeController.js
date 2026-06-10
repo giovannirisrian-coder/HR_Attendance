@@ -1534,6 +1534,79 @@ const updateEmployee = async (req, res) => {
   }
 };
 
+// Column order for the downloadable bulk-upload template. Mirrors the
+// header row recognised by `findHeaderRow` / `UPLOAD_HEADER_SPECS` so a
+// file generated here can be filled in and re-uploaded without any
+// header tweaks. "No" and "Nama Atasan" are presentation-only columns
+// (ignored by the parser) but kept so the template matches the layout
+// PIC LS already works with.
+const EMPLOYEE_TEMPLATE_HEADERS = [
+  'No',
+  'SID No',
+  'NPK',
+  'Nama Karyawan',
+  'Jabatan',
+  'Kelompok Jabatan',
+  'Departemen',
+  'Site',
+  'NIK Atasan',
+  'Nama Atasan',
+  'Vendor',
+  'BU',
+];
+
+// A single illustrative row so the user can see the expected shape of
+// each column. It is sample data only and is meant to be overwritten.
+const EMPLOYEE_TEMPLATE_EXAMPLE_ROW = [
+  1,
+  'SID001',
+  '10000056',
+  'Nama Contoh Karyawan',
+  'Operator',
+  'Staff',
+  'Operations',
+  'HO',
+  '10000001',
+  'Nama Atasan',
+  'PT Vendor Contoh',
+  'BC',
+];
+
+/**
+ * GET /api/employees/template
+ * Download the .xlsx bulk-upload template for master employee data.
+ *
+ * Generated on the fly with the same `xlsx` library used to parse the
+ * upload, so the header row is guaranteed to match the parser
+ * (`UPLOAD_HEADER_SPECS`). This keeps the BAST Check master-data import
+ * accurate and free of header-mismatch errors.
+ */
+const downloadEmployeeTemplate = (req, res) => {
+  try {
+    const worksheet = XLSX.utils.aoa_to_sheet([
+      EMPLOYEE_TEMPLATE_HEADERS,
+      EMPLOYEE_TEMPLATE_EXAMPLE_ROW,
+    ]);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Data Karyawan');
+
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="Template_Data_Karyawan.xlsx"'
+    );
+    return res.send(buffer);
+  } catch (err) {
+    console.error('Download employee template error:', err);
+    return res.status(500).json({ success: false, message: 'Gagal membuat template.' });
+  }
+};
+
 /**
  * POST /api/employees/upload
  * Bulk upload HR employees from Excel template.
@@ -1715,5 +1788,6 @@ module.exports = {
   updateEmployee,
   uploadHrEmployeesMiddleware: uploadHrEmployeesMiddlewareSafe,
   uploadEmployeesBulk,
+  downloadEmployeeTemplate,
   resetUserPassword,
 };

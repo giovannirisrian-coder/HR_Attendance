@@ -8,11 +8,13 @@ const {
   patchAttendanceFromBatch,
   getBatchDetail,
   listMyBatches,
+  downloadGlogTemplate,
 } = require('../controllers/glogController');
 const { authenticate, authorize } = require('../middleware/auth');
 
 const hrOrSupervisor = ['ls_hr', 'ls_supervisor'];
 
+router.get('/template', authenticate, authorize(...hrOrSupervisor), downloadGlogTemplate);
 router.post('/upload', authenticate, authorize(...hrOrSupervisor), uploadGlogMiddleware, uploadGlog);
 router.post('/batches/:id/process', authenticate, authorize(...hrOrSupervisor), processBatch);
 router.get('/jobs/:jobId', authenticate, authorize(...hrOrSupervisor), getProcessJobStatus);

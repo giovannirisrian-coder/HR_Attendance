@@ -40,6 +40,20 @@
           <button class="btn btn-primary" :disabled="!selectedFile || uploading" @click="doUpload">
             {{ uploading ? 'On Progress...' : 'Preview & Upload' }}
           </button>
+          <button
+            type="button"
+            class="btn btn-outline"
+            :disabled="downloading"
+            title="Unduh template (.csv) untuk upload attendance log"
+            @click="downloadTemplate"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            {{ downloading ? 'Menyiapkan...' : 'Download CSV Template' }}
+          </button>
         </div>
         <p v-if="uploadMessage" class="alert-inline" :class="uploadOk ? 'ok' : 'err'">{{ uploadMessage }}</p>
         <div v-if="lastBatch" class="batch-summary">
@@ -162,6 +176,7 @@ import api from '../../utils/api';
 const fileInput = ref(null);
 const selectedFile = ref(null);
 const uploading = ref(false);
+const downloading = ref(false);
 const processing = ref(false);
 const patching = ref(false);
 const uploadMessage = ref('');
@@ -177,6 +192,28 @@ function onFile(e) {
   const f = e.target.files && e.target.files[0];
   selectedFile.value = f || null;
   uploadMessage.value = '';
+}
+
+async function downloadTemplate() {
+  if (downloading.value) return;
+  downloading.value = true;
+  try {
+    const { data } = await api.get('/glog/template', { responseType: 'blob' });
+    const url = window.URL.createObjectURL(data);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'Template_Attendance_Log.csv';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  } catch (err) {
+    uploadOk.value = false;
+    uploadMessage.value =
+      err.response?.data?.message || err.message || 'Gagal mengunduh template.';
+  } finally {
+    downloading.value = false;
+  }
 }
 
 function formatTime(t) {
