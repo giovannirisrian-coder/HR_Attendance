@@ -253,7 +253,22 @@ const mapSheetRowToEmployeeBody = (cells, headerMap) => {
   return body;
 };
 
-const summarizeLineError = (line, msg) => ({ line_no: line, error: msg });
+const summarizeUploadRow = (lineNo, body) => ({
+  line_no: lineNo,
+  sid: nullableUploadText(body.sid),
+  npk: nullableUploadText(body.npk),
+  employee_name: nullableUploadText(body.employee_name),
+  position: nullableUploadText(body.position),
+  user_department: nullableUploadText(body.user_department),
+  site: nullableUploadText(body.site),
+  company_name: nullableUploadText(body.company_name),
+});
+
+const summarizeLineError = (line, msg, body = null) => ({
+  line_no: line,
+  error: msg,
+  ...(body ? summarizeUploadRow(line, body) : {}),
+});
 
 const nullableUploadText = (value) => {
   const v = sanitizeText(value);
@@ -1604,6 +1619,9 @@ const uploadEmployeesBulk = async (req, res) => {
     let skipped = 0;
     let skippedNpkEmpty = 0;
     let skippedError = 0;
+    const skippedNpkEmptyRows = [];
+    const processErrors = [];
+    const kendalaErrors = [];
     const errors = [];
 
     for (let i = headerRowIndex + 1; i < rows.length; i += 1) {
@@ -1620,6 +1638,7 @@ const uploadEmployeesBulk = async (req, res) => {
       if (!rowNpk) {
         skipped += 1;
         skippedNpkEmpty += 1;
+        skippedNpkEmptyRows.push(summarizeUploadRow(lineNo, body));
         continue;
       }
       const f = normalizeUploadRowForUpsert(body);
@@ -1627,9 +1646,13 @@ const uploadEmployeesBulk = async (req, res) => {
       if (!vendor) {
         skipped += 1;
         skippedError += 1;
-        errors.push(
-          summarizeLineError(lineNo, 'Vendor tidak ditemukan di master vendor (kolom vendors.name/code).')
+        const vendorError = summarizeLineError(
+          lineNo,
+          'Vendor tidak ditemukan di master vendor (kolom vendors.name/code).',
+          body
         );
+        processErrors.push(vendorError);
+        errors.push(vendorError);
         continue;
       }
       f.vendor_id = vendor.id;
@@ -1656,7 +1679,21 @@ const uploadEmployeesBulk = async (req, res) => {
         });
         skipped += 1;
         skippedError += 1;
-        errors.push(summarizeLineError(lineNo, err?.message || 'Gagal menyimpan baris.'));
+        const upsertError = summarizeLineError(
+          lineNo,
+          err?.message || 'Gagal menyimpan baris.',
+          {
+            sid: f.sid,
+            npk: f.npk,
+            employee_name: f.employee_name,
+            position: f.position,
+            user_department: f.user_department,
+            site: f.site,
+            company_name: f.vendor_name || body.company_name,
+          }
+        );
+        kendalaErrors.push(upsertError);
+        errors.push(upsertError);
       } finally {
         conn.release();
       }
@@ -1686,6 +1723,9 @@ const uploadEmployeesBulk = async (req, res) => {
         skipped_nik_npk_empty: skippedNpkEmpty,
         skipped_error: skippedError,
         error_count: errors.length,
+        skipped_npk_empty_rows: skippedNpkEmptyRows.slice(0, 500),
+        process_errors: processErrors.slice(0, 500),
+        kendala_errors: kendalaErrors.slice(0, 500),
         errors: errors.slice(0, 500),
       },
     });

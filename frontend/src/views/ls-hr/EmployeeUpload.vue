@@ -46,9 +46,9 @@
           <div><strong>Data baru:</strong> {{ summary.inserted }}</div>
           <div><strong>Data update:</strong> {{ summary.updated }}</div>
           <div><strong>Data dilewati:</strong> {{ summary.skipped }}</div>
-          <div><strong>Skip - NIK/NPK kosong:</strong> {{ summary.skipped_nik_npk_empty ?? summary.skipped_npk_empty ?? 0 }}</div>
-          <div><strong>Skip - Error proses:</strong> {{ summary.skipped_error ?? 0 }}</div>
-          <div><strong>Kendala:</strong> {{ summary.error_count }}</div>
+          <div><strong>Skip - NIK/NPK kosong:</strong> {{ skippedNpkEmptyRows.length || summary.skipped_nik_npk_empty ?? summary.skipped_npk_empty ?? 0 }}</div>
+          <div><strong>Skip - Error proses:</strong> {{ processErrors.length || summary.skipped_error ?? 0 }}</div>
+          <div><strong>Kendala:</strong> {{ kendalaErrors.length || summary.error_count ?? 0 }}</div>
         </div>
       </div>
     </div>
@@ -56,11 +56,105 @@
     <p v-if="summary" class="text-sm text-muted" style="margin-top:8px;">
       Hanya baris dengan NPK terisi yang diproses. Kolom Vendor harus cocok dengan master vendor.
     </p>
+
+    <div v-if="skippedNpkEmptyRows.length" class="card result-card">
+      <div class="card-header">
+        <span class="card-title">Skip — NIK/NPK Kosong ({{ skippedNpkEmptyRows.length }})</span>
+      </div>
+      <div class="table-wrapper" style="border:none;">
+        <table>
+          <thead>
+            <tr>
+              <th>Baris</th>
+              <th>SID</th>
+              <th>NPK</th>
+              <th>Nama Karyawan</th>
+              <th>Jabatan</th>
+              <th>Departemen</th>
+              <th>Site</th>
+              <th>Vendor</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(row, idx) in skippedNpkEmptyRows" :key="`npk-empty-${row.line_no}-${idx}`">
+              <td>{{ row.line_no }}</td>
+              <td class="font-mono text-sm">{{ row.sid || '—' }}</td>
+              <td class="font-mono text-sm">{{ row.npk || '—' }}</td>
+              <td>{{ row.employee_name || '—' }}</td>
+              <td>{{ row.position || '—' }}</td>
+              <td>{{ row.user_department || '—' }}</td>
+              <td>{{ row.site || '—' }}</td>
+              <td>{{ row.company_name || '—' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div v-if="processErrors.length" class="card result-card">
+      <div class="card-header">
+        <span class="card-title">Skip — Error Proses ({{ processErrors.length }})</span>
+      </div>
+      <div class="table-wrapper" style="border:none;">
+        <table>
+          <thead>
+            <tr>
+              <th>Baris</th>
+              <th>NPK</th>
+              <th>SID</th>
+              <th>Nama Karyawan</th>
+              <th>Vendor</th>
+              <th>Keterangan</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(row, idx) in processErrors" :key="`process-${row.line_no}-${idx}`">
+              <td>{{ row.line_no }}</td>
+              <td class="font-mono text-sm">{{ row.npk || '—' }}</td>
+              <td class="font-mono text-sm">{{ row.sid || '—' }}</td>
+              <td>{{ row.employee_name || '—' }}</td>
+              <td>{{ row.company_name || '—' }}</td>
+              <td class="text-sm issue-cell">{{ row.error }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div v-if="kendalaErrors.length" class="card result-card">
+      <div class="card-header">
+        <span class="card-title">Kendala ({{ kendalaErrors.length }})</span>
+      </div>
+      <div class="table-wrapper" style="border:none;">
+        <table>
+          <thead>
+            <tr>
+              <th>Baris</th>
+              <th>NPK</th>
+              <th>SID</th>
+              <th>Nama Karyawan</th>
+              <th>Vendor</th>
+              <th>Keterangan</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(row, idx) in kendalaErrors" :key="`kendala-${row.line_no}-${idx}`">
+              <td>{{ row.line_no }}</td>
+              <td class="font-mono text-sm">{{ row.npk || '—' }}</td>
+              <td class="font-mono text-sm">{{ row.sid || '—' }}</td>
+              <td>{{ row.employee_name || '—' }}</td>
+              <td>{{ row.company_name || '—' }}</td>
+              <td class="text-sm issue-cell">{{ row.error }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import api from '../../utils/api';
 
 const fileInput = ref(null);
@@ -69,6 +163,18 @@ const uploading = ref(false);
 const uploadMessage = ref('');
 const uploadOk = ref(false);
 const summary = ref(null);
+
+const skippedNpkEmptyRows = computed(() => summary.value?.skipped_npk_empty_rows || []);
+const processErrors = computed(() => {
+  if (Array.isArray(summary.value?.process_errors)) return summary.value.process_errors;
+  const legacy = summary.value?.errors || [];
+  return legacy.filter((row) => String(row.error || '').includes('Vendor tidak ditemukan'));
+});
+const kendalaErrors = computed(() => {
+  if (Array.isArray(summary.value?.kendala_errors)) return summary.value.kendala_errors;
+  const legacy = summary.value?.errors || [];
+  return legacy.filter((row) => !String(row.error || '').includes('Vendor tidak ditemukan'));
+});
 
 function onFile(e) {
   const f = e.target.files && e.target.files[0];
@@ -137,5 +243,11 @@ async function doUpload() {
 }
 .alert-inline.err {
   color: #b91c1c;
+}
+.result-card {
+  margin-bottom: 20px;
+}
+.issue-cell {
+  color: #b45309;
 }
 </style>
