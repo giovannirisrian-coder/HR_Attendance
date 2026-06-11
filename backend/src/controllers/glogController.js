@@ -25,7 +25,14 @@ const uploadGlogMiddleware = upload.single('file');
 
 const EXPECTED_HEADERS = ['nik', 'nama karyawan', 'tanggal', 'jam', 'nama mesin'];
 
-function parseCsvLine(line) {
+// Delimiters we try when auto-detecting the field separator. Excel saves
+// CSV/TXT with different separators depending on the OS regional "list
+// separator" (comma on en-US, semicolon on id-ID / European locales) or
+// when the user picks "Text (Tab delimited)" — so we accept all of them
+// and let `detectDelimiter` pick whichever one makes the header row valid.
+const DELIMITER_CANDIDATES = [',', ';', '\t', '|'];
+
+function parseCsvLine(line, delimiter = ',') {
   const out = [];
   let cur = '';
   let inQuotes = false;
@@ -35,7 +42,7 @@ function parseCsvLine(line) {
       inQuotes = !inQuotes;
       continue;
     }
-    if (c === ',' && !inQuotes) {
+    if (c === delimiter && !inQuotes) {
       out.push(cur.trim());
       cur = '';
       continue;
@@ -44,6 +51,20 @@ function parseCsvLine(line) {
   }
   out.push(cur.trim());
   return out;
+}
+
+/**
+ * Inspect a header line and return the delimiter that makes it parse into
+ * the expected 5 columns, or null when none match. Comma is tried first
+ * so existing (correct) comma files keep their original behaviour.
+ */
+function detectDelimiter(headerLine) {
+  for (const delimiter of DELIMITER_CANDIDATES) {
+    if (headersMatch(parseCsvLine(headerLine, delimiter))) {
+      return delimiter;
+    }
+  }
+  return null;
 }
 
 function normalizeHeaderCell(s) {
@@ -98,11 +119,16 @@ function parseGlogFile(buffer) {
   const lines = splitLines(buffer).map((l) => l.replace(/^\ufeff/, ''));
   let dataStart = 0;
   let headerOk = false;
+  // Delimiter is detected from the header row so every data row is split
+  // with the same separator Excel actually wrote (comma / semicolon / tab
+  // / pipe). Defaults to comma until the header is found.
+  let delimiter = ',';
   for (let i = 0; i < lines.length; i += 1) {
     const trimmed = lines[i].trim();
     if (!trimmed) continue;
-    const cells = parseCsvLine(trimmed);
-    if (headersMatch(cells)) {
+    const detected = detectDelimiter(trimmed);
+    if (detected) {
+      delimiter = detected;
       headerOk = true;
       dataStart = i + 1;
       break;
@@ -124,7 +150,7 @@ function parseGlogFile(buffer) {
   for (let i = dataStart; i < lines.length; i += 1) {
     const rawLine = lines[i];
     if (!String(rawLine).trim()) continue;
-    const cells = parseCsvLine(rawLine);
+    const cells = parseCsvLine(rawLine, delimiter);
     rows.push({ line_no: i + 1, cells, rawLine });
   }
   return { error: null, rows, headerOk };
@@ -826,6 +852,36 @@ const listMyBatches = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/glog/template
+ * Download the attendance-log import template.
+ *
+ * The glog uploader only accepts `.csv` / `.txt` (see `uploadGlogMiddleware`
+ * fileFilter) and the parser requires the first non-empty line to be the
+ * exact header `NIK,Nama Karyawan,Tanggal,Jam,Nama Mesin`. We therefore
+ * generate a `.csv` so the downloaded template can be filled in and
+ * re-uploaded directly without any format conversion. A UTF-8 BOM is
+ * prepended so Excel opens the file with correct encoding while the
+ * parser (which strips the BOM) stays unaffected.
+ */
+const downloadGlogTemplate = (req, res) => {
+  try {
+    const headerLine = 'NIK,Nama Karyawan,Tanggal,Jam,Nama Mesin';
+    const exampleLine = '10000056,H GATOT BUDI K,15/10/2019,07:22,HO 1';
+    const csv = `\ufeff${headerLine}\r\n${exampleLine}\r\n`;
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="Template_Attendance_Log.csv"'
+    );
+    return res.send(csv);
+  } catch (err) {
+    console.error('Download glog template error:', err);
+    return res.status(500).json({ success: false, message: 'Gagal membuat template.' });
+  }
+};
+
 module.exports = {
   uploadGlog,
   uploadGlogMiddleware,
@@ -834,5 +890,6 @@ module.exports = {
   patchAttendanceFromBatch,
   getBatchDetail,
   listMyBatches,
+  downloadGlogTemplate,
 };
 

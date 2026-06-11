@@ -130,15 +130,58 @@ function mergeLeaveOnlyGroups(groups, leaveRows) {
   groups.sort((a, b) => String(a.employee_name || '').localeCompare(String(b.employee_name || '')));
 }
 
-function applyMonthlyLeaveCountsFromRequests(groups, leaveRows) {
+/**
+ * Inclusive number of leave days a request contributes to ONE reporting
+ * month. The request's [start_date, end_date] range is clamped to the
+ * month boundaries so a leave spanning a month edge only counts the days
+ * that actually fall inside the period being reported.
+ *
+ * The system does not model weekends or public holidays anywhere in the
+ * recap-reporting pipeline, so every calendar day in the (clamped) range
+ * is billable — matching how attendance itself is recorded.
+ */
+function leaveDaysInMonth(startRaw, endRaw, year, month) {
+  const startYmd = ymdFromRaw(startRaw);
+  const endYmd = ymdFromRaw(endRaw);
+  if (!startYmd || !endYmd) return 0;
+
+  const padM = String(month).padStart(2, '0');
+  const lastDay = new Date(year, month, 0).getDate();
+  const monthStart = `${year}-${padM}-01`;
+  const monthEnd = `${year}-${padM}-${String(lastDay).padStart(2, '0')}`;
+
+  const from = startYmd > monthStart ? startYmd : monthStart;
+  const to = endYmd < monthEnd ? endYmd : monthEnd;
+  if (from > to) return 0;
+
+  const [fy, fm, fd] = from.split('-').map(Number);
+  const [ty, tm, td] = to.split('-').map(Number);
+  const diffDays = (Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86400000;
+  return Math.floor(diffDays) + 1;
+}
+
+/**
+ * Cuti / Izin / Sakit day totals for the monthly summary.
+ *
+ * Counts the DURATION (inclusive day span) of every Approved request, not
+ * the number of request records — a single Approved request covering a
+ * date range now contributes one day per calendar day it spans inside the
+ * reporting month. Only `approved` requests are summed, preserving the
+ * Managerial Review workflow's billable-day rule.
+ */
+function applyMonthlyLeaveCountsFromRequests(groups, leaveRows, year, month) {
   const approved = (leaveRows || []).filter((lr) => String(lr.status || '').toLowerCase() === 'approved');
   for (const g of groups) {
     const mine = approved.filter(
       (lr) => lr.employee_id === g.employee_id && lr.employee_name === g.employee_name
     );
-    g.leave_cuti = mine.filter((x) => x.request_type === 'cuti').length;
-    g.leave_izin = mine.filter((x) => x.request_type === 'izin').length;
-    g.leave_sakit = mine.filter((x) => x.request_type === 'sakit').length;
+    const sumDays = (type) =>
+      mine
+        .filter((x) => x.request_type === type)
+        .reduce((acc, x) => acc + leaveDaysInMonth(x.start_date, x.end_date, year, month), 0);
+    g.leave_cuti = sumDays('cuti');
+    g.leave_izin = sumDays('izin');
+    g.leave_sakit = sumDays('sakit');
   }
 }
 
@@ -664,7 +707,7 @@ function buildVendorMonthlyTimesheetPdf(opts) {
 
   let groups = aggregateByEmployee(rows || []);
   mergeLeaveOnlyGroups(groups, lr);
-  applyMonthlyLeaveCountsFromRequests(groups, lr);
+  applyMonthlyLeaveCountsFromRequests(groups, lr, reportYear, m);
   doc.y = drawSummaryPanel(doc, doc.y, groups, rows || []);
   doc.y = drawAttendanceSummaryTable(doc, doc.y, groups);
   doc.moveDown(0.25);
