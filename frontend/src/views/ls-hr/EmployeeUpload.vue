@@ -60,9 +60,9 @@
           <div><strong>Data baru:</strong> {{ summary.inserted }}</div>
           <div><strong>Data update:</strong> {{ summary.updated }}</div>
           <div><strong>Data dilewati:</strong> {{ summary.skipped }}</div>
-          <div><strong>Skip - NIK/NPK kosong:</strong> {{ skippedNpkEmptyRows.length || summary.skipped_nik_npk_empty ?? summary.skipped_npk_empty ?? 0 }}</div>
-          <div><strong>Skip - Error proses:</strong> {{ processErrors.length || summary.skipped_error ?? 0 }}</div>
-          <div><strong>Kendala:</strong> {{ kendalaErrors.length || summary.error_count ?? 0 }}</div>
+          <div><strong>Skip - NIK/NPK kosong:</strong> {{ skippedNpkEmptyCount }}</div>
+          <div><strong>Skip - Error proses:</strong> {{ processErrorCount }}</div>
+          <div><strong>Kendala:</strong> {{ kendalaCount }}</div>
         </div>
       </div>
     </div>
@@ -189,6 +189,19 @@ const kendalaErrors = computed(() => {
   if (Array.isArray(summary.value?.kendala_errors)) return summary.value.kendala_errors;
   const legacy = summary.value?.errors || [];
   return legacy.filter((row) => !String(row.error || '').includes('Vendor tidak ditemukan'));
+});
+
+const skippedNpkEmptyCount = computed(() => {
+  if (skippedNpkEmptyRows.value.length) return skippedNpkEmptyRows.value.length;
+  return summary.value?.skipped_nik_npk_empty ?? summary.value?.skipped_npk_empty ?? 0;
+});
+const processErrorCount = computed(() => {
+  if (processErrors.value.length) return processErrors.value.length;
+  return summary.value?.skipped_error ?? 0;
+});
+const kendalaCount = computed(() => {
+  if (kendalaErrors.value.length) return kendalaErrors.value.length;
+  return summary.value?.error_count ?? 0;
 });
 
 function onFile(e) {
