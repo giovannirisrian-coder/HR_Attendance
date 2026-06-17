@@ -12,6 +12,22 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
           Refresh
         </button>
+        <button
+          type="button"
+          class="btn btn-outline btn-sm btn-export-excel"
+          :disabled="exporting || loading"
+          title="Download all matching employee records as Excel"
+          @click="exportToExcel"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="8" y1="13" x2="16" y2="13" />
+            <line x1="8" y1="17" x2="16" y2="17" />
+            <line x1="10" y1="9" x2="10" y2="9" />
+          </svg>
+          {{ exporting ? 'Processing…' : 'Export to Excel' }}
+        </button>
         <router-link to="/ls-hr/employees/create" class="btn btn-primary">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
           Create
@@ -189,10 +205,12 @@
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import api from '../../utils/api';
+import { downloadBlob } from '../../utils/download';
 
 const router = useRouter();
 
 const loading = ref(false);
+const exporting = ref(false);
 const errorMsg = ref('');
 const employees = ref([]);
 const siteOptions = ref([]);
@@ -275,6 +293,44 @@ const resetFilters = () => {
 
 const goEdit = (id) => {
   router.push(`/ls-hr/employees/${id}/edit`);
+};
+
+const exportToExcel = async () => {
+  if (exporting.value) return;
+  exporting.value = true;
+  errorMsg.value = '';
+  try {
+    const params = {};
+    if (filters.search.trim()) params.search = filters.search.trim();
+    if (filters.supervisor.trim()) params.supervisor = filters.supervisor.trim();
+    if (filters.site) params.site = filters.site;
+    if (filters.vendor_id) params.vendor_id = filters.vendor_id;
+    if (filters.status) params.status = filters.status;
+
+    const { data } = await api.get('/employees/export', {
+      params,
+      responseType: 'blob',
+      timeout: 60000,
+    });
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadBlob(data, `Employee_List_${stamp}.xlsx`);
+  } catch (err) {
+    if (err.response?.data instanceof Blob) {
+      try {
+        const text = await err.response.data.text();
+        const json = JSON.parse(text);
+        errorMsg.value = json.message || 'Failed to export employees. Please try again.';
+      } catch {
+        errorMsg.value = 'Failed to export employees. Please try again.';
+      }
+    } else {
+      errorMsg.value =
+        err?.response?.data?.message ||
+        'Failed to export employees. Please try again.';
+    }
+  } finally {
+    exporting.value = false;
+  }
 };
 
 onMounted(fetchData);
@@ -370,5 +426,11 @@ onMounted(fetchData);
 }
 .badge-group::before {
   background: var(--bc-green-500, #22994a);
+}
+
+.btn-export-excel:not(:disabled):hover {
+  border-color: var(--bc-green-400);
+  color: var(--bc-green-700);
+  background: var(--bc-green-50);
 }
 </style>

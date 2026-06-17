@@ -951,64 +951,106 @@ const resetUserPassword = async (req, res) => {
  *   • `vendor_id`     exact match on the FK (preferred).
  *   • `vendor`        legacy: matches `vendor_name` (kept for any old query strings).
  */
+const buildEmployeeListFilter = (query = {}) => {
+  const search = sanitizeText(query.search);
+  const supervisor = sanitizeText(query.supervisor);
+  const site = sanitizeText(query.site);
+  const vendor = sanitizeText(query.vendor);
+  const status = sanitizeText(query.status);
+  const vendorIdRaw = query.vendor_id;
+  const vendorId =
+    vendorIdRaw !== undefined && vendorIdRaw !== '' && Number.isFinite(Number(vendorIdRaw))
+      ? Number(vendorIdRaw)
+      : null;
+  const supervisorIdRaw = query.supervisor_id;
+  const supervisorId =
+    supervisorIdRaw !== undefined &&
+    supervisorIdRaw !== '' &&
+    Number.isFinite(Number(supervisorIdRaw))
+      ? Number(supervisorIdRaw)
+      : null;
+
+  let where = 'WHERE 1=1';
+  const params = [];
+  if (search) {
+    where += ' AND (h.employee_name LIKE ? OR h.npk LIKE ?)';
+    const t = `%${search}%`;
+    params.push(t, t);
+  }
+  if (supervisorId) {
+    where += ' AND h.supervisor_id = ?';
+    params.push(supervisorId);
+  } else if (supervisor) {
+    where += ' AND s.name LIKE ?';
+    params.push(`%${supervisor}%`);
+  }
+  if (site) {
+    where += ' AND h.site = ?';
+    params.push(site);
+  }
+  if (vendorId) {
+    where += ' AND h.vendor_id = ?';
+    params.push(vendorId);
+  } else if (vendor) {
+    where += ' AND COALESCE(v.name, h.vendor_name) = ?';
+    params.push(vendor);
+  }
+  if (status) {
+    if (!ENUM_FIELDS.user_status.includes(status)) {
+      return {
+        where,
+        params,
+        statusError: `Invalid status. Must be one of: ${ENUM_FIELDS.user_status.join(', ')}.`,
+      };
+    }
+    where += ' AND h.user_status = ?';
+    params.push(status);
+  }
+
+  return { where, params, statusError: null };
+};
+
+const EMPLOYEE_EXPORT_HEADERS = [
+  'No',
+  'User Department',
+  'Vendor Name',
+  'Employee ID (NPK)',
+  'SID',
+  'Employee Name',
+  'Email',
+  'Position',
+  'Position Group',
+  'Employee Group',
+  'Site',
+  'Supervisor',
+  'User Status',
+];
+
+const EMPLOYEE_EXPORT_COL_WIDTHS = [
+  { wch: 5 },
+  { wch: 18 },
+  { wch: 24 },
+  { wch: 16 },
+  { wch: 14 },
+  { wch: 28 },
+  { wch: 28 },
+  { wch: 18 },
+  { wch: 16 },
+  { wch: 14 },
+  { wch: 12 },
+  { wch: 22 },
+  { wch: 12 },
+];
+
 const listEmployees = async (req, res) => {
   try {
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 200);
     const offset = (page - 1) * limit;
 
-    const search = sanitizeText(req.query.search);
-    const supervisor = sanitizeText(req.query.supervisor);
-    const site = sanitizeText(req.query.site);
-    const vendor = sanitizeText(req.query.vendor);
-    const status = sanitizeText(req.query.status);
-    const vendorIdRaw = req.query.vendor_id;
-    const vendorId =
-      vendorIdRaw !== undefined && vendorIdRaw !== '' && Number.isFinite(Number(vendorIdRaw))
-        ? Number(vendorIdRaw)
-        : null;
-    const supervisorIdRaw = req.query.supervisor_id;
-    const supervisorId =
-      supervisorIdRaw !== undefined &&
-      supervisorIdRaw !== '' &&
-      Number.isFinite(Number(supervisorIdRaw))
-        ? Number(supervisorIdRaw)
-        : null;
-
-    let where = 'WHERE 1=1';
-    const params = [];
-    if (search) {
-      where += ' AND (h.employee_name LIKE ? OR h.npk LIKE ?)';
-      const t = `%${search}%`;
-      params.push(t, t);
-    }
-    if (supervisorId) {
-      where += ' AND h.supervisor_id = ?';
-      params.push(supervisorId);
-    } else if (supervisor) {
-      where += ' AND s.name LIKE ?';
-      params.push(`%${supervisor}%`);
-    }
-    if (site) {
-      where += ' AND h.site = ?';
-      params.push(site);
-    }
-    if (vendorId) {
-      where += ' AND h.vendor_id = ?';
-      params.push(vendorId);
-    } else if (vendor) {
-      where += ' AND COALESCE(v.name, h.vendor_name) = ?';
-      params.push(vendor);
-    }
-    if (status) {
-      if (!ENUM_FIELDS.user_status.includes(status)) {
-        return res.status(400).json({
-          success: false,
-          message: `Invalid status. Must be one of: ${ENUM_FIELDS.user_status.join(', ')}.`,
-        });
-      }
-      where += ' AND h.user_status = ?';
-      params.push(status);
+    const { where, params, statusError } = buildEmployeeListFilter(req.query);
+    if (statusError) {
+      return res.status(400).json({ success: false, message: statusError });
     }
 
     const [rows] = await db.query(
@@ -1568,6 +1610,68 @@ const EMPLOYEE_TEMPLATE_EXAMPLE_ROW = [
 ];
 
 /**
+ * GET /api/employees/export
+ * Export employee master data to Excel (.xlsx).
+ *
+ * Accepts the same filter query params as `listEmployees` but returns
+ * every matching row (no pagination) so the file mirrors the current
+ * Employee List view.
+ */
+const exportEmployeesExcel = async (req, res) => {
+  try {
+    const { where, params, statusError } = buildEmployeeListFilter(req.query);
+    if (statusError) {
+      return res.status(400).json({ success: false, message: statusError });
+    }
+
+    const [rows] = await db.query(
+      `SELECT ${SELECT_COLS}
+         ${FROM_JOIN}
+         ${where}
+         ORDER BY h.employee_name ASC, h.id ASC`,
+      params
+    );
+
+    const dataRows = rows.map((r, idx) => [
+      idx + 1,
+      r.user_department || '',
+      r.vendor_name || '',
+      r.npk || '',
+      r.sid || '',
+      r.employee_name || '',
+      r.email || '',
+      r.position || '',
+      r.position_group || '',
+      r.employee_group || '',
+      r.site || '',
+      r.supervisor_name || '',
+      r.user_status || '',
+    ]);
+
+    const worksheet = XLSX.utils.aoa_to_sheet([EMPLOYEE_EXPORT_HEADERS, ...dataRows]);
+    worksheet['!cols'] = EMPLOYEE_EXPORT_COL_WIDTHS;
+    worksheet['!freeze'] = { xSplit: 0, ySplit: 1, topLeftCell: 'A2', activePane: 'bottomLeft', state: 'frozen' };
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Employee List');
+
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    const stamp = new Date().toISOString().slice(0, 10);
+    const filename = `Employee_List_${stamp}.xlsx`;
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(buffer);
+  } catch (err) {
+    console.error('Export hr_employees error:', err);
+    return res.status(500).json({ success: false, message: 'Gagal mengekspor data karyawan.' });
+  }
+};
+
+/**
  * GET /api/employees/template
  * Download the .xlsx bulk-upload template for master employee data.
  *
@@ -1776,6 +1880,7 @@ const uploadEmployeesBulk = async (req, res) => {
 
 module.exports = {
   listEmployees,
+  exportEmployeesExcel,
   listVendors,
   listSupervisors,
   getEmployeeById,

@@ -7,6 +7,7 @@ const express = require('express');
 const router = express.Router();
 const {
   listEmployees,
+  exportEmployeesExcel,
   listVendors,
   listSupervisors,
   getEmployeeById,
@@ -33,6 +34,10 @@ router.post('/reset-password', resetUserPassword);
 // Bulk-upload Excel template download. Declared before the `/:id` route
 // so the static segment is not parsed as an employee id.
 router.get('/template', downloadEmployeeTemplate);
+
+// Employee List export. Declared before the `/:id` route so the static
+// segment is not parsed as an employee id.
+router.get('/export', exportEmployeesExcel);
 
 router.get('/', listEmployees);
 router.post('/upload', uploadHrEmployeesMiddleware, uploadEmployeesBulk);
