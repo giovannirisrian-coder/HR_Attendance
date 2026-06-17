@@ -45,6 +45,27 @@ const pickLatestByUpdatedOrCreated = (rows) => {
   })[0];
 };
 
+/** Supersede an effective machine row for the day when present; no-op if none exists. */
+const supersedeEffectiveMachineRowIfAny = async (conn, userId, attendanceDate) => {
+  const [originalRows] = await conn.query(
+    `SELECT id
+     FROM attendance
+     WHERE user_id = ? AND attendance_date = ? AND source_type = 'machine' AND is_effective = 1
+     ORDER BY id DESC
+     LIMIT 1
+     FOR UPDATE`,
+    [userId, attendanceDate]
+  );
+  if (originalRows.length === 0) return false;
+  await conn.query(
+    `UPDATE attendance
+     SET status = 'superseded', is_effective = 0, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [originalRows[0].id]
+  );
+  return true;
+};
+
 // NOTE: legacy LS overtime endpoint was removed; the dedicated Overtime menu
 // (overtimeController + /api/overtimes) is now the single submission path.
 // `attendance.ot_start_time/ot_end_time/ot_summary` are populated by the
@@ -156,26 +177,48 @@ const createAttendance = async (req, res) => {
       }
       await conn.commit();
     } else if (type === 'clock_out') {
-      if (!pendingCorrection || !pendingCorrection.clock_in_time) {
-        if (effectiveRow && effectiveRow.clock_in_time) {
-          return res.status(400).json({
-            success: false,
-            message: 'Create a correction clock-in first before submitting correction clock-out.',
-          });
-        }
-        return res.status(400).json({ success: false, message: 'No pending correction clock-in found for this date.' });
-      }
-      if (pendingCorrection.clock_out_time) {
+      if (pendingCorrection?.clock_out_time) {
         return res.status(409).json({ success: false, message: 'Pending correction clock-out already recorded for this date.' });
       }
 
-      await conn.query(
-        `UPDATE attendance
-         SET clock_out_time = ?, clock_out_lat = ?, clock_out_lng = ?, clock_out_address = ?, nik = ?, employee_id = ?,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = ? AND source_type = 'correction' AND status = 'pending'`,
-        [time, latitude || null, longitude || null, address || null, npkNorm, employeeId, pendingCorrection.id]
-      );
+      if (pendingCorrection?.clock_in_time) {
+        await conn.query(
+          `UPDATE attendance
+           SET clock_out_time = ?, clock_out_lat = ?, clock_out_lng = ?, clock_out_address = ?, nik = ?, employee_id = ?,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND source_type = 'correction' AND status = 'pending'`,
+          [time, latitude || null, longitude || null, address || null, npkNorm, employeeId, pendingCorrection.id]
+        );
+      } else if (effectiveRow?.clock_in_time) {
+        // Allow clock-out on days with only an effective clock-in (e.g. delayed biometric
+        // sync) without forcing a redundant correction clock-in submission first.
+        await conn.beginTransaction();
+        await conn.query(
+          `INSERT INTO attendance (
+             user_id, employee_id, nik, attendance_date,
+             clock_in_time, clock_in_lat, clock_in_lng, clock_in_address,
+             clock_out_time, clock_out_lat, clock_out_lng, clock_out_address,
+             status, source_type, is_effective
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'correction', 0)`,
+          [
+            userId,
+            employeeId,
+            npkNorm,
+            attendanceYmd,
+            effectiveRow.clock_in_time,
+            effectiveRow.clock_in_lat || null,
+            effectiveRow.clock_in_lng || null,
+            effectiveRow.clock_in_address || null,
+            time,
+            latitude || null,
+            longitude || null,
+            address || null,
+          ]
+        );
+        await conn.commit();
+      } else {
+        return res.status(400).json({ success: false, message: 'No clock-in found for this date. Submit clock-in first.' });
+      }
     } else {
       return res.status(400).json({ success: false, message: "type must be 'clock_in' or 'clock_out'." });
     }
@@ -470,28 +513,10 @@ const updateApproval = async (req, res) => {
 
     await conn.beginTransaction();
     if (action === 'approve') {
-      const [originalRows] = await conn.query(
-        `SELECT id
-         FROM attendance
-         WHERE user_id = ? AND attendance_date = ? AND source_type = 'machine' AND is_effective = 1
-         ORDER BY id DESC
-         LIMIT 1
-         FOR UPDATE`,
-        [row.user_id, row.attendance_date]
-      );
-      if (originalRows.length === 0) {
-        await conn.rollback();
-        return res.status(400).json({
-          success: false,
-          message: 'Original machine attendance not found for this user and date.',
-        });
-      }
-
-      await conn.query(
-        `UPDATE attendance
-         SET status = 'superseded', is_effective = 0, updated_at = CURRENT_TIMESTAMP
-         WHERE id = ?`,
-        [originalRows[0].id]
+      const hadMachineRow = await supersedeEffectiveMachineRowIfAny(
+        conn,
+        row.user_id,
+        row.attendance_date
       );
 
       await conn.query(
@@ -501,7 +526,12 @@ const updateApproval = async (req, res) => {
         [supervisorId, id]
       );
       await conn.commit();
-      return res.json({ success: true, message: 'Correction approved and original machine record superseded.' });
+      return res.json({
+        success: true,
+        message: hadMachineRow
+          ? 'Correction approved and original machine record superseded.'
+          : 'Correction approved.',
+      });
     }
 
     await conn.query(
@@ -512,7 +542,7 @@ const updateApproval = async (req, res) => {
     );
     await conn.commit();
 
-    res.json({ success: true, message: 'Correction rejected. Original machine record remains effective.' });
+    res.json({ success: true, message: 'Correction rejected.' });
   } catch (err) {
     try {
       await conn.rollback();
@@ -578,25 +608,13 @@ const updateApprovalBulk = async (req, res) => {
     const pendingPlaceholders = pendingIds.map(() => '?').join(',');
     await conn.beginTransaction();
     if (action === 'approve') {
+      let supersededMachineCount = 0;
       for (const corr of pendingRows) {
-        const [originalRows] = await conn.query(
-          `SELECT id
-           FROM attendance
-           WHERE user_id = ? AND attendance_date = ? AND source_type = 'machine' AND is_effective = 1
-           ORDER BY id DESC
-           LIMIT 1
-           FOR UPDATE`,
-          [corr.user_id, corr.attendance_date]
-        );
-        if (originalRows.length === 0) {
-          throw new Error(`Original machine attendance not found for correction id ${corr.id}.`);
+        if (
+          await supersedeEffectiveMachineRowIfAny(conn, corr.user_id, corr.attendance_date)
+        ) {
+          supersededMachineCount += 1;
         }
-        await conn.query(
-          `UPDATE attendance
-           SET status = 'superseded', is_effective = 0, updated_at = CURRENT_TIMESTAMP
-           WHERE id = ?`,
-          [originalRows[0].id]
-        );
         await conn.query(
           `UPDATE attendance
            SET status = 'approved', is_effective = 1, approved_by = ?, approved_at = NOW(), rejection_note = NULL
@@ -604,6 +622,20 @@ const updateApprovalBulk = async (req, res) => {
           [supervisorId, corr.id]
         );
       }
+      await conn.commit();
+
+      const machineSuffix =
+        supersededMachineCount > 0
+          ? ` (${supersededMachineCount} machine row(s) superseded where present).`
+          : '';
+      return res.json({
+        success: true,
+        message: `${pendingIds.length} correction record(s) approved successfully.${machineSuffix}`,
+        data: {
+          processed_ids: pendingIds,
+          skipped_count: ids.length - pendingIds.length,
+        },
+      });
     } else {
       await conn.query(
         `UPDATE attendance
@@ -616,10 +648,7 @@ const updateApprovalBulk = async (req, res) => {
 
     res.json({
       success: true,
-      message:
-        action === 'approve'
-          ? `${pendingIds.length} correction record(s) approved and machine rows superseded successfully.`
-          : `${pendingIds.length} correction record(s) rejected successfully.`,
+      message: `${pendingIds.length} correction record(s) rejected successfully.`,
       data: {
         processed_ids: pendingIds,
         skipped_count: ids.length - pendingIds.length,
