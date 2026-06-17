@@ -136,6 +136,44 @@
       </div>
     </section>
 
+    <!-- ── Section: User Status (Edit only) ─────────────────── -->
+    <section v-if="showUserStatus" class="form-section">
+      <div class="form-section-header">
+        <h2 class="form-section-title">User Status</h2>
+        <p class="form-section-sub">
+          Control whether this employee remains active in the attendance and reporting workflow
+        </p>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group form-group--full">
+          <span class="form-label">Status</span>
+          <div class="radio-group" role="radiogroup" aria-label="User Status">
+            <label
+              v-for="status in USER_STATUS_OPTIONS"
+              :key="status"
+              class="radio-option"
+              :class="{
+                'radio-option--selected': form.user_status === status,
+                'radio-option--active': status === 'Active',
+                'radio-option--deactive': status === 'Deactive',
+              }"
+            >
+              <input
+                v-model="form.user_status"
+                type="radio"
+                name="user_status"
+                class="radio-input"
+                :value="status"
+              />
+              <span class="radio-indicator" aria-hidden="true"></span>
+              <span class="radio-label">{{ status }}</span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- ── Actions ────────────────────────────────────────────── -->
     <div class="form-actions">
       <button type="button" class="btn btn-outline" :disabled="submitting" @click="onCancel">Cancel</button>
@@ -149,7 +187,7 @@
 
 <script setup>
 import { reactive, ref, computed, watch } from 'vue';
-import { EMPTY_EMPLOYEE, EMPLOYEE_GROUP_OPTIONS } from './mockEmployees';
+import { EMPTY_EMPLOYEE, EMPLOYEE_GROUP_OPTIONS, USER_STATUS_OPTIONS } from './mockEmployees';
 import VendorSearchSelect from '../../components/VendorSearchSelect.vue';
 import SupervisorSearchSelect from '../../components/SupervisorSearchSelect.vue';
 
@@ -171,6 +209,10 @@ const props = defineProps({
     default: '',
   },
   submitting: {
+    type: Boolean,
+    default: false,
+  },
+  showUserStatus: {
     type: Boolean,
     default: false,
   },
@@ -361,6 +403,94 @@ const onCancel = () => {
   font-size: 12.5px;
   font-weight: 500;
   color: var(--bc-rejected, #ef4444);
+}
+
+.radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.radio-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border: 1.5px solid var(--bc-gray-200);
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+  user-select: none;
+}
+.radio-option:hover {
+  border-color: var(--bc-gray-300);
+}
+.radio-option--selected.radio-option--active {
+  border-color: var(--bc-green-500, #22994a);
+  background: var(--bc-green-50, #ecfdf5);
+  box-shadow: 0 0 0 3px rgba(34, 153, 74, 0.12);
+}
+.radio-option--selected.radio-option--deactive {
+  border-color: var(--bc-rejected, #ef4444);
+  background: #fef2f2;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+}
+
+.radio-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.radio-indicator {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--bc-gray-300);
+  background: #fff;
+  flex-shrink: 0;
+  position: relative;
+  transition: border-color 0.15s, background 0.15s;
+}
+.radio-indicator::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: transparent;
+  transition: background 0.15s;
+}
+.radio-option--selected.radio-option--active .radio-indicator {
+  border-color: var(--bc-green-500, #22994a);
+}
+.radio-option--selected.radio-option--active .radio-indicator::after {
+  background: var(--bc-green-500, #22994a);
+}
+.radio-option--selected.radio-option--deactive .radio-indicator {
+  border-color: var(--bc-rejected, #ef4444);
+}
+.radio-option--selected.radio-option--deactive .radio-indicator::after {
+  background: var(--bc-rejected, #ef4444);
+}
+
+.radio-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--bc-gray-700);
+}
+.radio-option--selected.radio-option--active .radio-label {
+  color: var(--bc-green-800, #065f46);
+}
+.radio-option--selected.radio-option--deactive .radio-label {
+  color: #991b1b;
 }
 
 .form-actions {

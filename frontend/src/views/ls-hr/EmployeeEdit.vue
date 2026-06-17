@@ -71,6 +71,7 @@
       <div class="card-body">
         <EmployeeForm
           :initial-data="employee"
+          show-user-status
           submit-label="Save Changes"
           :submitting="submitting"
           :error-message="errorMsg"

@@ -1346,14 +1346,9 @@ const updateEmployee = async (req, res) => {
   // again and OPTIONAL — when the form sends it, the validated value
   // (NULL when blank) is persisted and synced to users.email; when the
   // field is absent (partial PATCH) the existing value is left
-  // untouched. User Status is still backend-owned, so every update
-  // forces the agreed default so existing records are normalised on
-  // save:
-  //   • user_status    → 'Active'
-  // `employee_group` (BC / MTL) IS editable — when the form sends it,
-  // the validated value from validateBody is persisted; when the field
-  // is absent (partial PATCH) the existing value is left untouched.
-  fields.user_status = 'Active';
+  // untouched. `user_status` and `employee_group` are editable — when
+  // the form sends them, the validated value is persisted; when absent
+  // the existing value is left untouched.
 
   // Vendor lookup: same authoritative overwrite as in createEmployee.
   // An explicit `vendor_id: null` clears the FK and leaves the
