@@ -21,7 +21,7 @@
     <div class="ls-list-scroll">
       <div v-if="!members.length" class="ls-empty">
         <p v-if="hasRoster">No LS employees match your search.</p>
-        <p v-else>No LS employees are assigned to your supervision.</p>
+        <p v-else>No active LS employees are assigned to your supervision.</p>
       </div>
       <ul v-else class="ls-list" role="listbox" :aria-activedescendant="selectedId != null ? `ls-item-${selectedId}` : undefined">
         <li

@@ -298,8 +298,10 @@ const getTeamLeaves = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid request_type.' });
     }
 
-    let where = 'WHERE u.supervisor_id = ?';
-    const params = [supervisorId];
+    let where = `WHERE u.supervisor_id = ?
+       AND e.user_status = 'Active'
+       AND e.supervisor_id = ?`;
+    const params = [supervisorId, supervisorId];
     if (request_type) {
       where += ' AND lr.request_type = ?';
       params.push(request_type);
@@ -365,7 +367,7 @@ const getTeamLeaves = async (req, res) => {
        FROM leave_requests lr
        JOIN users u ON lr.user_id = u.id
        LEFT JOIN users sup ON u.supervisor_id = sup.id
-       LEFT JOIN hr_employees e ON e.user_id = u.id
+       INNER JOIN hr_employees e ON e.user_id = u.id
        ${where}
        ORDER BY lr.start_date DESC, lr.id DESC
        LIMIT ? OFFSET ?`,
@@ -376,7 +378,7 @@ const getTeamLeaves = async (req, res) => {
       `SELECT COUNT(*) AS total
        FROM leave_requests lr
        JOIN users u ON lr.user_id = u.id
-       LEFT JOIN hr_employees e ON e.user_id = u.id
+       INNER JOIN hr_employees e ON e.user_id = u.id
        ${where}`,
       params
     );

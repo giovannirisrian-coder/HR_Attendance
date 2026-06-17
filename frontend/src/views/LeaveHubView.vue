@@ -178,7 +178,7 @@
             <div v-if="membersLoading" class="leave-master__loading"><span class="spinner"></span> Loading…</div>
             <template v-else>
               <p v-if="filteredSidebarEmployees.length === 0" class="leave-master__empty text-muted text-sm">
-                {{ lsMembers.length === 0 ? 'No LS employees are assigned to your supervision.' : 'No matching employees.' }}
+                {{ lsMembers.length === 0 ? 'No active LS employees are assigned to your supervision.' : 'No matching employees.' }}
               </p>
               <ul v-else class="leave-master__list" role="listbox" :aria-activedescendant="selectedUserId ? `ls-item-${selectedUserId}` : undefined">
                 <li

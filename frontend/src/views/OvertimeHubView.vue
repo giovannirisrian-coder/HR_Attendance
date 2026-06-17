@@ -198,7 +198,7 @@
             <div v-if="membersLoading" class="ot-master__loading"><span class="spinner"></span> Loading…</div>
             <template v-else>
               <p v-if="filteredMembers.length === 0" class="ot-master__empty text-muted text-sm">
-                {{ lsMembers.length === 0 ? 'No LS employees are assigned to your supervision.' : 'No matching employees.' }}
+                {{ lsMembers.length === 0 ? 'No active LS employees are assigned to your supervision.' : 'No matching employees.' }}
               </p>
               <ul v-else class="ot-master__list" role="listbox" :aria-activedescendant="selectedUserId ? `ot-item-${selectedUserId}` : undefined">
                 <li
@@ -603,16 +603,26 @@ const submitOvertime = async () => {
 };
 
 // ─── Supervisor list fetch ───
+const syncSupervisorSelection = () => {
+  const list = lsMembers.value;
+  if (!list.length) {
+    selectedUserId.value = null;
+    return;
+  }
+  if (selectedUserId.value == null || !list.some((m) => m.id === selectedUserId.value)) {
+    selectedUserId.value = list[0].id;
+  }
+};
+
 const fetchSupervisorMembers = async () => {
   membersLoading.value = true;
   try {
     const { data } = await api.get('/attendance/team/members');
     lsMembers.value = data.data || [];
-    if (selectedUserId.value == null && lsMembers.value.length) {
-      selectedUserId.value = lsMembers.value[0].id;
-    }
+    syncSupervisorSelection();
   } catch {
     lsMembers.value = [];
+    selectedUserId.value = null;
   } finally {
     membersLoading.value = false;
   }

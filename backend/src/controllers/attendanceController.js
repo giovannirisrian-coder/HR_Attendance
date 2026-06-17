@@ -337,17 +337,19 @@ const getMyAttendance = async (req, res) => {
   }
 };
 
-// LS Supervisor: LS users under this supervisor (master list for approvals UI)
+// LS Supervisor: active LS users directly assigned to this supervisor (master list for approvals UI)
 const getTeamLsMembers = async (req, res) => {
   try {
     const supervisorId = req.user.id;
     const [rows] = await db.query(
       `SELECT u.id, u.name, u.employee_id, e.npk AS npk
        FROM users u
-       LEFT JOIN hr_employees e ON e.user_id = u.id
+       INNER JOIN hr_employees e ON e.user_id = u.id
+         AND e.supervisor_id = ?
+         AND e.user_status = 'Active'
        WHERE u.supervisor_id = ? AND u.role = 'ls'
        ORDER BY u.name ASC`,
-      [supervisorId]
+      [supervisorId, supervisorId]
     );
     res.json({ success: true, data: rows });
   } catch (err) {
@@ -362,8 +364,14 @@ const getTeamAttendance = async (req, res) => {
     const supervisorId = req.user.id;
     const { search, status, start_date, end_date, page = 1, limit = 20, user_id } = req.query;
 
-    let where = 'WHERE u.supervisor_id = ?';
-    const params = [supervisorId];
+    let where = `WHERE u.supervisor_id = ?
+       AND EXISTS (
+         SELECT 1 FROM hr_employees hr_ls
+         WHERE hr_ls.user_id = u.id
+           AND hr_ls.supervisor_id = ?
+           AND hr_ls.user_status = 'Active'
+       )`;
+    const params = [supervisorId, supervisorId];
 
     if (user_id !== undefined && user_id !== null && user_id !== '') {
       const uid = parseInt(user_id, 10);
