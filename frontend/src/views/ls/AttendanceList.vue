@@ -86,7 +86,6 @@
               <th>Clock Out</th>
               <th>Duration</th>
               <th>OT</th>
-              <th>Absence</th>
               <th>Location (In)</th>
               <th>Source Type</th>
               <th>Status</th>
@@ -95,7 +94,7 @@
           </thead>
           <tbody>
             <tr v-if="records.length === 0">
-              <td colspan="11">
+              <td colspan="10">
                 <div class="empty-state">
                   <div class="empty-state-icon">📅</div>
                   <h3>No attendance records found</h3>
@@ -126,10 +125,6 @@
                   <div class="text-sm font-bold" style="color:#b45309;">{{ fmtHm(r.ot_start_time) }}–{{ fmtHm(r.ot_end_time) }}</div>
                   <div class="text-xs text-muted">{{ calcDuration(fmtHm(r.ot_start_time), fmtHm(r.ot_end_time)) }}</div>
                 </template>
-                <span v-else class="text-muted">—</span>
-              </td>
-              <td>
-                <span v-if="r.leave_day_type" class="leave-pill" :class="`leave-pill--${r.leave_day_type}`">{{ leaveTypeLabel(r.leave_day_type) }}</span>
                 <span v-else class="text-muted">—</span>
               </td>
               <td>
@@ -291,8 +286,6 @@ const formatOvertimeHours = (h) => {
   return `${whole}h ${frac}m`;
 };
 
-const leaveTypeLabel = (t) => ({ cuti: 'Cuti', izin: 'Izin', sakit: 'Sakit' }[t] || t);
-
 const toPascalCase = (s) => {
   if (s == null || s === '') return '';
   return String(s)
@@ -354,18 +347,6 @@ onMounted(fetchData);
 .clock-out { color: var(--bc-rejected); }
 .location-cell { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--bc-gray-500); }
 .source-type-cell { font-size: 13px; font-weight: 600; color: var(--bc-gray-700); white-space: nowrap; }
-
-.leave-pill {
-  display: inline-block;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 8px;
-  border-radius: var(--radius-full);
-  text-transform: none;
-}
-.leave-pill--cuti { background: var(--bc-green-100); color: var(--bc-green-800); }
-.leave-pill--izin { background: #dbeafe; color: #1e40af; }
-.leave-pill--sakit { background: #fef3c7; color: #92400e; }
 
 .row-actions {
   display: flex;
