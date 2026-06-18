@@ -4,7 +4,15 @@ const {
   fetchVendorMonthlyPdfData,
   fetchVendorAttendanceRowsForMonthlyPdf,
 } = require('../services/vendorMonthlyPdfData');
-
+const {
+  uploadVendorAttachment,
+  isVendorAttachmentStorageConfigured,
+  isProduction,
+} = require('../services/gcsStorageService');
+const {
+  serializeVendorFileRef,
+  parseOtherSupportingRefs,
+} = require('../utils/vendorFileRef');
 async function fetchVendorAttendanceRows(vendorId, month, year) {
   return fetchVendorAttendanceRowsForMonthlyPdf(vendorId, month, year);
 }
@@ -37,27 +45,33 @@ function normalizeLineItems(raw) {
 }
 
 function parseOtherSupportingStored(val) {
-  if (val == null) return [];
-  if (Array.isArray(val)) return val.filter((x) => typeof x === 'string');
-  if (Buffer.isBuffer(val)) {
-    try {
-      const j = JSON.parse(val.toString('utf8'));
-      return Array.isArray(j) ? j.filter((x) => typeof x === 'string') : [];
-    } catch {
-      return [];
-    }
-  }
-  if (typeof val === 'string') {
-    try {
-      const j = JSON.parse(val);
-      return Array.isArray(j) ? j.filter((x) => typeof x === 'string') : [];
-    } catch {
-      return [];
-    }
-  }
-  return [];
+  return parseOtherSupportingRefs(val).map((r) =>
+    r.legacyLocal ? r.path : { path: r.path, name: r.name }
+  );
 }
 
+async function uploadVendorDocFile(file, vendorId) {
+  const result = await uploadVendorAttachment({
+    buffer: file.buffer,
+    originalName: file.originalname,
+    mimeType: file.mimetype,
+    vendorId,
+  });
+  return serializeVendorFileRef({
+    storagePath: result.storagePath,
+    originalName: result.originalName,
+  });
+}
+
+function submissionHasNewFiles(files) {
+  if (!files) return false;
+  return Boolean(
+    files.tax_invoice_file?.[0]
+    || files.invoice_file?.[0]
+    || files.receipt_file?.[0]
+    || (files.other_supporting_documents && files.other_supporting_documents.length > 0)
+  );
+}
 /** Vendor: one row per month – aggregated LS attendance + submission workflow */
 const getVendorMonthlySummary = async (req, res) => {
   try {
@@ -214,11 +228,41 @@ const submitVendorMonthly = async (req, res) => {
 
     const { invoice_number, invoice_date, due_days, invoice_line_items, pph_amount: pphBody } = req.body;
     const files = req.files || {};
-    const taxFile = files.tax_invoice_file?.[0]?.filename || null;
-    const invoiceFile = files.invoice_file?.[0]?.filename || null;
-    const receiptFile = files.receipt_file?.[0]?.filename || null;
-    const otherNew = (files.other_supporting_documents || []).map((f) => f.filename);
 
+    if (submissionHasNewFiles(files) && !isVendorAttachmentStorageConfigured()) {
+      const message = isProduction()
+        ? 'File storage is not configured for production. Contact your administrator.'
+        : 'File storage is not configured. Contact your administrator.';
+      return res.status(503).json({ success: false, message });
+    }
+
+    let taxFile = null;
+    let invoiceFile = null;
+    let receiptFile = null;
+    let otherNew = [];
+
+    try {
+      if (files.tax_invoice_file?.[0]) {
+        taxFile = await uploadVendorDocFile(files.tax_invoice_file[0], vendorId);
+      }
+      if (files.invoice_file?.[0]) {
+        invoiceFile = await uploadVendorDocFile(files.invoice_file[0], vendorId);
+      }
+      if (files.receipt_file?.[0]) {
+        receiptFile = await uploadVendorDocFile(files.receipt_file[0], vendorId);
+      }
+      if (files.other_supporting_documents?.length) {
+        otherNew = await Promise.all(
+          files.other_supporting_documents.map((f) => uploadVendorDocFile(f, vendorId))
+        );
+      }
+    } catch (uploadErr) {
+      console.error('Vendor attachment upload error:', uploadErr);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to upload one or more documents. Please try again.',
+      });
+    }
     const lineItemsNorm = normalizeLineItems(invoice_line_items);
     const subtotal = lineItemsNorm.reduce((s, r) => s + (Number(r.amount) || 0), 0);
     const pphVal = parseIdrInput(pphBody);
@@ -244,8 +288,9 @@ const submitVendorMonthly = async (req, res) => {
     }
 
     if (existing.length === 0) {
-      const otherStored = JSON.stringify(otherNew);
-      await db.query(
+      const otherStored = JSON.stringify(
+        otherNew.map((s) => JSON.parse(s))
+      );      await db.query(
         `INSERT INTO vendor_monthly_submissions
           (vendor_id, report_month, report_year, invoice_value,
            invoice_number, invoice_date, due_days, invoice_line_items, pph_amount,
@@ -272,8 +317,9 @@ const submitVendorMonthly = async (req, res) => {
     } else {
       const ex = existing[0];
       let otherCombined = parseOtherSupportingStored(ex.other_supporting_files);
-      if (otherNew.length) otherCombined = [...otherCombined, ...otherNew];
-
+      if (otherNew.length) {
+        otherCombined = [...otherCombined, ...otherNew.map((s) => JSON.parse(s))];
+      }
       const updates = [
         'invoice_value=?',
         'invoice_number=?',

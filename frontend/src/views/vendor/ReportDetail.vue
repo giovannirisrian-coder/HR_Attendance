@@ -186,10 +186,17 @@
                       @drop.prevent="canEdit && onDropSingle($event, doc.uploadKey)"
                     >
                       <template v-if="reportForm.files[doc.uploadKey]">
-                        <div class="file-name">{{ reportForm.files[doc.uploadKey].name }}</div>
+                        <div class="file-selected-row">
+                          <span class="file-check" aria-hidden="true">✓</span>
+                          <div class="file-name">{{ reportForm.files[doc.uploadKey].name }}</div>
+                        </div>
+                        <div class="text-sm text-muted">Ready to upload on submit</div>
                       </template>
                       <template v-else-if="getExisting(doc.existingKey)">
-                        <div class="file-name">{{ getExisting(doc.existingKey) }}</div>
+                        <div class="file-selected-row">
+                          <span class="file-check" aria-hidden="true">✓</span>
+                          <div class="file-name">{{ getExistingDisplayName(doc.existingKey) }}</div>
+                        </div>
                         <div class="text-sm text-muted">Replace?</div>
                       </template>
                       <template v-else>
@@ -212,16 +219,27 @@
                   </label>
                   <div
                     class="file-upload-area multi"
-                    :class="{ 'has-file': otherSupportingNewFiles.length > 0 }"
+                    :class="{ 'has-file': otherSupportingNewFiles.length > 0 || existingOtherNames.length > 0 }"
                     @click="canEdit && triggerOtherUpload()"
                     @dragover.prevent
                     @drop.prevent="canEdit && onDropOther($event)"
                   >
                     <template v-if="otherSupportingNewFiles.length">
                       <ul class="file-list">
-                        <li v-for="(f, i) in otherSupportingNewFiles" :key="i" class="file-name">{{ f.name }}</li>
+                        <li v-for="(f, i) in otherSupportingNewFiles" :key="i" class="file-selected-row">
+                          <span class="file-check" aria-hidden="true">✓</span>
+                          <span class="file-name">{{ f.name }}</span>
+                        </li>
                       </ul>
                       <div class="text-sm text-muted">Adds to submission (existing files kept)</div>
+                    </template>
+                    <template v-else-if="existingOtherNames.length">
+                      <ul class="file-list">
+                        <li v-for="(name, i) in existingOtherNames" :key="`ex-${i}`" class="file-selected-row">
+                          <span class="file-check" aria-hidden="true">✓</span>
+                          <span class="file-name">{{ name }}</span>
+                        </li>
+                      </ul>
                     </template>
                     <template v-else>
                       <div class="text-sm text-muted">Click or drop multiple files — all extensions accepted</div>
@@ -237,8 +255,18 @@
                 </div>
               </div>
 
+              <div v-if="submitting && uploadProgress > 0" class="upload-progress-wrap">
+                <div class="upload-progress-label">
+                  <span>Uploading documents…</span>
+                  <span>{{ uploadProgress }}%</span>
+                </div>
+                <div class="upload-progress-track">
+                  <div class="upload-progress-bar" :style="{ width: `${uploadProgress}%` }"></div>
+                </div>
+              </div>
+
               <button type="submit" class="btn btn-primary w-full" :disabled="submitting || !canEdit">
-                {{ submitting ? 'Submitting…' : 'Submit to LS HR' }}
+                {{ submitting ? (uploadProgress > 0 ? `Uploading… ${uploadProgress}%` : 'Submitting…') : 'Submit to LS HR' }}
               </button>
             </form>
           </div>
@@ -261,6 +289,7 @@ const year = computed(() => parseInt(route.params.year, 10));
 
 const loading = ref(false);
 const submitting = ref(false);
+const uploadProgress = ref(0);
 const submitSuccess = ref(false);
 const submitError = ref('');
 const vendor = ref(null);
@@ -313,20 +342,48 @@ const pphNumeric = computed(() => parseIdrDigits(reportForm.pphStr));
 const subtotalDisplay = computed(() => formatIdr(lineItemsSum.value));
 const totalInvoiceDisplay = computed(() => formatIdr(lineItemsSum.value + pphNumeric.value));
 
-const existingOtherCount = computed(() => {
-  const o = submission.value?.other_supporting_files;
-  if (o == null) return 0;
-  if (Array.isArray(o)) return o.length;
-  if (typeof o === 'string') {
+const existingOtherCount = computed(() => existingOtherNames.value.length);
+
+function parseStoredFileRef(val) {
+  if (val == null || val === '') return null;
+  if (typeof val === 'object' && val.path) return val;
+  const s = String(val);
+  try {
+    const j = JSON.parse(s);
+    if (j && typeof j.path === 'string') return j;
+  } catch {
+    /* legacy plain filename */
+  }
+  return { path: s, name: s, legacy: true };
+}
+
+function storedFileDisplayName(val) {
+  const ref = parseStoredFileRef(val);
+  if (!ref) return null;
+  if (ref.name && !ref.name.startsWith('gcs:')) return ref.name;
+  if (String(ref.path).startsWith('gcs:') || String(ref.path).startsWith('local:')) return 'File on record';
+  return ref.name || ref.path;
+}
+
+function parseOtherSupportingList(val) {
+  if (val == null) return [];
+  let arr = val;
+  if (typeof val === 'string') {
     try {
-      const j = JSON.parse(o);
-      return Array.isArray(j) ? j.length : 0;
+      arr = JSON.parse(val);
     } catch {
-      return 0;
+      return [];
     }
   }
-  return 0;
-});
+  if (!Array.isArray(arr)) return [];
+  return arr.map((item) => parseStoredFileRef(item)).filter(Boolean);
+}
+
+const existingOtherNames = computed(() =>
+  parseOtherSupportingList(submission.value?.other_supporting_files).map(
+    (r) => storedFileDisplayName(r.legacy ? r.path : r) || r.name || 'File on record'
+  )
+);
 
 const workflowLabel = (s) => {
   const map = {
@@ -410,6 +467,7 @@ const loadData = async () => {
 };
 
 const getExisting = (k) => submission.value?.[k] || null;
+const getExistingDisplayName = (k) => storedFileDisplayName(getExisting(k)) || 'File on record';
 
 const addLineRow = () => {
   lineItems.value.push({ uid: nextUid(), description: '', amountStr: '' });
@@ -452,6 +510,7 @@ const downloadPdf = async () => {
 
 const submitReport = async () => {
   submitting.value = true;
+  uploadProgress.value = 0;
   submitSuccess.value = false;
   submitError.value = '';
   try {
@@ -474,13 +533,20 @@ const submitReport = async () => {
 
     await api.post(`/reports/vendor/${month.value}/${year.value}`, fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: (evt) => {
+        if (evt.total) {
+          uploadProgress.value = Math.min(100, Math.round((evt.loaded * 100) / evt.total));
+        }
+      },
     });
+    uploadProgress.value = 100;
     submitSuccess.value = true;
     await loadData();
   } catch (e) {
     submitError.value = e.response?.data?.message || 'Submit failed.';
   } finally {
     submitting.value = false;
+    uploadProgress.value = 0;
   }
 };
 
@@ -524,7 +590,42 @@ onMounted(loadData);
 .upload-heading { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: var(--bc-gray-500); margin: 16px 0 10px; }
 .upload-section .upload-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
 .file-ok { font-size: 10px; font-weight: 800; background: var(--bc-green-100); color: var(--bc-green-700); padding: 2px 8px; border-radius: 99px; margin-left: 6px; }
-.file-list { margin: 0; padding-left: 16px; }
+.file-list { margin: 0; padding-left: 0; list-style: none; }
 .file-upload-area.multi { text-align: left; }
+.file-selected-row { display: flex; align-items: center; gap: 8px; justify-content: center; }
+.file-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--bc-green-500);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+.upload-progress-wrap { margin: 12px 0 4px; }
+.upload-progress-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--bc-green-700);
+  margin-bottom: 6px;
+}
+.upload-progress-track {
+  height: 8px;
+  background: var(--bc-gray-200);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.upload-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--bc-green-500), var(--bc-green-600));
+  border-radius: 99px;
+  transition: width 0.15s ease;
+}
 @media (max-width: 1100px) { .detail-layout { grid-template-columns: 1fr; } .recap-card { position: static; } }
 </style>

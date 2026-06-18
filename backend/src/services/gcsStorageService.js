@@ -27,6 +27,9 @@ const isLeaveAttachmentStorageConfigured = () => {
   return isLocalFallbackEnabled();
 };
 
+/** Vendor attachments reuse the same bucket / credentials as leave attachments. */
+const isVendorAttachmentStorageConfigured = isLeaveAttachmentStorageConfigured;
+
 const getBucketName = () => {
   const name = process.env.GCS_BUCKET_NAME;
   if (!name || !String(name).trim()) {
@@ -64,6 +67,11 @@ const sanitizeFilename = (name) => {
 const buildObjectKey = (userId, safeName) => {
   const ext = path.extname(safeName);
   return `leave-attachments/${userId}/${crypto.randomUUID()}${ext}`;
+};
+
+const buildVendorObjectKey = (vendorId, safeName) => {
+  const ext = path.extname(safeName);
+  return `vendor-attachment/${vendorId}/${crypto.randomUUID()}${ext}`;
 };
 
 const encodeStorageRef = (backend, objectKey) =>
@@ -212,14 +220,100 @@ const getLeaveAttachmentLocalAbsolutePath = (storagePath) => {
   return resolveLocalAbsolutePath(ref.objectKey);
 };
 
+/**
+ * Upload a vendor monthly report attachment to vendor-attachment/{vendorId}/.
+ * @returns {{ storagePath: string, originalName: string, backend: 'gcs'|'local' }}
+ */
+const uploadVendorAttachment = async ({ buffer, originalName, mimeType, vendorId }) => {
+  if (!buffer || !Buffer.isBuffer(buffer) || buffer.length === 0) {
+    throw new Error('Attachment file is empty.');
+  }
+  if (!vendorId) {
+    throw new Error('vendorId is required for vendor attachments.');
+  }
+
+  const safeName = sanitizeFilename(originalName);
+  const objectKey = buildVendorObjectKey(vendorId, safeName);
+
+  if (isGcsConfigured()) {
+    await uploadToGcs({ buffer, objectKey, safeName, mimeType, userId: vendorId });
+    return {
+      storagePath: encodeStorageRef('gcs', objectKey),
+      originalName: safeName,
+      backend: 'gcs',
+    };
+  }
+
+  if (isLocalFallbackEnabled()) {
+    await uploadToLocalDisk({ buffer, objectKey });
+    return {
+      storagePath: encodeStorageRef('local', objectKey),
+      originalName: safeName,
+      backend: 'local',
+    };
+  }
+
+  if (isProduction()) {
+    throw new Error('GCS is required in production. Set GCS_BUCKET_NAME and credentials.');
+  }
+
+  throw new Error('Vendor attachment storage is not configured.');
+};
+
+const deleteVendorAttachment = deleteLeaveAttachment;
+
+const getVendorAttachmentSignedUrl = getLeaveAttachmentSignedUrl;
+
+const getVendorAttachmentBackend = getLeaveAttachmentBackend;
+
+const getVendorAttachmentLocalAbsolutePath = getLeaveAttachmentLocalAbsolutePath;
+
+const getVendorAttachmentReadStream = (storagePath) => {
+  const ref = parseStorageRef(storagePath);
+  if (!ref) throw new Error('Invalid attachment reference.');
+  if (ref.backend === 'local') {
+    const fsSync = require('fs');
+    return fsSync.createReadStream(resolveLocalAbsolutePath(ref.objectKey));
+  }
+  if (!isGcsConfigured()) {
+    throw new Error('GCS is not configured.');
+  }
+  return getStorage().bucket(getBucketName()).file(ref.objectKey).createReadStream();
+};
+
+const vendorAttachmentExists = async (storagePath) => {
+  const ref = parseStorageRef(storagePath);
+  if (!ref) return false;
+  if (ref.backend === 'local') {
+    try {
+      await fs.access(resolveLocalAbsolutePath(ref.objectKey));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  if (!isGcsConfigured()) return false;
+  const [exists] = await getStorage().bucket(getBucketName()).file(ref.objectKey).exists();
+  return exists;
+};
+
 module.exports = {
   uploadLeaveAttachment,
   deleteLeaveAttachment,
   getLeaveAttachmentSignedUrl,
   getLeaveAttachmentBackend,
   getLeaveAttachmentLocalAbsolutePath,
+  uploadVendorAttachment,
+  deleteVendorAttachment,
+  getVendorAttachmentSignedUrl,
+  getVendorAttachmentBackend,
+  getVendorAttachmentLocalAbsolutePath,
+  getVendorAttachmentReadStream,
+  vendorAttachmentExists,
+  parseStorageRef,
   isGcsConfigured,
   isLeaveAttachmentStorageConfigured,
+  isVendorAttachmentStorageConfigured,
   isProduction,
   isLocalFallbackEnabled,
 };
