@@ -167,7 +167,7 @@
                         title="Withdraw this approved leave"
                         @click="openLifecycleConfirm(r, 'withdraw')"
                       >Withdraw</button>
-                      <span v-else class="text-muted text-sm">—</span>
+                      <span v-if="!hasLsListActions(r)" class="text-muted text-sm">—</span>
                     </div>
                   </td>
                 </tr>
@@ -776,6 +776,9 @@ const resetFormDates = () => {
 };
 
 const hasAttachment = (r) => Boolean(r?.has_attachment || r?.attachment_gcs_path);
+
+const hasLsListActions = (r) =>
+  hasAttachment(r) || r?.status === 'pending' || r?.status === 'approved';
 
 const onAttachmentChange = (e) => {
   selectedAttachment.value = e.target.files?.[0] || null;
