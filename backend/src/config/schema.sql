@@ -204,6 +204,8 @@ CREATE TABLE IF NOT EXISTS leave_requests (
   start_date      DATE         NOT NULL,
   end_date        DATE         NOT NULL,
   reason          TEXT         NULL,
+  attachment_gcs_path      VARCHAR(512) NULL,
+  attachment_original_name VARCHAR(255) NULL,
   status          ENUM('pending','approved','rejected','cancelled','withdrawn') NOT NULL DEFAULT 'pending',
   approved_by     INT          NULL,
   approved_at     TIMESTAMP    NULL,

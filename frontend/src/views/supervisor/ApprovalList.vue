@@ -86,13 +86,14 @@
                   <th>Duration</th>
                   <th>OT range</th>
                   <th>Location</th>
+                  <th>Source Type</th>
                   <th>Status</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-if="!selectedUserId">
-                  <td colspan="11">
+                  <td colspan="12">
                     <div class="empty-state">
                       <div class="empty-state-icon">👈</div>
                       <h3>Select a team member</h3>
@@ -101,7 +102,7 @@
                   </td>
                 </tr>
                 <tr v-else-if="records.length === 0">
-                  <td colspan="11">
+                  <td colspan="12">
                     <div class="empty-state">
                       <div class="empty-state-icon">✅</div>
                       <h3>No records found</h3>
@@ -146,6 +147,10 @@
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
                       {{ Number(r.clock_in_lat).toFixed(4) }}, {{ Number(r.clock_in_lng).toFixed(4) }}
                     </div>
+                    <span v-else class="text-muted">—</span>
+                  </td>
+                  <td>
+                    <span v-if="r.source_type" class="source-type-cell">{{ formatSourceType(r.source_type) }}</span>
                     <span v-else class="text-muted">—</span>
                   </td>
                   <td><span class="badge" :class="`badge-${r.status}`">{{ toPascalCase(r.status) }}</span></td>
@@ -643,6 +648,12 @@ const toPascalCase = (s) => {
     .join('');
 };
 
+const formatSourceType = (s) => {
+  if (s == null || s === '') return '';
+  const str = String(s);
+  return str.charAt(0).toUpperCase() + str.slice(1);
+};
+
 onMounted(async () => {
   await fetchLsMembers();
   await fetchData();
@@ -666,6 +677,7 @@ onMounted(async () => {
 .text-green { color: var(--bc-green-600); }
 .text-red   { color: var(--bc-rejected); }
 .location-cell { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--bc-gray-500); }
+.source-type-cell { font-size: 13px; font-weight: 600; color: var(--bc-gray-700); white-space: nowrap; }
 
 .approval-master-detail-card {
   padding: 0;

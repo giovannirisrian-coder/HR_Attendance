@@ -86,8 +86,8 @@
               <th>Clock Out</th>
               <th>Duration</th>
               <th>OT</th>
-              <th>Absence</th>
               <th>Location (In)</th>
+              <th>Source Type</th>
               <th>Status</th>
               <th style="width:220px;">Actions</th>
             </tr>
@@ -128,14 +128,14 @@
                 <span v-else class="text-muted">—</span>
               </td>
               <td>
-                <span v-if="r.leave_day_type" class="leave-pill" :class="`leave-pill--${r.leave_day_type}`">{{ leaveTypeLabel(r.leave_day_type) }}</span>
-                <span v-else class="text-muted">—</span>
-              </td>
-              <td>
                 <div v-if="r.clock_in_lat" class="location-cell">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
                   {{ Number(r.clock_in_lat).toFixed(5) }}, {{ Number(r.clock_in_lng).toFixed(5) }}
                 </div>
+                <span v-else class="text-muted">—</span>
+              </td>
+              <td>
+                <span v-if="r.source_type" class="source-type-cell">{{ formatSourceType(r.source_type) }}</span>
                 <span v-else class="text-muted">—</span>
               </td>
               <td><span class="badge" :class="`badge-${r.status}`">{{ toPascalCase(r.status) }}</span></td>
@@ -286,8 +286,6 @@ const formatOvertimeHours = (h) => {
   return `${whole}h ${frac}m`;
 };
 
-const leaveTypeLabel = (t) => ({ cuti: 'Cuti', izin: 'Izin', sakit: 'Sakit' }[t] || t);
-
 const toPascalCase = (s) => {
   if (s == null || s === '') return '';
   return String(s)
@@ -295,6 +293,12 @@ const toPascalCase = (s) => {
     .filter(Boolean)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
     .join('');
+};
+
+const formatSourceType = (s) => {
+  if (s == null || s === '') return '';
+  const str = String(s);
+  return str.charAt(0).toUpperCase() + str.slice(1);
 };
 
 const openLifecycleConfirm = (record, action) => {
@@ -342,18 +346,7 @@ onMounted(fetchData);
 .clock-in  { color: var(--bc-green-600); }
 .clock-out { color: var(--bc-rejected); }
 .location-cell { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--bc-gray-500); }
-
-.leave-pill {
-  display: inline-block;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 8px;
-  border-radius: var(--radius-full);
-  text-transform: none;
-}
-.leave-pill--cuti { background: var(--bc-green-100); color: var(--bc-green-800); }
-.leave-pill--izin { background: #dbeafe; color: #1e40af; }
-.leave-pill--sakit { background: #fef3c7; color: #92400e; }
+.source-type-cell { font-size: 13px; font-weight: 600; color: var(--bc-gray-700); white-space: nowrap; }
 
 .row-actions {
   display: flex;

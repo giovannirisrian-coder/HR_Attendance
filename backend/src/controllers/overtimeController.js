@@ -209,8 +209,10 @@ const getTeamOvertimes = async (req, res) => {
     const supervisorId = req.user.id;
     const { user_id, status, start_date, end_date, search, page = 1, limit = 20 } = req.query;
 
-    let where = 'WHERE u.supervisor_id = ?';
-    const params = [supervisorId];
+    let where = `WHERE u.supervisor_id = ?
+       AND e.user_status = 'Active'
+       AND e.supervisor_id = ?`;
+    const params = [supervisorId, supervisorId];
 
     const uid = parseInt(user_id, 10);
     if (Number.isInteger(uid) && uid > 0) {
@@ -248,7 +250,7 @@ const getTeamOvertimes = async (req, res) => {
       `SELECT ${OVERTIME_LIST_SELECT}
        FROM overtime_requests o
        JOIN users u ON o.user_id = u.id
-       LEFT JOIN hr_employees e ON e.user_id = u.id
+       INNER JOIN hr_employees e ON e.user_id = u.id
        ${where}
        ORDER BY o.request_date DESC, o.id DESC
        LIMIT ? OFFSET ?`,
@@ -259,7 +261,7 @@ const getTeamOvertimes = async (req, res) => {
       `SELECT COUNT(*) AS total
        FROM overtime_requests o
        JOIN users u ON o.user_id = u.id
-       LEFT JOIN hr_employees e ON e.user_id = u.id
+       INNER JOIN hr_employees e ON e.user_id = u.id
        ${where}`,
       params
     );
