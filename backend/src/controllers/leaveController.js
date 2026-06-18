@@ -1,5 +1,68 @@
+const fs = require('fs/promises');
 const db = require('../config/database');
+const multer = require('multer');
 const { normalizeCalendarYmdFromBody, compareYmd } = require('../utils/calendarDate');
+const {
+  uploadLeaveAttachment,
+  deleteLeaveAttachment,
+  getLeaveAttachmentSignedUrl,
+  getLeaveAttachmentBackend,
+  getLeaveAttachmentLocalAbsolutePath,
+  isLeaveAttachmentStorageConfigured,
+  isProduction,
+} = require('../services/gcsStorageService');
+
+const leaveAttachmentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+}).single('attachment');
+
+const handleLeaveAttachmentUpload = (req, res, next) => {
+  leaveAttachmentUpload(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ success: false, message: 'Attachment must be 10 MB or smaller.' });
+    }
+    return res.status(400).json({ success: false, message: err.message || 'Invalid attachment upload.' });
+  });
+};
+
+const hasLeaveAttachment = (row) => Boolean(row?.attachment_gcs_path);
+
+const loadLeaveForAttachment = async (leaveId) => {
+  const [rows] = await db.query(
+    `SELECT lr.*, u.supervisor_id
+     FROM leave_requests lr
+     JOIN users u ON lr.user_id = u.id
+     WHERE lr.id = ?`,
+    [leaveId]
+  );
+  return rows[0] || null;
+};
+
+const assertLeaveAttachmentAccess = (req, row) => {
+  const role = req.user.role;
+  const userId = req.user.id;
+
+  if (role === 'ls') {
+    if (row.user_id !== userId) {
+      return { status: 403, message: 'Forbidden.' };
+    }
+    return null;
+  }
+
+  if (role === 'ls_supervisor') {
+    if (row.supervisor_id !== userId) {
+      return {
+        status: 403,
+        message: 'Leave request not found or not under your supervision.',
+      };
+    }
+    return null;
+  }
+
+  return { status: 403, message: 'Forbidden.' };
+};
 
 const VALID_TYPES = ['cuti', 'izin', 'sakit'];
 
@@ -35,6 +98,7 @@ const validateReasonForType = (type, reason) => {
 
 // LS: submit leave (type must be cuti | izin | sakit)
 const createLeave = async (req, res) => {
+  let attachmentMeta = null;
   try {
     const userId = req.user.id;
     const { request_type, start_date, end_date, reason } = req.body;
@@ -74,6 +138,13 @@ const createLeave = async (req, res) => {
     }
 
     const reasonTrim = reason === undefined || reason === null ? null : String(reason).trim() || null;
+
+    if (req.file && !isLeaveAttachmentStorageConfigured()) {
+      const message = isProduction()
+        ? 'File storage is not configured for production. Contact your administrator.'
+        : 'File storage is not configured. Contact your administrator.';
+      return res.status(503).json({ success: false, message });
+    }
 
     // ── Submission guard: only one active leave row may cover any day
     // in the requested range. An "active" row is one currently moving
@@ -118,10 +189,38 @@ const createLeave = async (req, res) => {
       });
     }
 
+    if (req.file) {
+      try {
+        attachmentMeta = await uploadLeaveAttachment({
+          buffer: req.file.buffer,
+          originalName: req.file.originalname,
+          mimeType: req.file.mimetype,
+          userId,
+        });
+      } catch (uploadErr) {
+        console.error('Leave attachment upload error:', uploadErr);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to upload attachment. Please try again.',
+        });
+      }
+    }
+
     const [ins] = await db.query(
-      `INSERT INTO leave_requests (user_id, request_type, start_date, end_date, reason, status)
-       VALUES (?, ?, ?, ?, ?, 'pending')`,
-      [userId, request_type, startYmd, endYmd, reasonTrim]
+      `INSERT INTO leave_requests (
+         user_id, request_type, start_date, end_date, reason,
+         attachment_gcs_path, attachment_original_name, status
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      [
+        userId,
+        request_type,
+        startYmd,
+        endYmd,
+        reasonTrim,
+        attachmentMeta?.gcsPath || null,
+        attachmentMeta?.originalName || null,
+      ]
     );
 
     const [rows] = await db.query(
@@ -132,10 +231,111 @@ const createLeave = async (req, res) => {
       [ins.insertId]
     );
 
-    res.status(201).json({ success: true, message: 'Leave request submitted.', data: rows[0] });
+    res.status(201).json({
+      success: true,
+      message: 'Leave request submitted.',
+      data: { ...rows[0], has_attachment: hasLeaveAttachment(rows[0]) },
+    });
   } catch (err) {
+    if (attachmentMeta?.gcsPath) {
+      await deleteLeaveAttachment(attachmentMeta.gcsPath);
+    }
     console.error('Create leave error:', err);
     res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
+// LS or Supervisor: download metadata (GCS signed URL or local stream hint)
+const downloadLeaveAttachment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const row = await loadLeaveForAttachment(id);
+
+    if (!row) {
+      return res.status(404).json({ success: false, message: 'Leave request not found.' });
+    }
+    if (!hasLeaveAttachment(row)) {
+      return res.status(404).json({ success: false, message: 'This leave request has no attachment.' });
+    }
+
+    const denied = assertLeaveAttachmentAccess(req, row);
+    if (denied) {
+      return res.status(denied.status).json({ success: false, message: denied.message });
+    }
+
+    const filename = row.attachment_original_name || 'attachment';
+    const backend = getLeaveAttachmentBackend(row.attachment_gcs_path);
+
+    if (backend === 'local') {
+      return res.json({
+        success: true,
+        data: {
+          mode: 'local',
+          filename,
+          leave_id: Number(id),
+        },
+      });
+    }
+
+    if (!isLeaveAttachmentStorageConfigured()) {
+      return res.status(503).json({
+        success: false,
+        message: isProduction()
+          ? 'File storage is not configured for production. Contact your administrator.'
+          : 'File storage is not configured. Contact your administrator.',
+      });
+    }
+
+    const url = await getLeaveAttachmentSignedUrl(row.attachment_gcs_path, filename);
+
+    res.json({
+      success: true,
+      data: {
+        mode: 'gcs',
+        url,
+        filename,
+      },
+    });
+  } catch (err) {
+    console.error('Download leave attachment error:', err);
+    res.status(500).json({ success: false, message: 'Failed to generate download link.' });
+  }
+};
+
+// LS or Supervisor: stream a locally stored attachment (development fallback)
+const streamLeaveAttachmentFile = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const row = await loadLeaveForAttachment(id);
+
+    if (!row) {
+      return res.status(404).json({ success: false, message: 'Leave request not found.' });
+    }
+    if (!hasLeaveAttachment(row)) {
+      return res.status(404).json({ success: false, message: 'This leave request has no attachment.' });
+    }
+
+    const denied = assertLeaveAttachmentAccess(req, row);
+    if (denied) {
+      return res.status(denied.status).json({ success: false, message: denied.message });
+    }
+
+    if (getLeaveAttachmentBackend(row.attachment_gcs_path) !== 'local') {
+      return res.status(400).json({
+        success: false,
+        message: 'This attachment is not available via local file streaming.',
+      });
+    }
+
+    const absPath = getLeaveAttachmentLocalAbsolutePath(row.attachment_gcs_path);
+    await fs.access(absPath);
+    res.download(absPath, row.attachment_original_name || 'attachment');
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      return res.status(404).json({ success: false, message: 'Attachment file not found.' });
+    }
+    console.error('Stream leave attachment error:', err);
+    res.status(500).json({ success: false, message: 'Failed to download attachment.' });
   }
 };
 
@@ -179,7 +379,7 @@ const getMyLeaves = async (req, res) => {
 
     res.json({
       success: true,
-      data: rows,
+      data: rows.map((r) => ({ ...r, has_attachment: hasLeaveAttachment(r) })),
       pagination: { total, page: parseInt(page, 10), limit: parseInt(limit, 10) },
     });
   } catch (err) {
@@ -385,7 +585,7 @@ const getTeamLeaves = async (req, res) => {
 
     res.json({
       success: true,
-      data: rows,
+      data: rows.map((r) => ({ ...r, has_attachment: hasLeaveAttachment(r) })),
       pagination: { total, page: parseInt(page, 10), limit: parseInt(limit, 10) },
     });
   } catch (err) {
@@ -601,4 +801,7 @@ module.exports = {
   updateLeaveApproval,
   updateLeaveApprovalBulk,
   cancelOrWithdrawLeave,
+  downloadLeaveAttachment,
+  streamLeaveAttachmentFile,
+  handleLeaveAttachmentUpload,
 };

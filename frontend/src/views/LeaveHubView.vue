@@ -55,6 +55,21 @@
                   :placeholder="reasonPlaceholder"
                 />
               </div>
+              <div class="form-group">
+                <label class="form-label">
+                  Attachment
+                  <span class="text-muted text-sm">(optional)</span>
+                </label>
+                <input
+                  ref="attachmentInputRef"
+                  type="file"
+                  class="form-control form-control-file"
+                  @change="onAttachmentChange"
+                />
+                <p v-if="selectedAttachment" class="text-sm attachment-name">
+                  {{ selectedAttachment.name }}
+                </p>
+              </div>
               <p v-if="dayCount !== null" class="text-sm text-muted" style="margin-bottom:12px;">
                 Duration: <strong>{{ dayCount }}</strong> day(s)
               </p>
@@ -95,7 +110,7 @@
                 <col style="width:64px;" />
                 <col />
                 <col style="width:140px;" />
-                <col style="width:170px;" />
+                <col style="width:220px;" />
               </colgroup>
               <thead>
                 <tr>
@@ -128,6 +143,14 @@
                   <td><span class="badge" :class="`badge-${r.status}`">{{ statusLabel(r.status) }}</span></td>
                   <td>
                     <div class="row-actions">
+                      <button
+                        v-if="hasAttachment(r)"
+                        type="button"
+                        class="btn btn-outline btn-sm btn-download"
+                        :disabled="downloadId === r.id"
+                        title="Download supporting document"
+                        @click="downloadAttachment(r.id)"
+                      >Download</button>
                       <button
                         v-if="r.status === 'pending'"
                         type="button"
@@ -274,7 +297,15 @@
                             <button class="btn btn-primary btn-sm" :disabled="actionId === r.id" @click="approve(r.id)">Approve</button>
                             <button class="btn btn-danger btn-sm" :disabled="actionId === r.id" @click="openReject(r)">Reject</button>
                           </template>
-                          <span v-else class="text-muted text-sm">—</span>
+                          <button
+                            v-if="hasAttachment(r)"
+                            type="button"
+                            class="btn btn-outline btn-sm btn-download"
+                            :disabled="downloadId === r.id"
+                            title="Download supporting document"
+                            @click="downloadAttachment(r.id)"
+                          >Download</button>
+                          <span v-else-if="r.status !== 'pending'" class="text-muted text-sm">—</span>
                         </div>
                       </td>
                     </tr>
@@ -485,7 +516,15 @@
                           <button class="btn btn-primary btn-sm" :disabled="actionId === r.id" @click="approve(r.id)">Approve</button>
                           <button class="btn btn-danger btn-sm" :disabled="actionId === r.id" @click="openReject(r)">Reject</button>
                         </template>
-                        <span v-else class="text-muted text-sm">—</span>
+                        <button
+                          v-if="hasAttachment(r)"
+                          type="button"
+                          class="btn btn-outline btn-sm btn-download"
+                          :disabled="downloadId === r.id"
+                          title="Download supporting document"
+                          @click="downloadAttachment(r.id)"
+                        >Download</button>
+                        <span v-else-if="r.status !== 'pending'" class="text-muted text-sm">—</span>
                       </div>
                     </td>
                   </tr>
@@ -641,6 +680,9 @@ const formWarning = ref('');
 const formWarningTitle = ref('');
 const submitting = ref(false);
 const loading = ref(false);
+const selectedAttachment = ref(null);
+const attachmentInputRef = ref(null);
+const downloadId = ref(null);
 const records = ref([]);
 const pagination = reactive({ total: 0, page: 1, limit: 15 });
 const filterStatus = ref('');
@@ -729,6 +771,51 @@ const resetFormDates = () => {
   form.end_date = ymd;
   form.reason = '';
   form.request_type = 'cuti';
+  selectedAttachment.value = null;
+  if (attachmentInputRef.value) attachmentInputRef.value.value = '';
+};
+
+const hasAttachment = (r) => Boolean(r?.has_attachment || r?.attachment_gcs_path);
+
+const onAttachmentChange = (e) => {
+  selectedAttachment.value = e.target.files?.[0] || null;
+};
+
+const downloadAttachment = async (id) => {
+  downloadId.value = id;
+  try {
+    const { data } = await api.get(`/leaves/${id}/attachment`);
+    const payload = data?.data;
+    if (!data?.success || !payload) return;
+
+    if (payload.mode === 'local') {
+      const blobRes = await api.get(`/leaves/${id}/attachment/file`, { responseType: 'blob' });
+      const blobUrl = URL.createObjectURL(blobRes.data);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = payload.filename || 'attachment';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(blobUrl);
+      return;
+    }
+
+    if (payload.url) {
+      const a = document.createElement('a');
+      a.href = payload.url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      if (payload.filename) a.download = payload.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+  } catch (err) {
+    window.alert(err?.response?.data?.message || 'Download failed.');
+  } finally {
+    downloadId.value = null;
+  }
 };
 
 const onFilterChange = () => {
@@ -831,11 +918,16 @@ const submitLeave = async () => {
   try {
     const startYmd = String(form.start_date || '').slice(0, 10);
     const endYmd = String(form.end_date || '').slice(0, 10);
-    const { data } = await api.post('/leaves', {
-      request_type: form.request_type,
-      start_date: startYmd,
-      end_date: endYmd,
-      reason: form.reason || null,
+    const fd = new FormData();
+    fd.append('request_type', form.request_type);
+    fd.append('start_date', startYmd);
+    fd.append('end_date', endYmd);
+    if (form.reason) fd.append('reason', form.reason);
+    if (selectedAttachment.value) fd.append('attachment', selectedAttachment.value);
+
+    const { data } = await api.post('/leaves', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 60000,
     });
     if (data.success) {
       formSuccess.value = data.message || 'Submitted.';
@@ -1241,6 +1333,22 @@ onMounted(() => {
 .btn-withdraw:hover:not(:disabled) {
   background: #fef3c7;
   border-color: #f59e0b;
+}
+.btn-download {
+  color: var(--bc-green-700);
+  border-color: #bbf7d0;
+}
+.btn-download:hover:not(:disabled) {
+  background: #ecfdf5;
+  border-color: var(--bc-green-500);
+}
+.form-control-file {
+  padding: 8px 10px;
+  font-size: 13px;
+}
+.attachment-name {
+  margin: 6px 0 0;
+  color: var(--bc-gray-600);
 }
 
 .bulk-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
