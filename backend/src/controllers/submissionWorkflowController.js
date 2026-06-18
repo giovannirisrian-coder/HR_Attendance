@@ -7,8 +7,57 @@ const {
   fetchVendorMonthlyPdfData,
   fetchVendorAttendanceRowsForMonthlyPdf,
 } = require('../services/vendorMonthlyPdfData');
+const {
+  parseVendorFileRef,
+  parseOtherSupportingRefs,
+} = require('../utils/vendorFileRef');
+const {
+  getVendorAttachmentReadStream,
+  vendorAttachmentExists,
+  parseStorageRef,
+} = require('../services/gcsStorageService');
 
 const DOCS_DIR = path.join(__dirname, '../../uploads/documents');
+
+const sanitizeZipEntryName = (name, fallback) => {
+  const base = path.basename(String(name || fallback || 'file'));
+  return base.replace(/[^\w.\-() ]+/g, '_') || 'file';
+};
+
+async function appendVendorFileToArchive(archive, storedVal, zipBaseName) {
+  const ref = parseVendorFileRef(storedVal);
+  if (!ref) return;
+
+  if (ref.legacyLocal) {
+    const abs = path.join(DOCS_DIR, ref.path);
+    if (fs.existsSync(abs)) {
+      const ext = path.extname(ref.path) || path.extname(ref.name) || '.bin';
+      archive.file(abs, { name: `${zipBaseName}${ext}` });
+    }
+    return;
+  }
+
+  const storageRef = parseStorageRef(ref.path);
+  if (!storageRef) return;
+
+  let exists = false;
+  try {
+    exists = await vendorAttachmentExists(ref.path);
+  } catch {
+    exists = false;
+  }
+  if (!exists) return;
+
+  const entryName = ref.legacyLocal
+    ? `${zipBaseName}${path.extname(ref.path) || path.extname(ref.name) || '.bin'}`
+    : `${zipBaseName}_${sanitizeZipEntryName(ref.name, zipBaseName)}`;
+  try {
+    const stream = getVendorAttachmentReadStream(ref.path);
+    archive.append(stream, { name: entryName });
+  } catch (err) {
+    console.warn('Zip skip file:', ref.path, err.message);
+  }
+}
 
 async function fetchVendorAttendanceRows(vendorId, month, year) {
   return fetchVendorAttendanceRowsForMonthlyPdf(vendorId, month, year);
@@ -65,27 +114,7 @@ const downloadSubmissionAttachments = async (req, res) => {
     const sub = await getSubmissionById(id);
     if (!sub) return res.status(404).json({ success: false, message: 'Submission not found.' });
 
-    const parseOtherSupporting = (val) => {
-      if (val == null) return [];
-      if (Array.isArray(val)) return val.filter((x) => typeof x === 'string');
-      if (Buffer.isBuffer(val)) {
-        try {
-          const j = JSON.parse(val.toString('utf8'));
-          return Array.isArray(j) ? j.filter((x) => typeof x === 'string') : [];
-        } catch {
-          return [];
-        }
-      }
-      if (typeof val === 'string') {
-        try {
-          const j = JSON.parse(val);
-          return Array.isArray(j) ? j.filter((x) => typeof x === 'string') : [];
-        } catch {
-          return [];
-        }
-      }
-      return [];
-    };
+    const parseOtherSupporting = (val) => parseOtherSupportingRefs(val);
 
     const files = [
       { field: 'bast_file', label: 'BAST' },
@@ -104,23 +133,17 @@ const downloadSubmissionAttachments = async (req, res) => {
     archive.pipe(res);
 
     for (const f of files) {
-      const name = sub[f.field];
-      if (!name) continue;
-      const abs = path.join(DOCS_DIR, name);
-      if (fs.existsSync(abs)) {
-        const ext = path.extname(name) || '.bin';
-        archive.file(abs, { name: `${f.label}${ext}` });
-      }
+      const stored = sub[f.field];
+      if (!stored) continue;
+      await appendVendorFileToArchive(archive, stored, f.label);
     }
 
     const others = parseOtherSupporting(sub.other_supporting_files);
-    others.forEach((name, i) => {
-      const abs = path.join(DOCS_DIR, name);
-      if (fs.existsSync(abs)) {
-        const ext = path.extname(name) || '.bin';
-        archive.file(abs, { name: `Other_Supporting_${i + 1}${ext}` });
-      }
-    });
+    for (let i = 0; i < others.length; i += 1) {
+      const item = others[i];
+      const stored = item.legacyLocal ? item.path : { path: item.path, name: item.name };
+      await appendVendorFileToArchive(archive, stored, `Other_Supporting_${i + 1}`);
+    }
 
     archive.on('error', (e) => {
       console.error('Zip error:', e);

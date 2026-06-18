@@ -18,14 +18,7 @@ const {
   ssuMarkPaid,
 } = require('../controllers/submissionWorkflowController');
 const { authenticate, authorize } = require('../middleware/auth');
-const upload = require('../middleware/upload');
-
-const docFields = upload.fields([
-  { name: 'tax_invoice_file', maxCount: 1 },
-  { name: 'invoice_file', maxCount: 1 },
-  { name: 'receipt_file', maxCount: 1 },
-  { name: 'other_supporting_documents', maxCount: 25 },
-]);
+const { handleVendorDocUpload } = require('../middleware/vendorUpload');
 
 // ── LS HR ───────────────────────────────────────────────────────────────────
 router.get('/hr/submissions', authenticate, authorize('ls_hr'), listHrSubmissions);
@@ -46,6 +39,6 @@ router.post('/ssu/submissions/:id/mark-paid', authenticate, authorize('ssu'), ss
 router.get('/vendor/summary', authenticate, authorize('vendor'), getVendorMonthlySummary);
 router.get('/vendor/:month/:year/pdf', authenticate, authorize('vendor'), downloadVendorMonthlyPdf);
 router.get('/vendor/:month/:year', authenticate, authorize('vendor'), getVendorMonthlyDetail);
-router.post('/vendor/:month/:year', authenticate, authorize('vendor'), docFields, submitVendorMonthly);
+router.post('/vendor/:month/:year', authenticate, authorize('vendor'), handleVendorDocUpload, submitVendorMonthly);
 
 module.exports = router;
