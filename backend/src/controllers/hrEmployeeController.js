@@ -143,13 +143,18 @@ const SELECT_COLS = `
   h.npk, h.sid, h.employee_name, h.email, h.position, h.position_group,
   h.employee_group, h.site,
   h.supervisor_id, s.name AS supervisor_name, s.employee_id AS supervisor_employee_id,
+  h.replaces_employee_id,
+  prev.employee_name AS replaced_employee_name,
+  repl.employee_name AS replacement_employee_name,
   h.user_status,
   h.created_by, h.updated_by, h.created_at, h.updated_at
 `;
 
 const FROM_JOIN = `FROM hr_employees h
   LEFT JOIN vendors v ON v.id = h.vendor_id
-  LEFT JOIN users   s ON s.id = h.supervisor_id`;
+  LEFT JOIN users   s ON s.id = h.supervisor_id
+  LEFT JOIN hr_employees prev ON prev.id = h.replaces_employee_id
+  LEFT JOIN hr_employees repl ON repl.replaces_employee_id = h.id`;
 
 const sanitizeText = (raw) => {
   if (raw === undefined || raw === null) return '';
@@ -502,6 +507,23 @@ const parseSupervisorId = (raw) => {
 };
 
 /**
+ * Parse replaces_employee_id (Replacement lookup) from the client.
+ * Same semantics as parseSupervisorId — optional, clearable FK.
+ */
+const parseReplacesEmployeeId = (raw) => {
+  if (raw === undefined) return { provided: false };
+  if (raw === null || raw === '') return { provided: true, value: null };
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+    return {
+      provided: true,
+      error: 'Field "replaces_employee_id" must be a positive integer or null.',
+    };
+  }
+  return { provided: true, value: n };
+};
+
+/**
  * Validate + normalize a request body into a column => value map.
  *
  * All fields are OPTIONAL. Empty / missing values are coerced to `null` so
@@ -580,7 +602,12 @@ const validateBody = (body, opts = {}) => {
     return { ok: false, error: supervisorId.error };
   }
 
-  return { ok: true, fields, vendorId, supervisorId };
+  const replacesEmployeeId = parseReplacesEmployeeId(body.replaces_employee_id);
+  if (replacesEmployeeId.error) {
+    return { ok: false, error: replacesEmployeeId.error };
+  }
+
+  return { ok: true, fields, vendorId, supervisorId, replacesEmployeeId };
 };
 
 /**
@@ -638,6 +665,76 @@ const resolveSupervisor = async (userId) => {
     console.error('Resolve supervisor error:', err);
     return { ok: false, status: 500, message: 'Server error.' };
   }
+};
+
+/**
+ * Resolve a replaces_employee_id to a deactivated hr_employees row from
+ * the same vendor. The candidate must have user_status='Deactive' and
+ * cannot be the employee currently being edited.
+ */
+const resolveReplacementEmployee = async (executor, replacesEmployeeId, { vendorId, excludeEmployeeId = null }) => {
+  if (replacesEmployeeId == null) return { ok: true, employee: null };
+  if (vendorId == null) {
+    return {
+      ok: false,
+      status: 400,
+      message: 'Select a vendor before choosing a replacement employee.',
+    };
+  }
+  try {
+    const [rows] = await executor.query(
+      `SELECT id, employee_name, vendor_id, user_status
+         FROM hr_employees
+        WHERE id = ?
+        LIMIT 1`,
+      [replacesEmployeeId]
+    );
+    if (rows.length === 0) {
+      return { ok: false, status: 400, message: 'Selected replacement employee does not exist.' };
+    }
+    const candidate = rows[0];
+    if (excludeEmployeeId && candidate.id === excludeEmployeeId) {
+      return {
+        ok: false,
+        status: 400,
+        message: 'An employee cannot be marked as their own replacement.',
+      };
+    }
+    if (candidate.user_status !== 'Deactive') {
+      return {
+        ok: false,
+        status: 400,
+        message: 'Replacement must be a deactivated employee.',
+      };
+    }
+    if (candidate.vendor_id !== vendorId) {
+      return {
+        ok: false,
+        status: 400,
+        message: 'Replacement employee must belong to the same vendor.',
+      };
+    }
+    return { ok: true, employee: candidate };
+  } catch (err) {
+    console.error('Resolve replacement employee error:', err);
+    return { ok: false, status: 500, message: 'Server error.' };
+  }
+};
+
+/**
+ * Insert an audit row into employee_replacement_logs when PIC LS links
+ * a new active employee to a deactivated predecessor.
+ */
+const insertReplacementLog = async (
+  conn,
+  { previousEmployeeName, replacementEmployeeName, createdBy }
+) => {
+  await conn.query(
+    `INSERT INTO employee_replacement_logs
+       (previous_employee, replacement_employee, created_by)
+     VALUES (?, ?, ?)`,
+    [previousEmployeeName, replacementEmployeeName, createdBy]
+  );
 };
 
 /**
@@ -1023,6 +1120,7 @@ const EMPLOYEE_EXPORT_HEADERS = [
   'Employee Group',
   'Site',
   'Supervisor',
+  'Replacement',
   'User Status',
 ];
 
@@ -1039,6 +1137,7 @@ const EMPLOYEE_EXPORT_COL_WIDTHS = [
   { wch: 14 },
   { wch: 12 },
   { wch: 22 },
+  { wch: 24 },
   { wch: 12 },
 ];
 
@@ -1197,6 +1296,68 @@ const listSupervisors = async (req, res) => {
 };
 
 /**
+ * GET /api/employees/replacements
+ * Returns deactivated hr_employees for the Replacement searchable lookup
+ * on Create / Edit Employee forms. Filtered by vendor_id (required) and
+ * optional search on employee_name / npk.
+ *
+ * Query params:
+ *   • vendor_id — required positive integer
+ *   • search    — partial match on employee_name or npk
+ *   • exclude_id — optional hr_employees.id to omit (Edit: current row)
+ *   • limit     — soft cap (default 100, max 500)
+ */
+const listReplacementCandidates = async (req, res) => {
+  try {
+    const vendorIdRaw = req.query.vendor_id;
+    const vendorId =
+      vendorIdRaw !== undefined && vendorIdRaw !== '' && Number.isFinite(Number(vendorIdRaw))
+        ? Number(vendorIdRaw)
+        : null;
+    if (!vendorId || vendorId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Query parameter "vendor_id" is required.',
+      });
+    }
+
+    const search = sanitizeText(req.query.search);
+    const excludeIdRaw = req.query.exclude_id;
+    const excludeId =
+      excludeIdRaw !== undefined && excludeIdRaw !== '' && Number.isFinite(Number(excludeIdRaw))
+        ? Number(excludeIdRaw)
+        : null;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
+
+    let where = `WHERE h.user_status = 'Deactive' AND h.vendor_id = ?`;
+    const params = [vendorId];
+    if (excludeId && excludeId > 0) {
+      where += ' AND h.id <> ?';
+      params.push(excludeId);
+    }
+    if (search) {
+      where += ' AND (h.employee_name LIKE ? OR h.npk LIKE ?)';
+      const t = `%${search}%`;
+      params.push(t, t);
+    }
+
+    const [rows] = await db.query(
+      `SELECT h.id, h.employee_name, h.npk, h.sid, h.vendor_id
+         FROM hr_employees h
+         ${where}
+         ORDER BY h.employee_name ASC, h.id ASC
+         LIMIT ?`,
+      [...params, limit]
+    );
+
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    console.error('List replacement candidates error:', err);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
+/**
  * GET /api/employees/:id
  */
 const getEmployeeById = async (req, res) => {
@@ -1281,6 +1442,13 @@ const createEmployee = async (req, res) => {
     supervisorId = rs.user ? rs.user.id : null;
   }
 
+  let replacesEmployeeId = null;
+  if (v.replacesEmployeeId && v.replacesEmployeeId.provided && v.replacesEmployeeId.value != null) {
+    const rr = await resolveReplacementEmployee(db, v.replacesEmployeeId.value, { vendorId });
+    if (!rr.ok) return res.status(rr.status).json({ success: false, message: rr.message });
+    replacesEmployeeId = rr.employee ? rr.employee.id : null;
+  }
+
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -1318,16 +1486,30 @@ const createEmployee = async (req, res) => {
       `INSERT INTO hr_employees (
          user_id, vendor_id, vendor_number, user_department, vendor_name,
          npk, sid, employee_name, email, position, position_group, employee_group, site,
-         supervisor_id, user_status, created_by, updated_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         supervisor_id, replaces_employee_id, user_status, created_by, updated_by
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         provisionedUserId,
         vendorId,
         f.vendor_number, f.user_department, f.vendor_name,
         f.npk, f.sid, f.employee_name, f.email, f.position, f.position_group, f.employee_group, f.site,
-        supervisorId, f.user_status, actorName, actorName,
+        supervisorId, replacesEmployeeId, f.user_status, actorName, actorName,
       ]
     );
+
+    if (replacesEmployeeId != null) {
+      const [prevRows] = await conn.query(
+        'SELECT employee_name FROM hr_employees WHERE id = ? LIMIT 1',
+        [replacesEmployeeId]
+      );
+      const previousName = prevRows[0]?.employee_name || 'Unknown';
+      const replacementName = f.employee_name || 'Unknown';
+      await insertReplacementLog(conn, {
+        previousEmployeeName: previousName,
+        replacementEmployeeName: replacementName,
+        createdBy: actorName,
+      });
+    }
 
     await conn.commit();
 
@@ -1416,26 +1598,13 @@ const updateEmployee = async (req, res) => {
     fields.supervisor_id = rs.user ? rs.user.id : null;
   }
 
-  const keys = Object.keys(fields);
-  if (keys.length === 0) {
-    return res.status(400).json({
-      success: false,
-      message: 'No valid fields to update.',
-    });
-  }
-
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
 
-    // Lock the row for the duration of the transaction so the
-    // user-account sync sees a consistent snapshot even when two PIC
-    // LS officers race on the same record. user_status is loaded so
-    // we can mirror it onto users.is_active even when the current
-    // PATCH leaves it untouched.
     const [existingRows] = await conn.query(
       `SELECT id, user_id, employee_name, npk, sid, email,
-              vendor_id, supervisor_id, user_status
+              vendor_id, supervisor_id, replaces_employee_id, user_status
          FROM hr_employees
         WHERE id = ?
         FOR UPDATE`,
@@ -1446,6 +1615,34 @@ const updateEmployee = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Employee not found.' });
     }
     const existing = existingRows[0];
+
+    const mergedVendorId =
+      fields.vendor_id !== undefined ? fields.vendor_id : existing.vendor_id;
+
+    if (v.replacesEmployeeId && v.replacesEmployeeId.provided) {
+      if (v.replacesEmployeeId.value == null) {
+        fields.replaces_employee_id = null;
+      } else {
+        const rr = await resolveReplacementEmployee(conn, v.replacesEmployeeId.value, {
+          vendorId: mergedVendorId,
+          excludeEmployeeId: id,
+        });
+        if (!rr.ok) {
+          await conn.rollback();
+          return res.status(rr.status).json({ success: false, message: rr.message });
+        }
+        fields.replaces_employee_id = rr.employee ? rr.employee.id : null;
+      }
+    }
+
+    const keys = Object.keys(fields);
+    if (keys.length === 0) {
+      await conn.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'No valid fields to update.',
+      });
+    }
 
     const setClause = keys.map((k) => `${k} = ?`).join(', ');
     const values = keys.map((k) => fields[k]);
@@ -1544,6 +1741,31 @@ const updateEmployee = async (req, res) => {
         `UPDATE hr_employees SET user_id = ? WHERE id = ?`,
         [newUserId, id]
       );
+    }
+
+    const newReplacesId =
+      fields.replaces_employee_id !== undefined
+        ? fields.replaces_employee_id
+        : existing.replaces_employee_id;
+    const oldReplacesId = existing.replaces_employee_id;
+    const replacementChanged =
+      fields.replaces_employee_id !== undefined &&
+      (newReplacesId ?? null) !== (oldReplacesId ?? null);
+
+    if (replacementChanged && newReplacesId != null) {
+      const [prevRows] = await conn.query(
+        'SELECT employee_name FROM hr_employees WHERE id = ? LIMIT 1',
+        [newReplacesId]
+      );
+      const previousName = prevRows[0]?.employee_name || 'Unknown';
+      const replacementName =
+        (fields.employee_name !== undefined ? fields.employee_name : existing.employee_name) ||
+        'Unknown';
+      await insertReplacementLog(conn, {
+        previousEmployeeName: previousName,
+        replacementEmployeeName: replacementName,
+        createdBy: updatedBy,
+      });
     }
 
     await conn.commit();
@@ -1645,6 +1867,7 @@ const exportEmployeesExcel = async (req, res) => {
       r.employee_group || '',
       r.site || '',
       r.supervisor_name || '',
+      r.replaced_employee_name || r.replacement_employee_name || '',
       r.user_status || '',
     ]);
 
@@ -1883,6 +2106,7 @@ module.exports = {
   exportEmployeesExcel,
   listVendors,
   listSupervisors,
+  listReplacementCandidates,
   getEmployeeById,
   createEmployee,
   updateEmployee,

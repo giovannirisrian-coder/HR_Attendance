@@ -10,6 +10,7 @@ const {
   exportEmployeesExcel,
   listVendors,
   listSupervisors,
+  listReplacementCandidates,
   getEmployeeById,
   createEmployee,
   updateEmployee,
@@ -26,6 +27,7 @@ router.use(authenticate, authorize('ls_hr'));
 // static path segments are not mistakenly parsed as an employee id.
 router.get('/vendors', listVendors);
 router.get('/supervisors', listSupervisors);
+router.get('/replacements', listReplacementCandidates);
 
 // Administrative password reset by SID (PIC LS). Declared before the
 // `/:id` routes so the static segment is not parsed as an employee id.
