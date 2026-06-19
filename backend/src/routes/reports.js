@@ -19,6 +19,10 @@ const {
 } = require('../controllers/submissionWorkflowController');
 const { authenticate, authorize } = require('../middleware/auth');
 const { handleVendorDocUpload } = require('../middleware/vendorUpload');
+const {
+  getVendorConfig,
+  updateVendorConfig,
+} = require('../controllers/vendorConfigController');
 
 // ── LS HR ───────────────────────────────────────────────────────────────────
 router.get('/hr/submissions', authenticate, authorize('ls_hr'), listHrSubmissions);
@@ -36,6 +40,8 @@ router.post('/ssu/submissions/:id/reject', authenticate, authorize('ssu'), ssuRe
 router.post('/ssu/submissions/:id/mark-paid', authenticate, authorize('ssu'), ssuMarkPaid);
 
 // ── Vendor (paths before generic :id if any) ────────────────────────────────
+router.get('/vendor/config', authenticate, authorize('vendor'), getVendorConfig);
+router.put('/vendor/config', authenticate, authorize('vendor'), updateVendorConfig);
 router.get('/vendor/summary', authenticate, authorize('vendor'), getVendorMonthlySummary);
 router.get('/vendor/:month/:year/pdf', authenticate, authorize('vendor'), downloadVendorMonthlyPdf);
 router.get('/vendor/:month/:year', authenticate, authorize('vendor'), getVendorMonthlyDetail);

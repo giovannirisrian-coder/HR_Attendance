@@ -50,6 +50,7 @@ const routes = [
     children: [
       { path: 'reports', component: () => import('../views/vendor/ReportList.vue') },
       { path: 'reports/:month/:year/detail', component: () => import('../views/vendor/ReportDetail.vue') },
+      { path: 'config', component: () => import('../views/vendor/VendorConfig.vue') },
     ],
   },
 

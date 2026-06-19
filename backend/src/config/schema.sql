@@ -19,8 +19,9 @@ CREATE TABLE IF NOT EXISTS vendors (
   address     TEXT,
   phone       VARCHAR(30),
   email       VARCHAR(150),
-  is_active   TINYINT(1)   NOT NULL DEFAULT 1,
-  created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  is_active        TINYINT(1)        NOT NULL DEFAULT 1,
+  close_book_date  TINYINT UNSIGNED  NOT NULL DEFAULT 1 COMMENT '1–27: close on day N; 28: end of month',
+  created_at       TIMESTAMP         NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 

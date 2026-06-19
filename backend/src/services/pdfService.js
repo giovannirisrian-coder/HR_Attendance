@@ -1,4 +1,5 @@
 const PDFDocument = require('pdfkit');
+const { formatPeriodRangeLabel } = require('../utils/vendorCloseBookDate');
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -140,24 +141,31 @@ function mergeLeaveOnlyGroups(groups, leaveRows) {
  * recap-reporting pipeline, so every calendar day in the (clamped) range
  * is billable — matching how attendance itself is recorded.
  */
-function leaveDaysInMonth(startRaw, endRaw, year, month) {
+function leaveDaysInPeriod(startRaw, endRaw, periodStart, periodEnd) {
   const startYmd = ymdFromRaw(startRaw);
   const endYmd = ymdFromRaw(endRaw);
-  if (!startYmd || !endYmd) return 0;
+  if (!startYmd || !endYmd || !periodStart || !periodEnd) return 0;
 
-  const padM = String(month).padStart(2, '0');
-  const lastDay = new Date(year, month, 0).getDate();
-  const monthStart = `${year}-${padM}-01`;
-  const monthEnd = `${year}-${padM}-${String(lastDay).padStart(2, '0')}`;
-
-  const from = startYmd > monthStart ? startYmd : monthStart;
-  const to = endYmd < monthEnd ? endYmd : monthEnd;
+  const from = startYmd > periodStart ? startYmd : periodStart;
+  const to = endYmd < periodEnd ? endYmd : periodEnd;
   if (from > to) return 0;
 
   const [fy, fm, fd] = from.split('-').map(Number);
   const [ty, tm, td] = to.split('-').map(Number);
   const diffDays = (Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86400000;
   return Math.floor(diffDays) + 1;
+}
+
+/** @deprecated Use leaveDaysInPeriod — kept for internal rename clarity */
+function leaveDaysInMonth(startRaw, endRaw, year, month, periodStart, periodEnd) {
+  if (periodStart && periodEnd) {
+    return leaveDaysInPeriod(startRaw, endRaw, periodStart, periodEnd);
+  }
+  const padM = String(month).padStart(2, '0');
+  const lastDay = new Date(year, month, 0).getDate();
+  const monthStart = `${year}-${padM}-01`;
+  const monthEnd = `${year}-${padM}-${String(lastDay).padStart(2, '0')}`;
+  return leaveDaysInPeriod(startRaw, endRaw, monthStart, monthEnd);
 }
 
 /**
@@ -169,7 +177,9 @@ function leaveDaysInMonth(startRaw, endRaw, year, month) {
  * reporting month. Only `approved` requests are summed, preserving the
  * Managerial Review workflow's billable-day rule.
  */
-function applyMonthlyLeaveCountsFromRequests(groups, leaveRows, year, month) {
+function applyMonthlyLeaveCountsFromRequests(groups, leaveRows, year, month, period) {
+  const periodStart = period?.startDate;
+  const periodEnd = period?.endDate;
   const approved = (leaveRows || []).filter((lr) => String(lr.status || '').toLowerCase() === 'approved');
   for (const g of groups) {
     const mine = approved.filter(
@@ -178,7 +188,10 @@ function applyMonthlyLeaveCountsFromRequests(groups, leaveRows, year, month) {
     const sumDays = (type) =>
       mine
         .filter((x) => x.request_type === type)
-        .reduce((acc, x) => acc + leaveDaysInMonth(x.start_date, x.end_date, year, month), 0);
+        .reduce(
+          (acc, x) => acc + leaveDaysInMonth(x.start_date, x.end_date, year, month, periodStart, periodEnd),
+          0
+        );
     g.leave_cuti = sumDays('cuti');
     g.leave_izin = sumDays('izin');
     g.leave_sakit = sumDays('sakit');
@@ -323,7 +336,7 @@ function drawAttendanceSummaryTable(doc, yStart, groups) {
 }
 
 /** @returns {number} next Y below header */
-function drawBrandHeader(doc, vendor, month, year) {
+function drawBrandHeader(doc, vendor, month, year, period) {
   const x0 = PAGE.margin;
   const w = usableW();
   let y = PAGE.margin;
@@ -345,7 +358,19 @@ function drawBrandHeader(doc, vendor, month, year) {
   y += 16;
   doc.font('Helvetica-Bold').fontSize(10.5).fillColor(C.accent);
   doc.text(`${MONTH_NAMES[month - 1]} ${year}`, x0, y, { width: w, align: 'center' });
-  y += 22;
+  y += 14;
+  if (period?.startDate && period?.endDate) {
+    doc.font('Helvetica').fontSize(9).fillColor(C.muted);
+    doc.text(
+      `Reporting period: ${formatPeriodRangeLabel(period.startDate, period.endDate)}`,
+      x0,
+      y,
+      { width: w, align: 'center' }
+    );
+    y += 16;
+  } else {
+    y += 6;
+  }
 
   const boxH = 50;
   doc.roundedRect(x0, y, w, boxH, 3).lineWidth(0.7).strokeColor(C.border).stroke();
@@ -664,7 +689,7 @@ function finishPdf(doc) {
  * Build a consolidated monthly timesheet PDF for all LS under a vendor.
  */
 function buildVendorMonthlyTimesheetPdf(opts) {
-  const { vendor, month, year, rows, leaveRows } = opts;
+  const { vendor, month, year, period, rows, leaveRows } = opts;
   const m = Math.min(12, Math.max(1, parseInt(month, 10) || 1));
   const reportYear = parseInt(year, 10) || new Date().getFullYear();
 
@@ -690,7 +715,7 @@ function buildVendorMonthlyTimesheetPdf(opts) {
     status: Math.max(56, uw - 70 - 30 - 56 - 56 - 44 - 48),
   };
 
-  const headerBottom = drawBrandHeader(doc, vendor, m, reportYear);
+  const headerBottom = drawBrandHeader(doc, vendor, m, reportYear, period);
   doc.x = PAGE.margin;
   doc.y = headerBottom;
 
@@ -707,7 +732,7 @@ function buildVendorMonthlyTimesheetPdf(opts) {
 
   let groups = aggregateByEmployee(rows || []);
   mergeLeaveOnlyGroups(groups, lr);
-  applyMonthlyLeaveCountsFromRequests(groups, lr, reportYear, m);
+  applyMonthlyLeaveCountsFromRequests(groups, lr, reportYear, m, period);
   doc.y = drawSummaryPanel(doc, doc.y, groups, rows || []);
   doc.y = drawAttendanceSummaryTable(doc, doc.y, groups);
   doc.moveDown(0.25);

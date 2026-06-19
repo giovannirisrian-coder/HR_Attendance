@@ -8,7 +8,10 @@
         </button>
         <div>
           <h1 class="page-title">Vendor monthly report</h1>
-          <p class="page-subtitle">{{ vendor?.name }} · {{ monthName }} {{ year }}</p>
+          <p class="page-subtitle">
+            {{ vendor?.name }} · {{ monthName }} {{ year }}
+            <span v-if="period?.label" class="period-chip">{{ period.label }}</span>
+          </p>
         </div>
       </div>
       <div class="flex items-center gap-2" style="flex-wrap:wrap;">
@@ -293,6 +296,7 @@ const uploadProgress = ref(0);
 const submitSuccess = ref(false);
 const submitError = ref('');
 const vendor = ref(null);
+const period = ref(null);
 const employees = ref([]);
 const submission = ref(null);
 
@@ -456,6 +460,7 @@ const loadData = async () => {
   try {
     const { data } = await api.get(`/reports/vendor/${month.value}/${year.value}`);
     vendor.value = data.vendor;
+    period.value = data.period || null;
     employees.value = data.employees || [];
     submission.value = data.submission;
     applySubmissionToForm(data.submission);
@@ -628,4 +633,16 @@ onMounted(loadData);
   transition: width 0.15s ease;
 }
 @media (max-width: 1100px) { .detail-layout { grid-template-columns: 1fr; } .recap-card { position: static; } }
+.period-chip {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 10px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--bc-green-800, #145228);
+  background: var(--bc-green-50, #ecfdf5);
+  border: 1px solid var(--bc-green-200, #a7f3d0);
+  border-radius: 99px;
+  vertical-align: middle;
+}
 </style>
