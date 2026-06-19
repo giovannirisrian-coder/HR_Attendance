@@ -132,6 +132,23 @@ function mergeLeaveOnlyGroups(groups, leaveRows) {
 }
 
 /**
+ * Clamp a leave [start_date, end_date] to the vendor reporting period.
+ * Display-only helper — never mutates source data.
+ * @returns {{ startYmd: string, endYmd: string } | null}
+ */
+function clampLeaveDateRangeToPeriod(startRaw, endRaw, periodStart, periodEnd) {
+  const startYmd = ymdFromRaw(startRaw);
+  const endYmd = ymdFromRaw(endRaw);
+  if (!startYmd || !endYmd || !periodStart || !periodEnd) return null;
+
+  const clampedStart = startYmd > periodStart ? startYmd : periodStart;
+  const clampedEnd = endYmd < periodEnd ? endYmd : periodEnd;
+  if (clampedStart > clampedEnd) return null;
+
+  return { startYmd: clampedStart, endYmd: clampedEnd };
+}
+
+/**
  * Inclusive number of leave days a request contributes to ONE reporting
  * month. The request's [start_date, end_date] range is clamped to the
  * month boundaries so a leave spanning a month edge only counts the days
@@ -142,14 +159,10 @@ function mergeLeaveOnlyGroups(groups, leaveRows) {
  * is billable — matching how attendance itself is recorded.
  */
 function leaveDaysInPeriod(startRaw, endRaw, periodStart, periodEnd) {
-  const startYmd = ymdFromRaw(startRaw);
-  const endYmd = ymdFromRaw(endRaw);
-  if (!startYmd || !endYmd || !periodStart || !periodEnd) return 0;
+  const clamped = clampLeaveDateRangeToPeriod(startRaw, endRaw, periodStart, periodEnd);
+  if (!clamped) return 0;
 
-  const from = startYmd > periodStart ? startYmd : periodStart;
-  const to = endYmd < periodEnd ? endYmd : periodEnd;
-  if (from > to) return 0;
-
+  const { startYmd: from, endYmd: to } = clamped;
   const [fy, fm, fd] = from.split('-').map(Number);
   const [ty, tm, td] = to.split('-').map(Number);
   const diffDays = (Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86400000;
@@ -489,7 +502,18 @@ function paintStatusCell(doc, raw, x, ty, width) {
   doc.text(statusLabel(raw), x, ty, { width });
 }
 
-function formatLeaveDateRange(start, end) {
+function formatLeaveDateRange(start, end, period) {
+  const periodStart = period?.startDate;
+  const periodEnd = period?.endDate;
+
+  if (periodStart && periodEnd) {
+    const clamped = clampLeaveDateRangeToPeriod(start, end, periodStart, periodEnd);
+    if (!clamped) return '—';
+    const { startYmd, endYmd } = clamped;
+    if (startYmd === endYmd) return startYmd;
+    return `${startYmd} – ${endYmd}`;
+  }
+
   const a = ymdFromRaw(start);
   const b = ymdFromRaw(end);
   if (!a || !b) return '—';
@@ -498,7 +522,7 @@ function formatLeaveDateRange(start, end) {
 }
 
 /** @returns {number} next Y below absence block */
-function drawAbsenceSection(doc, x0, yStart, tw, leaveItems, groupLabel) {
+function drawAbsenceSection(doc, x0, yStart, tw, leaveItems, groupLabel, period) {
   const maxY = PAGE.h - PAGE.bottomReserve;
   const rowH = 17;
   /** Space between attendance table and absence section title */
@@ -535,7 +559,7 @@ function drawAbsenceSection(doc, x0, yStart, tw, leaveItems, groupLabel) {
     let x = x0 + 6;
     const ty = hy + 4;
     doc.font('Helvetica').fontSize(8).fillColor(C.ink);
-    doc.text(formatLeaveDateRange(lr.start_date, lr.end_date), x, ty, { width: colAbs.date - 4 });
+    doc.text(formatLeaveDateRange(lr.start_date, lr.end_date, period), x, ty, { width: colAbs.date - 4 });
     x += colAbs.date;
     doc.text(absenceTypeLabel(lr.request_type), x, ty, { width: colAbs.type - 4 });
     x += colAbs.type;
@@ -780,7 +804,7 @@ function buildVendorMonthlyTimesheetPdf(opts) {
     });
 
     const groupLabel = `${g.employee_name} (${g.employee_id})`;
-    ry = drawAbsenceSection(doc, x0, ry, tw, abs, groupLabel);
+    ry = drawAbsenceSection(doc, x0, ry, tw, abs, groupLabel, period);
 
     ry += drawEmployeeFooter(doc, x0, ry, tw, g);
     doc.y = ry + 14;
