@@ -238,9 +238,8 @@ const rangeEnd = computed(() => Math.min(pagination.page * pagination.limit, pag
 
 const rowNumber = (idx) => (pagination.page - 1) * pagination.limit + idx + 1;
 
-/** Show replaced employee name (active replacer) or replacer name (deactivated). */
-const replacementDisplayName = (emp) =>
-  emp.replaced_employee_name || emp.replacement_employee_name || '';
+/** Unidirectional: show the deactivated employee this row replaces (replaces_employee_id). */
+const replacementDisplayName = (emp) => emp.replaced_employee_name || '';
 
 let debounceTimer;
 const debouncedFetch = () => {

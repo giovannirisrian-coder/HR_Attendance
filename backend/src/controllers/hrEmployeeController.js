@@ -1867,7 +1867,7 @@ const exportEmployeesExcel = async (req, res) => {
       r.employee_group || '',
       r.site || '',
       r.supervisor_name || '',
-      r.replaced_employee_name || r.replacement_employee_name || '',
+      r.replaced_employee_name || '',
       r.user_status || '',
     ]);
 
