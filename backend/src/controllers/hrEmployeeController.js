@@ -729,6 +729,21 @@ const resolveReplacementEmployee = async (executor, replacesEmployeeId, { vendor
         message: 'Replacement employee must belong to the same vendor.',
       };
     }
+    const [alreadyReplacedRows] = await executor.query(
+      `SELECT id FROM hr_employees
+        WHERE replaces_employee_id = ?
+          AND (? IS NULL OR id <> ?)
+        LIMIT 1`,
+      [replacesEmployeeId, excludeEmployeeId, excludeEmployeeId]
+    );
+    if (alreadyReplacedRows.length > 0) {
+      return {
+        ok: false,
+        status: 400,
+        message:
+          'This deactivated employee has already been linked as a replacement by another employee.',
+      };
+    }
     return { ok: true, employee: candidate };
   } catch (err) {
     console.error('Resolve replacement employee error:', err);
@@ -1316,6 +1331,11 @@ const listSupervisors = async (req, res) => {
  * on Create / Edit Employee forms. Filtered by vendor_id (required) and
  * optional search on employee_name / npk.
  *
+ * Deactivated employees already linked as replaces_employee_id on another
+ * hr_employees row are omitted so each predecessor can only be replaced
+ * once. When exclude_id is set (Edit), that row's own replacement link
+ * is still returned so the current selection remains visible.
+ *
  * Query params:
  *   • vendor_id — required positive integer
  *   • search    — partial match on employee_name or npk
@@ -1344,8 +1364,11 @@ const listReplacementCandidates = async (req, res) => {
         : null;
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
 
-    let where = `WHERE h.user_status = 'Deactive' AND h.vendor_id = ?`;
-    const params = [vendorId];
+    const takenJoinParams =
+      excludeId && excludeId > 0 ? [excludeId, excludeId] : [null, null];
+
+    let where = `WHERE h.user_status = 'Deactive' AND h.vendor_id = ? AND taken.id IS NULL`;
+    const params = [...takenJoinParams, vendorId];
     if (excludeId && excludeId > 0) {
       where += ' AND h.id <> ?';
       params.push(excludeId);
@@ -1359,6 +1382,10 @@ const listReplacementCandidates = async (req, res) => {
     const [rows] = await db.query(
       `SELECT h.id, h.employee_name, h.npk, h.sid, h.vendor_id
          FROM hr_employees h
+         LEFT JOIN hr_employees taken
+           ON taken.replaces_employee_id = h.id
+          AND taken.replaces_employee_id IS NOT NULL
+          AND (? IS NULL OR taken.id <> ?)
          ${where}
          ORDER BY h.employee_name ASC, h.id ASC
          LIMIT ?`,

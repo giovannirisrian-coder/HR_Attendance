@@ -194,7 +194,7 @@
             @change="onReplacementSelected"
           />
           <p class="text-sm text-muted" style="margin-top: 6px;">
-            Search by Employee Name. Only deactivated employees from the selected vendor appear.
+            Search by Employee Name. Only deactivated employees from the selected vendor who have not yet been replaced appear.
           </p>
         </div>
       </div>
