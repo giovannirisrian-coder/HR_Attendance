@@ -54,7 +54,12 @@
       </div>
       <template v-else>
         <div v-if="filteredEmployees.length === 0" class="replacement-search-status">
-          No deactivated employees match “{{ query }}”.
+          <template v-if="!query.trim() && employees.length === 0">
+            No available deactivated employees to replace.
+          </template>
+          <template v-else>
+            No deactivated employees match “{{ query }}”.
+          </template>
         </div>
         <ul v-else class="replacement-search-list">
           <li
