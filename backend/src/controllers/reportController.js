@@ -3,7 +3,13 @@ const { buildVendorMonthlyTimesheetPdf } = require('../services/pdfService');
 const {
   fetchVendorMonthlyPdfData,
   fetchVendorAttendanceRowsForMonthlyPdf,
+  resolvePeriod,
 } = require('../services/vendorMonthlyPdfData');
+const {
+  serializeCloseBookDateForApi,
+  closeBookDateLabel,
+  formatPeriodRangeLabel,
+} = require('../utils/vendorCloseBookDate');
 const {
   uploadVendorAttachment,
   isVendorAttachmentStorageConfigured,
@@ -13,8 +19,8 @@ const {
   serializeVendorFileRef,
   parseOtherSupportingRefs,
 } = require('../utils/vendorFileRef');
-async function fetchVendorAttendanceRows(vendorId, month, year) {
-  return fetchVendorAttendanceRowsForMonthlyPdf(vendorId, month, year);
+async function fetchVendorAttendanceRows(vendorId, month, year, closeBookDate) {
+  return fetchVendorAttendanceRowsForMonthlyPdf(vendorId, month, year, closeBookDate);
 }
 
 /** IDR-style input: strips thousand separators (.) */
@@ -82,7 +88,11 @@ const getVendorMonthlySummary = async (req, res) => {
     const now = new Date();
     const maxMonth = year < now.getFullYear() ? 12 : now.getMonth() + 1;
 
-    const [[vendor]] = await db.query('SELECT id, name, code FROM vendors WHERE id = ?', [vendorId]);
+    const [[vendor]] = await db.query(
+      'SELECT id, name, code, close_book_date FROM vendors WHERE id = ?',
+      [vendorId]
+    );
+    const closeBookDate = vendor?.close_book_date ?? 1;
     const [[{ ls_count }]] = await db.query(
       `SELECT COUNT(*) AS ls_count FROM users WHERE vendor_id = ? AND role = 'ls' AND is_active = 1`,
       [vendorId]
@@ -90,6 +100,7 @@ const getVendorMonthlySummary = async (req, res) => {
 
     const data = [];
     for (let m = 1; m <= maxMonth; m++) {
+      const period = resolvePeriod(closeBookDate, m, year);
       // `approved_rows` is the count of LATEST APPROVED attendance rows per
       // (user_id, attendance_date) so multiple correction attempts do not
       // double-count toward invoice / BAST. Cancelled / withdrawn rows are
@@ -111,8 +122,8 @@ const getVendorMonthlySummary = async (req, res) => {
          FROM attendance a
          JOIN users u ON a.user_id = u.id
          WHERE u.vendor_id = ? AND u.role = 'ls'
-           AND MONTH(a.attendance_date) = ? AND YEAR(a.attendance_date) = ?`,
-        [vendorId, m, year]
+           AND a.attendance_date >= ? AND a.attendance_date <= ?`,
+        [vendorId, period.startDate, period.endDate]
       );
 
       const [subRows] = await db.query(
@@ -126,6 +137,9 @@ const getVendorMonthlySummary = async (req, res) => {
       data.push({
         report_month: m,
         report_year: year,
+        period_start: period.startDate,
+        period_end: period.endDate,
+        period_label: formatPeriodRangeLabel(period.startDate, period.endDate),
         ls_count: ls_count || 0,
         attendance_rows: agg.attendance_rows || 0,
         approved_rows: agg.approved_rows || 0,
@@ -136,7 +150,18 @@ const getVendorMonthlySummary = async (req, res) => {
       });
     }
 
-    res.json({ success: true, vendor, year, data });
+    res.json({
+      success: true,
+      vendor: vendor
+        ? {
+            ...vendor,
+            close_book_date: serializeCloseBookDateForApi(vendor.close_book_date),
+            close_book_date_label: closeBookDateLabel(vendor.close_book_date),
+          }
+        : null,
+      year,
+      data,
+    });
   } catch (err) {
     console.error('getVendorMonthlySummary:', err);
     res.status(500).json({ success: false, message: 'Server error.' });
@@ -155,11 +180,17 @@ const getVendorMonthlyDetail = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid month or year.' });
     }
 
-    const [[vendor]] = await db.query('SELECT id, name, code FROM vendors WHERE id = ?', [vendorId]);
+    const [[vendor]] = await db.query(
+      'SELECT id, name, code, close_book_date FROM vendors WHERE id = ?',
+      [vendorId]
+    );
+    const closeBookDate = vendor?.close_book_date ?? 1;
     const [employees] = await db.query(
       `SELECT id, name, employee_id FROM users WHERE vendor_id = ? AND role = 'ls' AND is_active = 1 ORDER BY name`,
       [vendorId]
     );
+
+    const period = resolvePeriod(closeBookDate, month, year);
 
     const employeesOut = [];
     for (const emp of employees) {
@@ -169,7 +200,7 @@ const getVendorMonthlyDetail = async (req, res) => {
       // are intentionally suppressed.
       const [att] = await db.query(
         `SELECT a.* FROM attendance a
-         WHERE a.user_id = ? AND MONTH(a.attendance_date) = ? AND YEAR(a.attendance_date) = ?
+         WHERE a.user_id = ? AND a.attendance_date >= ? AND a.attendance_date <= ?
            AND a.status NOT IN ('cancelled', 'withdrawn', 'superseded')
            AND a.id = (
              SELECT MAX(a2.id) FROM attendance a2
@@ -187,7 +218,7 @@ const getVendorMonthlyDetail = async (req, res) => {
                )
            )
          ORDER BY a.attendance_date`,
-        [emp.id, month, year]
+        [emp.id, period.startDate, period.endDate]
       );
       employeesOut.push({ ...emp, attendance: att });
     }
@@ -201,9 +232,20 @@ const getVendorMonthlyDetail = async (req, res) => {
 
     res.json({
       success: true,
-      vendor,
+      vendor: vendor
+        ? {
+            ...vendor,
+            close_book_date: serializeCloseBookDateForApi(vendor.close_book_date),
+            close_book_date_label: closeBookDateLabel(vendor.close_book_date),
+          }
+        : null,
       month,
       year,
+      period: {
+        start_date: period.startDate,
+        end_date: period.endDate,
+        label: formatPeriodRangeLabel(period.startDate, period.endDate),
+      },
       submission,
       employees: employeesOut,
     });
@@ -375,13 +417,22 @@ const downloadVendorMonthlyPdf = async (req, res) => {
     if (!vendorId) return res.status(403).json({ success: false, message: 'Vendor access only.' });
     const month = parseInt(req.params.month, 10);
     const year = parseInt(req.params.year, 10);
-    const [[v]] = await db.query('SELECT name, code FROM vendors WHERE id = ?', [vendorId]);
+    const [[v]] = await db.query(
+      'SELECT name, code, close_book_date FROM vendors WHERE id = ?',
+      [vendorId]
+    );
     if (!v) return res.status(404).json({ success: false, message: 'Vendor not found.' });
-    const { rows, leaveRows } = await fetchVendorMonthlyPdfData(vendorId, month, year);
+    const { rows, leaveRows, period } = await fetchVendorMonthlyPdfData(
+      vendorId,
+      month,
+      year,
+      v.close_book_date
+    );
     const doc = buildVendorMonthlyTimesheetPdf({
       vendor: { name: v.name, code: v.code },
       month,
       year,
+      period,
       rows,
       leaveRows,
     });

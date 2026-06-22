@@ -174,6 +174,32 @@
       </div>
     </section>
 
+    <!-- ── Section: Replacement (optional) ──────────────────── -->
+    <section v-if="showReplacementSection" class="form-section">
+      <div class="form-section-header">
+        <h2 class="form-section-title">Replacement</h2>
+        <p class="form-section-sub">
+          Optional. Link this employee to a deactivated predecessor from the same vendor.
+        </p>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group form-group--full">
+          <label class="form-label">Replacement</label>
+          <ReplacementSearchSelect
+            v-model="form.replaces_employee_id"
+            :vendor-id="form.vendor_id"
+            :exclude-employee-id="excludeEmployeeId"
+            :initial-employee="initialReplacementOption"
+            @change="onReplacementSelected"
+          />
+          <p class="text-sm text-muted" style="margin-top: 6px;">
+            Search by Employee Name. Only deactivated employees from the selected vendor appear.
+          </p>
+        </div>
+      </div>
+    </section>
+
     <!-- ── Actions ────────────────────────────────────────────── -->
     <div class="form-actions">
       <button type="button" class="btn btn-outline" :disabled="submitting" @click="onCancel">Cancel</button>
@@ -190,6 +216,7 @@ import { reactive, ref, computed, watch } from 'vue';
 import { EMPTY_EMPLOYEE, EMPLOYEE_GROUP_OPTIONS, USER_STATUS_OPTIONS } from './mockEmployees';
 import VendorSearchSelect from '../../components/VendorSearchSelect.vue';
 import SupervisorSearchSelect from '../../components/SupervisorSearchSelect.vue';
+import ReplacementSearchSelect from '../../components/ReplacementSearchSelect.vue';
 
 const props = defineProps({
   initialData: {
@@ -215,6 +242,10 @@ const props = defineProps({
   showUserStatus: {
     type: Boolean,
     default: false,
+  },
+  excludeEmployeeId: {
+    type: [Number, String, null],
+    default: null,
   },
 });
 
@@ -293,6 +324,26 @@ const onSupervisorSelected = (supervisor) => {
   }
 };
 
+/** Create: always show. Edit: only when User Status is Active. */
+const showReplacementSection = computed(() => {
+  if (!props.showUserStatus) return true;
+  return form.user_status === 'Active';
+});
+
+const initialReplacementOption = computed(() => {
+  if (!props.initialData || props.initialData.replaces_employee_id == null) return null;
+  return {
+    id: props.initialData.replaces_employee_id,
+    employee_name: props.initialData.replaced_employee_name || '',
+    npk: '',
+    sid: '',
+  };
+});
+
+const onReplacementSelected = (employee) => {
+  form.replaced_employee_name = employee ? (employee.employee_name || '') : '';
+};
+
 // SID is the one mandatory field on this form. We validate on blur and
 // again on submit so the form can never be saved without it, mirroring
 // the backend's required check.
@@ -322,15 +373,29 @@ const validateEmail = () => {
   return true;
 };
 
+watch(
+  () => form.user_status,
+  (status) => {
+    if (status === 'Deactive') {
+      form.replaces_employee_id = null;
+      form.replaced_employee_name = '';
+    }
+  }
+);
+
 const onSubmit = () => {
   if (props.submitting) return;
   if (!validateSid()) return;
   if (!validateEmail()) return;
-  emit('submit', {
+  const payload = {
     ...form,
     sid: String(form.sid || '').trim(),
     email: String(form.email || '').trim(),
-  });
+  };
+  if (props.showUserStatus && payload.user_status !== 'Active') {
+    payload.replaces_employee_id = null;
+  }
+  emit('submit', payload);
 };
 
 const onCancel = () => {

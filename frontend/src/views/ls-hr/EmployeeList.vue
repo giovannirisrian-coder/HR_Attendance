@@ -123,13 +123,14 @@
               <th>Employee Group</th>
               <th>Site</th>
               <th>Supervisor</th>
+              <th>Replacement</th>
               <th>User Status</th>
               <th class="col-actions">Actions</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="employees.length === 0">
-              <td :colspan="14">
+              <td :colspan="15">
                 <div class="empty-state">
                   <div class="empty-state-icon">👥</div>
                   <h3>No employees found</h3>
@@ -160,6 +161,10 @@
               <td>{{ emp.site }}</td>
               <td>
                 <span v-if="emp.supervisor_name">{{ emp.supervisor_name }}</span>
+                <span v-else class="text-muted">—</span>
+              </td>
+              <td>
+                <span v-if="replacementDisplayName(emp)">{{ replacementDisplayName(emp) }}</span>
                 <span v-else class="text-muted">—</span>
               </td>
               <td>
@@ -232,6 +237,9 @@ const rangeStart = computed(() => (pagination.total === 0 ? 0 : (pagination.page
 const rangeEnd = computed(() => Math.min(pagination.page * pagination.limit, pagination.total));
 
 const rowNumber = (idx) => (pagination.page - 1) * pagination.limit + idx + 1;
+
+/** Unidirectional: show the deactivated employee this row replaces (replaces_employee_id). */
+const replacementDisplayName = (emp) => emp.replaced_employee_name || '';
 
 let debounceTimer;
 const debouncedFetch = () => {

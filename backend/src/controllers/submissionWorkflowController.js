@@ -65,7 +65,7 @@ async function fetchVendorAttendanceRows(vendorId, month, year) {
 
 async function getSubmissionById(id) {
   const [rows] = await db.query(
-    `SELECT s.*, v.name AS vendor_name, v.code AS vendor_code
+    `SELECT s.*, v.name AS vendor_name, v.code AS vendor_code, v.close_book_date
      FROM vendor_monthly_submissions s
      JOIN vendors v ON s.vendor_id = v.id
      WHERE s.id = ?`,
@@ -81,15 +81,17 @@ const downloadSubmissionPdf = async (req, res) => {
     const sub = await getSubmissionById(id);
     if (!sub) return res.status(404).json({ success: false, message: 'Submission not found.' });
 
-    const { rows, leaveRows } = await fetchVendorMonthlyPdfData(
+    const { rows, leaveRows, period } = await fetchVendorMonthlyPdfData(
       sub.vendor_id,
       sub.report_month,
-      sub.report_year
+      sub.report_year,
+      sub.close_book_date
     );
     const doc = buildVendorMonthlyTimesheetPdf({
       vendor: { name: sub.vendor_name, code: sub.vendor_code },
       month: sub.report_month,
       year: sub.report_year,
+      period,
       rows,
       leaveRows,
     });

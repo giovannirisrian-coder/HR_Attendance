@@ -19,8 +19,9 @@ CREATE TABLE IF NOT EXISTS vendors (
   address     TEXT,
   phone       VARCHAR(30),
   email       VARCHAR(150),
-  is_active   TINYINT(1)   NOT NULL DEFAULT 1,
-  created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  is_active        TINYINT(1)        NOT NULL DEFAULT 1,
+  close_book_date  TINYINT UNSIGNED  NOT NULL DEFAULT 1 COMMENT '1–27: close on day N; 28: end of month',
+  created_at       TIMESTAMP         NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
@@ -129,6 +130,10 @@ CREATE TABLE IF NOT EXISTS hr_employees (
   -- time via JOIN so it can never drift from the master record.
   supervisor_id     INT           NULL,
 
+  -- Replacement tracking: FK to the deactivated hr_employees row this
+  -- active employee replaces (same vendor). NULL when not a replacement hire.
+  replaces_employee_id INT        NULL,
+
   -- Administrative status
   user_status       ENUM('Active','Deactive') NOT NULL DEFAULT 'Active',
 
@@ -149,12 +154,28 @@ CREATE TABLE IF NOT EXISTS hr_employees (
   KEY idx_hr_employees_employee_name (employee_name),
   KEY idx_hr_employees_vendor_name (vendor_name),
   KEY idx_hr_employees_supervisor_id (supervisor_id),
+  KEY idx_hr_employees_replaces_employee_id (replaces_employee_id),
   KEY idx_hr_employees_site (site),
   KEY idx_hr_employees_user_status (user_status),
 
   CONSTRAINT fk_hr_employees_user       FOREIGN KEY (user_id)    REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_hr_employees_vendor     FOREIGN KEY (vendor_id)  REFERENCES vendors(id) ON DELETE SET NULL,
-  CONSTRAINT fk_hr_employees_supervisor FOREIGN KEY (supervisor_id) REFERENCES users(id) ON DELETE SET NULL
+  CONSTRAINT fk_hr_employees_supervisor FOREIGN KEY (supervisor_id) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_hr_employees_replaces_employee FOREIGN KEY (replaces_employee_id) REFERENCES hr_employees(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ──────────────────────────────────────────────
+-- 2c. EMPLOYEE REPLACEMENT LOGS
+-- Audit trail when PIC LS links a new active employee to a deactivated
+-- predecessor (Create / Edit Employee forms).
+-- ──────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS employee_replacement_logs (
+  id                    INT AUTO_INCREMENT PRIMARY KEY,
+  previous_employee     VARCHAR(200) NOT NULL,
+  replacement_employee  VARCHAR(200) NOT NULL,
+  created_by            VARCHAR(150)  NULL,
+  created_at            TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at            TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ──────────────────────────────────────────────

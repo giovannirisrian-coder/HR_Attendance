@@ -72,6 +72,7 @@
         <EmployeeForm
           :initial-data="employee"
           show-user-status
+          :exclude-employee-id="employee.id"
           submit-label="Save Changes"
           :submitting="submitting"
           :error-message="errorMsg"

@@ -34,5 +34,7 @@ export const EMPTY_EMPLOYEE = {
   supervisor_id: null,
   supervisor_name: '',
   supervisor_employee_id: '',
+  replaces_employee_id: null,
+  replaced_employee_name: '',
   user_status: 'Active',
 };

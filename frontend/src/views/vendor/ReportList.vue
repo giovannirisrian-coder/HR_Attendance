@@ -3,7 +3,12 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">Report List</h1>
-        <p class="page-subtitle">Monthly attendance aggregated for all LS employees under your vendor</p>
+        <p class="page-subtitle">
+          Monthly attendance aggregated for all LS employees under your vendor
+          <span v-if="vendor?.close_book_date_label" class="close-book-hint">
+            · Close book: {{ vendor.close_book_date_label }}
+          </span>
+        </p>
       </div>
       <div class="flex items-center gap-2">
         <span class="calendar-label" title="Year Filter" aria-label="Year filter">
@@ -28,6 +33,7 @@
           <thead>
             <tr>
               <th>Month</th>
+              <th>Reporting period</th>
               <th>LS headcount</th>
               <th>Attendance rows</th>
               <th>Approved rows</th>
@@ -38,6 +44,7 @@
           <tbody>
             <tr v-for="row in rows" :key="row.report_month">
               <td class="font-bold">{{ monthName(row.report_month) }}</td>
+              <td class="text-sm text-muted period-cell">{{ row.period_label || '—' }}</td>
               <td>{{ row.ls_count }}</td>
               <td>{{ row.attendance_rows }}</td>
               <td>{{ row.approved_rows }}</td>
@@ -126,5 +133,13 @@ onMounted(fetchData);
   justify-content: center;
   color: var(--bc-green-700);
   background: var(--bc-green-50);
+}
+.close-book-hint {
+  color: var(--bc-green-700);
+  font-weight: 600;
+}
+.period-cell {
+  white-space: nowrap;
+  font-size: 0.85rem;
 }
 </style>
