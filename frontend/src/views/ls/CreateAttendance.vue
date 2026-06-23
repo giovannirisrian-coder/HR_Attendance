@@ -67,7 +67,18 @@
 
               <div class="form-group">
                 <label class="form-label">Time</label>
-                <input v-model="form.time" type="time" class="form-control" required />
+                <input
+                  v-model="form.time"
+                  type="time"
+                  class="form-control"
+                  :class="{ 'form-control--error': timeError }"
+                  required
+                  min="00:00"
+                  :max="timeMax"
+                  @input="onTimeInput"
+                  @change="onTimeChange"
+                />
+                <p v-if="timeError" class="field-error">{{ timeError }}</p>
               </div>
             </div>
 
@@ -97,7 +108,7 @@
               </div>
             </div>
 
-            <button type="submit" class="btn btn-primary w-full submit-btn" :disabled="loading || geoStatus !== 'success'">
+            <button type="submit" class="btn btn-primary w-full submit-btn" :disabled="loading || geoStatus !== 'success' || !!timeError">
               <span v-if="loading" class="spinner" style="width:16px;height:16px;border-width:2px;"></span>
               {{ loading ? 'Submitting…' : 'Submit Attendance' }}
             </button>
@@ -188,8 +199,10 @@ const selectedDateRows = ref([]);
  */
 const profileNpk = ref(getUser()?.npk || null);
 
-const now = new Date();
-const nowTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+const clockNow = ref(new Date());
+
+const formatTimeHm = (d) =>
+  `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
 const attendanceDateMax = computed(() => formatYmdLocal());
 const attendanceDateMin = computed(() => addDaysToYmdLocal(attendanceDateMax.value, -10));
@@ -197,10 +210,21 @@ const attendanceDateMin = computed(() => addDaysToYmdLocal(attendanceDateMax.val
 const form = reactive({
   type: '',
   attendance_date: formatYmdLocal(),
-  time: nowTime,
+  time: formatTimeHm(clockNow.value),
   latitude: null,
   longitude: null,
   address: '',
+});
+
+const isAttendanceDateToday = computed(() => form.attendance_date === attendanceDateMax.value);
+
+/** For today: cap at current local time; past dates allow any time that day. */
+const timeMax = computed(() => (isAttendanceDateToday.value ? formatTimeHm(clockNow.value) : '23:59'));
+
+const timeError = computed(() => {
+  if (!form.time || !isAttendanceDateToday.value) return '';
+  if (form.time > timeMax.value) return 'Time cannot be in the future.';
+  return '';
 });
 
 /**
@@ -269,6 +293,14 @@ const onAttendanceDateChange = () => {
   loadRecordForSelectedDate();
 };
 
+const onTimeInput = () => {
+  if (errorMsg.value === 'Time cannot be in the future.') errorMsg.value = '';
+};
+
+const onTimeChange = () => {
+  onTimeInput();
+};
+
 const loadRecordForSelectedDate = async () => {
   loadingRecord.value = true;
   try {
@@ -301,6 +333,10 @@ const submitAttendance = async () => {
     errorMsg.value = 'Please submit clock-in first for this date.';
     return;
   }
+  if (timeError.value) {
+    errorMsg.value = timeError.value;
+    return;
+  }
   loading.value = true;
   successMsg.value = '';
   errorMsg.value = '';
@@ -328,6 +364,7 @@ const calcDuration = (inTime, outTime) => {
 let dateTick;
 /** Keep selected date within the allowed window when the calendar day rolls over. */
 const syncDateWindow = () => {
+  clockNow.value = new Date();
   const prev = form.attendance_date;
   clampAttendanceDateToWindow();
   if (prev !== form.attendance_date) {
@@ -406,6 +443,17 @@ onBeforeUnmount(() => {
   color: var(--bc-gray-400);
   font-family: inherit;
   font-style: italic;
+}
+.form-control--error,
+.form-control--error:focus {
+  border-color: var(--bc-rejected, #ef4444);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
+}
+.field-error {
+  margin-top: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--bc-rejected, #ef4444);
 }
 .submit-btn { margin-top: 4px; }
 
