@@ -32,14 +32,14 @@ const login = async (req, res) => {
     );
 
     if (rows.length === 0) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials.' });
+      return res.status(401).json({ success: false, message: 'Invalid SID or Password, please contact Admin' });
     }
 
     const user = rows[0];
     const isMatch = await bcrypt.compare(password, user.password);
 
     if (!isMatch) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials.' });
+      return res.status(401).json({ success: false, message: 'Invalid SID or Password, please contact Admin' });
     }
 
     // First-time login gate ("Force Password Change"). The account was
@@ -144,13 +144,13 @@ const changePassword = async (req, res) => {
     );
 
     if (rows.length === 0) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials.' });
+      return res.status(401).json({ success: false, message: 'Invalid SID or Password, please contact Admin' });
     }
 
     const user = rows[0];
     const isMatch = await bcrypt.compare(current, user.password);
     if (!isMatch) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials.' });
+      return res.status(401).json({ success: false, message: 'Invalid SID or Password, please contact Admin' });
     }
 
     const newHash = await bcrypt.hash(String(newPassword), BCRYPT_COST);
