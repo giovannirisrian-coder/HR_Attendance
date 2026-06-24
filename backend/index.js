@@ -40,6 +40,7 @@ app.use('/api/reports',    require('./src/routes/reports'));
 app.use('/api/users',      require('./src/routes/users'));
 app.use('/api/glog',       require('./src/routes/glog'));
 app.use('/api/employees',  require('./src/routes/hrEmployees'));
+app.use('/api/employee-groups', require('./src/routes/employeeGroups'));
 app.use('/api/attendance-sync', require('./src/routes/attendanceSyncScheduler'));
 
 app.get('/api/health', (req, res) => {

@@ -98,11 +98,10 @@
 
         <div class="form-group">
           <label class="form-label">Employee Group</label>
-          <select v-model="form.employee_group" class="form-control">
-            <option value="">— Select group —</option>
-            <option v-for="g in EMPLOYEE_GROUP_OPTIONS" :key="g" :value="g">{{ g }}</option>
+          <select v-model="form.employee_group_id" class="form-control" :disabled="groupsLoading">
+            <option :value="null">— Select group —</option>
+            <option v-for="g in employeeGroups" :key="g.id" :value="Number(g.id)">{{ g.employee_group }}</option>
           </select>
-
         </div>
         <div class="form-group">
           <label class="form-label">Site</label>
@@ -212,8 +211,9 @@
 </template>
 
 <script setup>
-import { reactive, ref, computed, watch } from 'vue';
-import { EMPTY_EMPLOYEE, EMPLOYEE_GROUP_OPTIONS, USER_STATUS_OPTIONS } from './mockEmployees';
+import { reactive, ref, computed, watch, onMounted } from 'vue';
+import { EMPTY_EMPLOYEE, USER_STATUS_OPTIONS } from './mockEmployees';
+import api from '../../utils/api';
 import VendorSearchSelect from '../../components/VendorSearchSelect.vue';
 import SupervisorSearchSelect from '../../components/SupervisorSearchSelect.vue';
 import ReplacementSearchSelect from '../../components/ReplacementSearchSelect.vue';
@@ -251,12 +251,32 @@ const props = defineProps({
 
 const emit = defineEmits(['submit', 'cancel']);
 
+const employeeGroups = ref([]);
+const groupsLoading = ref(false);
+
+const loadEmployeeGroups = async () => {
+  groupsLoading.value = true;
+  try {
+    const { data: res } = await api.get('/employee-groups');
+    employeeGroups.value = res?.data || [];
+  } catch {
+    employeeGroups.value = [];
+  } finally {
+    groupsLoading.value = false;
+  }
+};
+
+onMounted(loadEmployeeGroups);
+
 const form = reactive({ ...EMPTY_EMPLOYEE, ...(props.initialData || {}) });
 
 watch(
   () => props.initialData,
   (val) => {
     Object.assign(form, EMPTY_EMPLOYEE, val || {});
+    if (form.employee_group_id != null) {
+      form.employee_group_id = Number(form.employee_group_id) || null;
+    }
   }
 );
 
@@ -391,6 +411,10 @@ const onSubmit = () => {
     ...form,
     sid: String(form.sid || '').trim(),
     email: String(form.email || '').trim(),
+    employee_group_id:
+      form.employee_group_id != null && form.employee_group_id !== ''
+        ? Number(form.employee_group_id)
+        : null,
   };
   if (props.showUserStatus && payload.user_status !== 'Active') {
     payload.replaces_employee_id = null;

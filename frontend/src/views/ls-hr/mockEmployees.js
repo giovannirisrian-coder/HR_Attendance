@@ -6,10 +6,6 @@
  */
 
 export const USER_STATUS_OPTIONS = ['Active', 'Deactive'];
-// Coarse "Group" classification used by the Automated Analytics
-// step to bucket recap rows for audit / payroll reporting.
-// Optional — an empty selection submits as NULL.
-export const EMPLOYEE_GROUP_OPTIONS = ['BC', 'MTL'];
 
 export const EMPTY_EMPLOYEE = {
   vendor_id: null,
@@ -23,7 +19,7 @@ export const EMPTY_EMPLOYEE = {
   email: '',
   position: '',
   position_group: '',
-  employee_group: '',
+  employee_group_id: null,
   site: '',
   // Supervisor is now a FK into the `users` master (role =
   // 'ls_supervisor'). `supervisor_name` / `supervisor_employee_id`

@@ -145,6 +145,55 @@
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M8 8l4-4 4 4M4 20h16"/></svg>
             <span v-if="!sidebarCollapsed">Upload Attendance Log</span>
           </router-link>
+
+          <div v-if="!sidebarCollapsed" class="nav-group">
+            <button
+              type="button"
+              class="nav-item nav-group-toggle"
+              :class="{ 'nav-group-toggle--open': masterDataExpanded }"
+              :aria-expanded="masterDataExpanded"
+              @click="masterDataExpanded = !masterDataExpanded"
+            >
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M4 6h16M4 12h16M4 18h10"/>
+                <circle cx="18" cy="18" r="3"/>
+              </svg>
+              <span class="nav-item__label">Master Data</span>
+              <svg class="nav-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M6 9l6 6 6-6"/>
+              </svg>
+            </button>
+            <div v-show="masterDataExpanded" class="nav-submenu">
+              <router-link
+                to="/ls-hr/master-data/employee-groups"
+                class="nav-item nav-item--sub"
+                active-class="active"
+                title="Manage employee group master data"
+              >
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
+                  <circle cx="9" cy="7" r="4"/>
+                  <path d="M23 21v-2a4 4 0 00-3-3.87"/>
+                  <path d="M16 3.13a4 4 0 010 7.75"/>
+                </svg>
+                <span>Employee Group</span>
+              </router-link>
+            </div>
+          </div>
+
+          <router-link
+            v-else
+            to="/ls-hr/master-data/employee-groups"
+            class="nav-item"
+            active-class="active"
+            title="Master Data — Employee Group"
+          >
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 6h16M4 12h16M4 18h10"/>
+              <circle cx="18" cy="18" r="3"/>
+            </svg>
+          </router-link>
+
           <router-link to="/ls-hr/reset-password" class="nav-item" active-class="active" title="Reset password akun pengguna berdasarkan SID">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
             <span v-if="!sidebarCollapsed">Reset Password</span>
@@ -207,6 +256,7 @@ import api from '../../utils/api';
 const router = useRouter();
 const route  = useRoute();
 const sidebarCollapsed = ref(false);
+const masterDataExpanded = ref(false);
 const user = getUser();
 
 /** Team-wide pending attendance count (all LS under this supervisor); same /attendance/team source as Approval List. */
@@ -296,6 +346,16 @@ onUnmounted(() => {
 
 watch(
   () => route.path,
+  (path) => {
+    if (path.includes('/ls-hr/master-data')) {
+      masterDataExpanded.value = true;
+    }
+  },
+  { immediate: true }
+);
+
+watch(
+  () => route.path,
   () => {
     refreshSupervisorNavBadges();
   }
@@ -332,6 +392,9 @@ const pageTitle = computed(() => {
   if (path.match(/\/ls-hr\/employees\/[^/]+\/edit$/)) return 'Edit Employee';
   if (path.includes('/ls-hr/employees/create')) return 'Create Employee';
   if (path.includes('/ls-hr/reset-password')) return 'Reset Password';
+  if (path.match(/\/ls-hr\/master-data\/employee-groups\/[^/]+\/edit$/)) return 'Edit Employee Group';
+  if (path.includes('/ls-hr/master-data/employee-groups/create')) return 'Create Employee Group';
+  if (path.includes('/ls-hr/master-data/employee-groups')) return 'Employee Group';
   if (path.includes('/ls-hr/employees')) return 'Employee List';
   if (path.includes('/ls-hr/approvals')) return 'LS HR Approvals';
   if (path.includes('/ssu/approvals')) return 'SSU Approvals';
@@ -483,6 +546,36 @@ const handleLogout = () => {
 .nav-item--sub { padding-left: 14px; font-size: 13px; }
 .nav-item--sub .nav-icon { width: 16px; height: 16px; opacity: .9; }
 .nav-icon { width: 18px; height: 18px; flex-shrink: 0; }
+
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nav-group-toggle {
+  justify-content: flex-start;
+}
+.nav-group-toggle .nav-item__label {
+  flex: 1;
+  text-align: left;
+}
+.nav-chevron {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0.65;
+  transition: transform 0.2s ease;
+}
+.nav-group-toggle--open .nav-chevron {
+  transform: rotate(180deg);
+}
+.nav-submenu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 8px;
+  margin-bottom: 2px;
+}
 
 .nav-item--supervisor-approvals,
 .nav-item--supervisor-leave,

@@ -65,6 +65,22 @@ CREATE TABLE IF NOT EXISTS users (
 ) ENGINE=InnoDB;
 
 -- ──────────────────────────────────────────────
+-- 2a. EMPLOYEE_GROUP (master data — PIC LS)
+-- Coarse classification used by Automated Analytics to bucket
+-- recap rows for audit / payroll reporting. See migration_employee_group.sql.
+-- ──────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS employee_group (
+  id             INT AUTO_INCREMENT PRIMARY KEY,
+  employee_group VARCHAR(150) NOT NULL,
+  created_by     VARCHAR(150)  NULL,
+  created_at     TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at     TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_employee_group_name (employee_group)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT IGNORE INTO employee_group (employee_group) VALUES ('BC'), ('MTL');
+
+-- ──────────────────────────────────────────────
 -- 2b. HR_EMPLOYEES (consolidated employee master)
 --
 -- Single source of truth for ALL employee data in the system:
@@ -115,12 +131,8 @@ CREATE TABLE IF NOT EXISTS hr_employees (
   email             VARCHAR(190)  NULL,
   position          VARCHAR(150)  NULL,
   position_group    VARCHAR(150)  NULL,
-  -- Coarse "Group" classification used by the Automated Analytics
-  -- step to bucket recap rows for audit / payroll reporting. The
-  -- SQL identifier is `employee_group` (not `group`) because
-  -- GROUP is a reserved word in MySQL — the UI still labels it
-  -- "Group". See migration_hr_employees_group.sql.
-  employee_group    ENUM('BC','MTL') NULL,
+  -- FK → employee_group master (UI label: "Employee Group").
+  employee_group_id INT           NULL,
   site              VARCHAR(100)  NULL,
 
   -- Supervisor block
@@ -157,11 +169,13 @@ CREATE TABLE IF NOT EXISTS hr_employees (
   KEY idx_hr_employees_replaces_employee_id (replaces_employee_id),
   KEY idx_hr_employees_site (site),
   KEY idx_hr_employees_user_status (user_status),
+  KEY idx_hr_employees_employee_group_id (employee_group_id),
 
   CONSTRAINT fk_hr_employees_user       FOREIGN KEY (user_id)    REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_hr_employees_vendor     FOREIGN KEY (vendor_id)  REFERENCES vendors(id) ON DELETE SET NULL,
   CONSTRAINT fk_hr_employees_supervisor FOREIGN KEY (supervisor_id) REFERENCES users(id) ON DELETE SET NULL,
-  CONSTRAINT fk_hr_employees_replaces_employee FOREIGN KEY (replaces_employee_id) REFERENCES hr_employees(id) ON DELETE SET NULL
+  CONSTRAINT fk_hr_employees_replaces_employee FOREIGN KEY (replaces_employee_id) REFERENCES hr_employees(id) ON DELETE SET NULL,
+  CONSTRAINT fk_hr_employees_employee_group FOREIGN KEY (employee_group_id) REFERENCES employee_group(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ──────────────────────────────────────────────

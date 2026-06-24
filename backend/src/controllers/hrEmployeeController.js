@@ -89,12 +89,6 @@ const TEXT_FIELDS = [
   'site',
 ];
 const ENUM_FIELDS = {
-  // Coarse classification used by the Automated Analytics step to
-  // bucket recap rows for audit / payroll reporting. Optional — an
-  // empty submission is stored as NULL so legacy / draft records
-  // remain valid. The SQL column is `employee_group` (the literal
-  // `group` keyword is reserved in MySQL); the UI labels it "Group".
-  employee_group: ['BC', 'MTL'],
   user_status: ['Active', 'Deactive'],
 };
 
@@ -141,7 +135,8 @@ const SELECT_COLS = `
   h.user_department,
   COALESCE(v.name, h.vendor_name) AS vendor_name,
   h.npk, h.sid, h.employee_name, h.email, h.position, h.position_group,
-  h.employee_group, h.site,
+  h.employee_group_id, eg.employee_group,
+  h.site,
   h.supervisor_id, s.name AS supervisor_name, s.employee_id AS supervisor_employee_id,
   h.replaces_employee_id,
   prev.employee_name AS replaced_employee_name,
@@ -153,6 +148,7 @@ const SELECT_COLS = `
 const FROM_JOIN = `FROM hr_employees h
   LEFT JOIN vendors v ON v.id = h.vendor_id
   LEFT JOIN users   s ON s.id = h.supervisor_id
+  LEFT JOIN employee_group eg ON eg.id = h.employee_group_id
   LEFT JOIN hr_employees prev ON prev.id = h.replaces_employee_id
   LEFT JOIN hr_employees repl ON repl.replaces_employee_id = h.id`;
 
@@ -265,10 +261,19 @@ const nullableUploadText = (value) => {
   return v === '' ? null : v;
 };
 
-const normalizeEmployeeGroupForUpload = (raw) => {
-  const value = sanitizeText(raw).toUpperCase();
-  if (!value) return null;
-  return ENUM_FIELDS.employee_group.includes(value) ? value : null;
+const normalizeEmployeeGroupForUpload = (raw, lookup) => {
+  const key = sanitizeText(raw).toUpperCase();
+  if (!key) return null;
+  return lookup.get(key) ?? null;
+};
+
+const buildEmployeeGroupLookupMap = (rows) => {
+  const map = new Map();
+  for (const row of rows) {
+    const key = sanitizeText(row.employee_group).toUpperCase();
+    if (key) map.set(key, row.id);
+  }
+  return map;
 };
 
 const normalizeUploadRowForUpsert = (body) => ({
@@ -282,7 +287,7 @@ const normalizeUploadRowForUpsert = (body) => ({
   email: null,
   position: nullableUploadText(body.position),
   position_group: nullableUploadText(body.position_group),
-  employee_group: normalizeEmployeeGroupForUpload(body.employee_group),
+  employee_group_id: null,
   site: nullableUploadText(body.site),
   supervisor_id: null,
   supervisor_ref: nullableUploadText(body.supervisor_ref),
@@ -378,7 +383,7 @@ const upsertUploadEmployeeRow = async (conn, row, uploaderName) => {
               employee_name = ?,
               position = ?,
               position_group = ?,
-              employee_group = ?,
+              employee_group_id = ?,
               site = ?,
               supervisor_id = ?,
               user_status = ?,
@@ -394,7 +399,7 @@ const upsertUploadEmployeeRow = async (conn, row, uploaderName) => {
         row.employee_name,
         row.position,
         row.position_group,
-        row.employee_group,
+        row.employee_group_id,
         row.site,
         row.supervisor_id,
         row.user_status,
@@ -425,7 +430,7 @@ const upsertUploadEmployeeRow = async (conn, row, uploaderName) => {
   await conn.query(
     `INSERT INTO hr_employees (
        user_id, vendor_id, vendor_number, user_department, vendor_name,
-       npk, sid, employee_name, email, position, position_group, employee_group, site,
+       npk, sid, employee_name, email, position, position_group, employee_group_id, site,
        supervisor_id, user_status, created_by, updated_by
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
@@ -440,7 +445,7 @@ const upsertUploadEmployeeRow = async (conn, row, uploaderName) => {
       row.email,
       row.position,
       row.position_group,
-      row.employee_group,
+      row.employee_group_id,
       row.site,
       row.supervisor_id,
       row.user_status,
@@ -518,6 +523,23 @@ const parseReplacesEmployeeId = (raw) => {
     return {
       provided: true,
       error: 'Field "replaces_employee_id" must be a positive integer or null.',
+    };
+  }
+  return { provided: true, value: n };
+};
+
+/**
+ * Parse employee_group_id submitted from the client. Optional FK —
+ * null / empty clears the relationship.
+ */
+const parseEmployeeGroupId = (raw) => {
+  if (raw === undefined) return { provided: false };
+  if (raw === null || raw === '') return { provided: true, value: null };
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+    return {
+      provided: true,
+      error: 'Field "employee_group_id" must be a positive integer or null.',
     };
   }
   return { provided: true, value: n };
@@ -607,14 +629,14 @@ const validateBody = (body, opts = {}) => {
     return { ok: false, error: replacesEmployeeId.error };
   }
 
-  return { ok: true, fields, vendorId, supervisorId, replacesEmployeeId };
+  const employeeGroupId = parseEmployeeGroupId(body.employee_group_id);
+  if (employeeGroupId.error) {
+    return { ok: false, error: employeeGroupId.error };
+  }
+
+  return { ok: true, fields, vendorId, supervisorId, replacesEmployeeId, employeeGroupId };
 };
 
-/**
- * Resolve a vendor_id to its master record. Returns:
- *   { ok: true,  vendor: { id, code, name } | null }   — null = vendor cleared
- *   { ok: false, status, message }                      — 404 / 500
- */
 const resolveVendor = async (vendorId) => {
   if (vendorId == null) return { ok: true, vendor: null };
   try {
@@ -628,6 +650,26 @@ const resolveVendor = async (vendorId) => {
     return { ok: true, vendor: rows[0] };
   } catch (err) {
     console.error('Resolve vendor error:', err);
+    return { ok: false, status: 500, message: 'Server error.' };
+  }
+};
+
+/**
+ * Resolve employee_group_id to its master record.
+ */
+const resolveEmployeeGroup = async (groupId) => {
+  if (groupId == null) return { ok: true, group: null };
+  try {
+    const [rows] = await db.query(
+      'SELECT id, employee_group FROM employee_group WHERE id = ? LIMIT 1',
+      [groupId]
+    );
+    if (rows.length === 0) {
+      return { ok: false, status: 400, message: 'Selected employee group does not exist.' };
+    }
+    return { ok: true, group: rows[0] };
+  } catch (err) {
+    console.error('Resolve employee group error:', err);
     return { ok: false, status: 500, message: 'Server error.' };
   }
 };
@@ -1432,10 +1474,9 @@ const createEmployee = async (req, res) => {
   // untouched (NULL when blank) and is mirrored onto users.email during
   // account provisioning. User Status is still owned by the backend, so
   // we force the agreed default:
-  //   • user_status    → 'Active'
-  // `employee_group` (BC / MTL) is also exposed on the form — the
-  // validated value flows through so the Automated Analytics step can
-  // bucket recap rows by group.
+  //   • user_status         → 'Active'
+  // `employee_group_id` is exposed on the form as a dropdown sourced
+  // from the employee_group master table.
   f.user_status = 'Active';
 
   // Audit trail stores the requester's NAME (not the numeric id) so the
@@ -1476,6 +1517,13 @@ const createEmployee = async (req, res) => {
     replacesEmployeeId = rr.employee ? rr.employee.id : null;
   }
 
+  let employeeGroupId = null;
+  if (v.employeeGroupId && v.employeeGroupId.provided) {
+    const rg = await resolveEmployeeGroup(v.employeeGroupId.value);
+    if (!rg.ok) return res.status(rg.status).json({ success: false, message: rg.message });
+    employeeGroupId = rg.group ? rg.group.id : null;
+  }
+
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -1512,14 +1560,14 @@ const createEmployee = async (req, res) => {
     const [ins] = await conn.query(
       `INSERT INTO hr_employees (
          user_id, vendor_id, vendor_number, user_department, vendor_name,
-         npk, sid, employee_name, email, position, position_group, employee_group, site,
+         npk, sid, employee_name, email, position, position_group, employee_group_id, site,
          supervisor_id, replaces_employee_id, user_status, created_by, updated_by
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         provisionedUserId,
         vendorId,
         f.vendor_number, f.user_department, f.vendor_name,
-        f.npk, f.sid, f.employee_name, f.email, f.position, f.position_group, f.employee_group, f.site,
+        f.npk, f.sid, f.employee_name, f.email, f.position, f.position_group, employeeGroupId, f.site,
         supervisorId, replacesEmployeeId, f.user_status, actorName, actorName,
       ]
     );
@@ -1597,7 +1645,7 @@ const updateEmployee = async (req, res) => {
   // again and OPTIONAL — when the form sends it, the validated value
   // (NULL when blank) is persisted and synced to users.email; when the
   // field is absent (partial PATCH) the existing value is left
-  // untouched. `user_status` and `employee_group` are editable — when
+  // untouched. `user_status` and `employee_group_id` are editable — when
   // the form sends them, the validated value is persisted; when absent
   // the existing value is left untouched.
 
@@ -1623,6 +1671,12 @@ const updateEmployee = async (req, res) => {
     const rs = await resolveSupervisor(v.supervisorId.value);
     if (!rs.ok) return res.status(rs.status).json({ success: false, message: rs.message });
     fields.supervisor_id = rs.user ? rs.user.id : null;
+  }
+
+  if (v.employeeGroupId && v.employeeGroupId.provided) {
+    const rg = await resolveEmployeeGroup(v.employeeGroupId.value);
+    if (!rg.ok) return res.status(rg.status).json({ success: false, message: rg.message });
+    fields.employee_group_id = rg.group ? rg.group.id : null;
   }
 
   const conn = await db.getConnection();
@@ -2020,6 +2074,11 @@ const uploadEmployeesBulk = async (req, res) => {
     const [vendorRows] = await db.query(`SELECT id, code, name FROM vendors`);
     const vendorLookup = buildVendorLookupMap(vendorRows);
 
+    const [employeeGroupRows] = await db.query(
+      `SELECT id, employee_group FROM employee_group`
+    );
+    const employeeGroupLookup = buildEmployeeGroupLookupMap(employeeGroupRows);
+
     let totalRows = 0;
     let inserted = 0;
     let updated = 0;
@@ -2058,6 +2117,7 @@ const uploadEmployeesBulk = async (req, res) => {
       f.vendor_number = sanitizeText(vendor.code) || null;
       f.vendor_name = sanitizeText(vendor.name) || nullableUploadText(body.company_name);
       f.supervisor_id = await resolveSupervisorForUpload(db, f.supervisor_ref);
+      f.employee_group_id = normalizeEmployeeGroupForUpload(body.employee_group, employeeGroupLookup);
 
       const conn = await db.getConnection();
       try {
